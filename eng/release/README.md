@@ -17,6 +17,20 @@ Up to 0.11.0 both extensions were released with Runic Translations
 Studio). A release from this repository must map above that:
 `eng/release/release.mjs` refuses `0.11.0` and older versions.
 
+## Versioning
+
+The extensions are released in lockstep with the Runic release train (D066.32): each
+release takes the train's version — 0.20.0 next, then 0.21.0, and the train's
+`1.0.0-rc.N` and `1.0.0` — and is released last, after Runic Command Line, Runic
+Translations and Runic SDK (runic-sdk). The version says which Runic SDK and
+Translations releases the extensions belong to: the merged Runic extension
+(runic-editors#2) follows the SDK's development features, such as the `dotnet runic dev`
+session file, and the language server comes from the same train's Translations
+release. A train without extension changes still releases them with its version.
+
+After a release, `main` moves to the next train's version in `eng/version.json`, as
+the other repositories do (D063.6, D066.13).
+
 ## IDE extension versions
 
 `eng/version.json` holds the release version. Neither VSIX format accepts a SemVer
