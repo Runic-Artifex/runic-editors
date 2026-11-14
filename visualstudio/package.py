@@ -11,7 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--configuration', default='Debug', choices=['Debug', 'Release'])
 parser.add_argument('--input', type=Path, help='Native-built VSIX, optionally copied from Windows')
 parser.add_argument('--check-source', action='store_true', help='Validate the source manifest and support range without a native VSIX')
-parser.add_argument('--release-version', help='Release version to expect (default: eng/workspace.json)')
+parser.add_argument('--release-version', help='Release version to expect (default: eng/version.json)')
 parser.add_argument('--print-version', action='store_true', help='Print the VSIX version of the release version and exit')
 args = parser.parse_args()
 root = Path(__file__).resolve().parent
@@ -32,7 +32,7 @@ def vsix_version(release):
     return '.'.join(match.group(1, 2, 3)) + '.' + str(revision)
 
 
-release_version = args.release_version or json.loads((root / '../../eng/workspace.json').read_text(encoding='utf-8'))['version']
+release_version = args.release_version or json.loads((root / '../eng/version.json').read_text(encoding='utf-8'))['version']
 expected_version = vsix_version(release_version)
 if args.print_version:
     print(expected_version)

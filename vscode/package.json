@@ -8,8 +8,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Runic-Artifex/runic-translations-sdk",
-    "directory": "tools/vscode-runic-translations"
+    "url": "https://github.com/Runic-Artifex/runic-editors",
+    "directory": "vscode"
   },
   "engines": {
     "vscode": "^1.100.0"

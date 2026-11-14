@@ -1,4 +1,4 @@
-import type { MessageArtifact } from "../../../apps/translations-editor/Frontend/src/lib/message-model.js";
+import type { MessageArtifact } from "./message-model.js";
 export interface Preview { key: string; locale: string; ast: MessageArtifact; inputs: Array<{ name: string; type: string }>; examples: Record<string, unknown>[] }
 /**
  * A `runic.renderPreview` result. The server also reports how it formatted: the requested locale (the catalog locale

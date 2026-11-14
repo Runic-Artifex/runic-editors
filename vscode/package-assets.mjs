@@ -21,9 +21,9 @@ function visit(name, from = import.meta.dirname) {
 visit('vscode-languageclient');
 writeFileSync(join(import.meta.dirname, 'THIRD-PARTY-NOTICES.md'), notices.join('').trimEnd() + '\n');
 
-// The runic.json schema is copied from the specification on every build, so members that a
-// release adds to specs/translations/schemas/project-v1.schema.json reach the VSIX without an
-// extension change. package.json's jsonValidation points at this copy.
+// The runic.json schema is copied on every build from eng/translations/project-v1.schema.json, the schema of the
+// supported Translations release (.config/dotnet-tools.json); `bun eng/translations.mjs --check` compares it with
+// the one that release ships. package.json's jsonValidation points at this copy.
 const projectSchema = join('dist', 'schemas', 'project-v1.schema.json');
 mkdirSync(join(import.meta.dirname, 'dist', 'schemas'), { recursive: true });
-copyFileSync(join(import.meta.dirname, '..', '..', 'specs', 'translations', 'schemas', 'project-v1.schema.json'), join(import.meta.dirname, projectSchema));
+copyFileSync(join(import.meta.dirname, '..', 'eng', 'translations', 'project-v1.schema.json'), join(import.meta.dirname, projectSchema));

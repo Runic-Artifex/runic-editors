@@ -30,8 +30,8 @@
     <VSCTCompile Include="Commands.vsct"><ResourceName>Menus.ctmenu</ResourceName></VSCTCompile>
     <SuppressFromVsix Include="System.Text.Encodings.Web.dll" />
     <Content Include="Runic.pkgdef" IncludeInVSIX="true" />
-    <Content Include="../vscode-runic-translations/syntaxes/rmf2.tmLanguage.json" Link="Grammars/rmf2.tmLanguage.json" IncludeInVSIX="true" />
-    <Content Include="../../LICENSE" Link="LICENSE.txt" TargetPath="LICENSE.txt" IncludeInVSIX="true" />
+    <Content Include="../vscode/syntaxes/rmf2.tmLanguage.json" Link="Grammars/rmf2.tmLanguage.json" IncludeInVSIX="true" />
+    <Content Include="../LICENSE" Link="LICENSE.txt" TargetPath="LICENSE.txt" IncludeInVSIX="true" />
     <Content Include="README.md" IncludeInVSIX="true" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="WindowsBase" />
@@ -39,14 +39,14 @@
     <Reference Include="PresentationFramework" />
   </ItemGroup>
   <!--
-    The VSIX Identity version is stamped at build time from eng/workspace.json: the source manifest
+    The VSIX Identity version is stamped at build time from eng/version.json: the source manifest
     carries the |%CurrentProject%;GetRunicVsixVersion| token, which the VSSDK detokenizer replaces with
     this target's result. 1.0.0-preview.N becomes 1.0.0.N, 1.0.0-rc.N becomes 1.0.0.(500 + N) and the final
     1.0.0 (or a plain 0.y.z) becomes 1.0.0.1000, as in
     eng/release/ide-versions.mjs (which tests this mapping). Override with -p:RunicIdeReleaseVersion=<version>.
   -->
   <PropertyGroup>
-    <RunicIdeReleaseVersion Condition="'$(RunicIdeReleaseVersion)' == ''">$([System.Text.RegularExpressions.Regex]::Replace($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../eng/workspace.json')), '(?s)^.*?"version"\s*:\s*"([^"]*)".*$', '$1'))</RunicIdeReleaseVersion>
+    <RunicIdeReleaseVersion Condition="'$(RunicIdeReleaseVersion)' == ''">$([System.Text.RegularExpressions.Regex]::Replace($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../eng/version.json')), '(?s)^.*?"version"\s*:\s*"([^"]*)".*$', '$1'))</RunicIdeReleaseVersion>
     <!-- 0 to 65534: Visual Studio parses each component as a 16-bit System.Version part. The pattern uses
          [.] because MSBuild on Unix rewrites a backslash that follows a property expansion into a slash. -->
     <_RunicVersionPart>(0|[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-4])</_RunicVersionPart>

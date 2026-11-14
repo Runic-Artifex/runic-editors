@@ -197,11 +197,10 @@ command set until the production language server (2.0).
 
 ## Build and test
 
-Build and test inside the SDK development shell:
+Build and test in the runic-editors development shell (see the repository
+README), from the `vscode` directory:
 
 ```sh
-dotnet build tools/dotnet-runic-translations
-cd tools/vscode-runic-translations
 bun install --frozen-lockfile
 bun run check
 bun run test
@@ -211,18 +210,23 @@ bun run package
 ```
 
 The host check uses the installed `code`, or `VSCODE_EXECUTABLE_PATH`, with an
-isolated profile, extension directory and fixture. It requires an assertion
+isolated profile, extension directory and a copy of `fixtures/rmf2`. The
+fixture gets the repository's `.config/dotnet-tools.json`, and `dotnet tool
+restore` installs that `dotnet-runic-translations` release from NuGet, so the
+extension starts the language server as it does in a user's workspace. Set
+`RUNIC_TRANSLATIONS_SERVER_ASSEMBLY` to a built `dotnet-runic-translations.dll`
+to test a local server build instead. The check requires an assertion
 report, not merely a zero CLI exit code. Failure logs are retained under
 `artifacts/host-failure`. Packaging produces `artifacts/runic-translations.vsix`;
 no marketplace upload or user-profile installation is part of these commands.
 
 The `version` in `package.json` is a placeholder. `bun run package` (`package.mjs`)
-stamps the release version of `eng/workspace.json`, mapped to `x.y.z`, into a
+stamps the release version of `eng/version.json`, mapped to `x.y.z`, into a
 staged copy and packs that: the plain `0.8.0` becomes `0.8.1000`, `1.0.0-rc.N`
 becomes `1.0.(500 + N)` packaged with `--pre-release`, and the final `1.0.0`
 becomes `1.0.1000`. It fails if the VSIX does not carry that version, the
 pre-release flag of a `-preview.N`/`-rc.N` release, and the Preview label. See
-[IDE extension versions](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/eng/release/README.md#ide-extension-versions) for
+[IDE extension versions](https://github.com/Runic-Artifex/runic-editors/blob/main/eng/release/README.md#ide-extension-versions) for
 the full mapping. Each GitHub release attaches the attested VSIX that CI built.
 
 The language client follows Microsoft's [Language Server Extension Guide](https://code.visualstudio.com/api/language-extensions/language-server-extension-guide).
