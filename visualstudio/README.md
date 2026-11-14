@@ -8,7 +8,7 @@ declares `[18.0,19.0)`. Visual Studio 2022 (17.x) is not supported. The
 in-process API is pinned to 17.14, which 18.x hosts provide. Native evidence
 covers Visual Studio Community 2026 18.8.2; the complete native journey passed
 on 2026-10-07 (see
-[RMF2 validation](../../docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07)). The range declaration is not
+[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07)). The range declaration is not
 evidence that every 18.x release has been run. The MEF client
 registers direct `.mf2` and grouped `.rmf2` with Visual Studio's remote-code content type and uses the same
 stdio language server as VS Code. TextMate highlighting, diagnostics, completion,
@@ -96,20 +96,19 @@ Full command parity waits for the production language server (2.0).
 
 ## Build and package
 
-Cross-compilation uses the SDK development shell:
+Cross-compilation uses the runic-editors development shell (see the repository README):
 
 ```sh
-dotnet build tools/dotnet-runic-translations
-dotnet build tools/visualstudio-runic-translations
-python tools/visualstudio-runic-translations/package.py --check-source
+dotnet build visualstudio
+python visualstudio/package.py --check-source
 ```
 
 Create the installable VSIX with Visual Studio's full-framework MSBuild on
 Windows (for example, from its Developer PowerShell):
 
 ```powershell
-MSBuild tools/visualstudio-runic-translations/Runic.Translations.VisualStudio.csproj /restore /m:1
-python tools/visualstudio-runic-translations/package.py
+MSBuild visualstudio/Runic.Translations.VisualStudio.csproj /restore /m:1
+python visualstudio/package.py
 ```
 
 The pinned `Microsoft.VSSDK.BuildTools` package supplies the packaging targets;
@@ -117,26 +116,26 @@ no global extension-development workload is required. Packaging includes the
 installer's generated `manifest.json` and `catalog.json`, the registered command
 package, TextMate registration and grammar. The verifier rejects missing assets
 and redistributed host-owned DLLs. Output:
-`tools/visualstudio-runic-translations/artifacts/runic-translations-visualstudio.vsix`.
+`visualstudio/artifacts/runic-translations-visualstudio.vsix`.
 A native-built archive copied to Linux can be verified with `package.py --input
 /path/to/native.vsix`. Cross-compilation alone does not produce an installable
 archive.
 
 The manifest's `Version` is the `|%CurrentProject%;GetRunicVsixVersion|` token. The
-VSSDK build replaces it with the release version of `eng/workspace.json`, mapped to
+VSSDK build replaces it with the release version of `eng/version.json`, mapped to
 `N.N.N.N` like the `AnalyzerReleases` headers: the plain `0.8.0` becomes `0.8.0.1000`,
 `1.0.0-preview.N` becomes `1.0.0.N`, `1.0.0-rc.N` becomes `1.0.0.(500 + N)` and the
 final `1.0.0` becomes `1.0.0.1000`. `package.py` fails unless the VSIX has
 that version (`--release-version` checks against another release). Pass
 `/p:RunicIdeReleaseVersion=<version>` to MSBuild to build another version. See
-[IDE extension versions](../../eng/release/README.md#ide-extension-versions). Each
+[IDE extension versions](../eng/release/README.md#ide-extension-versions). Each
 GitHub release attaches the attested VSIX that CI built.
 
 The VS host dependency set is pinned separately from the SDK's modern runtime
 packages: in-process dependencies target the Visual Studio 17.14 API surface.
 The declared host range is `[18.0,19.0)`, Visual Studio 2026 only. Native
 evidence covers Visual Studio Community 2026 18.8.2 (see
-[RMF2 validation](../../docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07)).
+[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07)).
 `packages.lock.json` records the graph. The VSIX contains only the extension's
 own managed assembly; VS-owned DLLs resolve from the host.
 
@@ -147,16 +146,18 @@ Use a dedicated experimental instance; the maintained test expects
 copies the maintained payment fixture and explicitly activates
 `rmf2-execution-v2`. Every step passed on Visual Studio 2026 18.8.2 on
 2026-10-07. See
-[RMF2 validation](../../docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07).
+[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07).
 To run the check:
 
-1. Build the language server and VSIX, or use the CI `rmf2-visualstudio-vsix`
-   artifact. Install with
+1. Build the VSIX, or use the CI `visualstudio-vsix` artifact. Install with
    `VSIXInstaller.exe /rootSuffix:RunicRmf2 /quiet <native-built.vsix>`.
    After a reinstall into an existing profile, run
    `devenv.exe /RootSuffix RunicRmf2 /updateconfiguration` once. Otherwise
    the MEF catalog can omit the new client.
-2. Set `RUNIC_TRANSLATIONS_SERVER` to the absolute tool DLL before starting
+2. Run `dotnet tool restore` in this repository (it installs the
+   `dotnet-runic-translations` release of `.config/dotnet-tools.json` from
+   NuGet), or set `RUNIC_TRANSLATIONS_SERVER` to the absolute DLL of a local
+   server build, before starting
    `devenv.exe <document.rmf2> /RootSuffix RunicRmf2 /Log`. Opening an MF2
    document activates LSP. Put the document before `/Log`, because `/Log`
    treats its next argument as the log file path.
@@ -166,8 +167,8 @@ To run the check:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File C:/src/runic-sdk/tests/native/Runic.Desktop.WebViewSmoke/run-windows-ui-automation.ps1 `
   -Executable "C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/devenv.exe" `
-  -AutomationScript C:/src/runic-translations-sdk/tools/visualstudio-runic-translations/test/native-host.ps1 `
-  -ReceiptPath C:/src/runic-translations-sdk/artifacts/rmf2-vs-host.json
+  -AutomationScript C:/src/runic-editors/visualstudio/test/native-host.ps1 `
+  -ReceiptPath C:/src/runic-editors/artifacts/rmf2-vs-host.json
 ```
 
 The runner schedules the test in the signed-in desktop session and removes its

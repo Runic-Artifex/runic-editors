@@ -292,14 +292,14 @@ test("start failures are announced once per folder until reset", () => {
   expect(errorSummary(new Error("Error: first line\nstack detail"))).toBe("first line");
   expect(errorSummary("plain")).toBe("plain");
 });
-test("the VSIX validates runic.json against the schema copied from the specification at build time", () => {
+test("the VSIX validates runic.json against the schema of the supported Translations release, copied at build time", () => {
   const here = join(import.meta.dir, "..");
   const manifest = JSON.parse(readFileSync(join(here, "package.json"), "utf8"));
   expect(manifest.contributes.jsonValidation).toEqual([{ fileMatch: "**/runic.json", url: "./dist/schemas/project-v1.schema.json" }]);
   const assets = readFileSync(join(here, "package-assets.mjs"), "utf8");
   expect(assets).toContain("join('dist', 'schemas', 'project-v1.schema.json')");
-  expect(assets).toContain("'specs', 'translations', 'schemas', 'project-v1.schema.json'");
-  const schema = JSON.parse(readFileSync(join(here, "..", "..", "specs", "translations", "schemas", "project-v1.schema.json"), "utf8"));
+  expect(assets).toContain("'eng', 'translations', 'project-v1.schema.json'");
+  const schema = JSON.parse(readFileSync(join(here, "..", "eng", "translations", "project-v1.schema.json"), "utf8"));
   expect(schema.$id).toBe("https://runic-artifex.eu/schemas/translations/project-v1.schema.json");
   // Every command the extension contributes is listed in the README's parity table.
   const readme = readFileSync(join(here, "README.md"), "utf8");

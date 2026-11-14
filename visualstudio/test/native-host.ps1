@@ -32,9 +32,9 @@ function Texts($window) {
 }
 function Render($window) { (Named $window 'Render preview' ([Windows.Automation.ControlType]::Button)).GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke() }
 function Close-Preview($window) { $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern).Close() }
-$root = Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
+$root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $fixture = Join-Path $env:TEMP ('runic-vs-host-' + [Guid]::NewGuid().ToString('N'))
-Copy-Item "$root\specs\translations\examples\rmf2" $fixture -Recurse
+Copy-Item "$root\fixtures\rmf2" $fixture -Recurse
 $priorDocument = $dte.ActiveDocument
 $document = $null; $preview = $null
 try {
@@ -94,7 +94,7 @@ finally {
     # A restarted server uses the fixture as its current directory on Windows.
     # Restore the prior document and restart before deleting that directory.
     if ($priorDocument) { $priorDocument.Activate() }
-    else { $dte.ItemOperations.OpenFile("$root\specs\translations\examples\rmf2\en.rmf2") | Out-Null }
+    else { $dte.ItemOperations.OpenFile("$root\fixtures\rmf2\en.rmf2") | Out-Null }
     $dte.ExecuteCommand('Tools.RunicRestartLanguageServer', '')
     Wait-For { try { [IO.Directory]::Delete($fixture, $true); $true } catch [IO.IOException] { $false } } 'Temporary fixture is still in use.' | Out-Null
 }
