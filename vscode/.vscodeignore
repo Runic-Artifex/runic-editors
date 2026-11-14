@@ -1,0 +1,8 @@
+src/**
+test/**
+node_modules/**
+artifacts/**
+bun.lock
+tsconfig.json
+package-assets.mjs
+package.mjs
