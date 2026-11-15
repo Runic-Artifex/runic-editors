@@ -1,7 +1,7 @@
 {
-  "name": "runic-translations",
-  "displayName": "Runic MF2 Translations",
-  "description": "Direct MF2 and grouped RMF2 authoring through the project-local Runic language server.",
+  "name": "runic",
+  "displayName": "Runic",
+  "description": "Runic SDK and Runic Translations in VS Code: dotnet runic dev, F5 of the Window, doctor, the ViewModel/Bridge tree, and MF2/RMF2 authoring through the project-local language server.",
   "version": "0.0.1",
   "preview": true,
   "publisher": "runic-artifex",
@@ -15,11 +15,34 @@
     "vscode": "^1.100.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers",
+    "Other"
   ],
   "main": "./dist/extension.cjs",
   "activationEvents": [
-    "onLanguage:rmf2"
+    "onLanguage:rmf2",
+    "workspaceContains:**/*.csproj",
+    "workspaceContains:**/runic.json",
+    "onDebugResolve:runic",
+    "onDebugDynamicConfigurations:runic",
+    "onCommand:runicTranslations.restart",
+    "onCommand:runicTranslations.showOutput",
+    "onCommand:runicTranslations.preview",
+    "onCommand:runicTranslations.previewSamples",
+    "onCommand:runicTranslations.previewLocale",
+    "onCommand:runicTranslations.previewRequestedLocale",
+    "onCommand:runicTranslations.previewTimeZone",
+    "onCommand:runicTranslations.renameInput",
+    "onCommand:runicTranslations.renameSlot",
+    "onCommand:runicTranslations.extractGroup",
+    "onCommand:runicTranslations.inlineResource",
+    "onCommand:runicTranslations.renameResource",
+    "onCommand:runicTranslations.exportXliff",
+    "onCommand:runicTranslations.importXliffDryRun",
+    "onCommand:runicTranslations.overrideLibraryMessage",
+    "onCommand:runicTranslations.showStatus",
+    "onCommand:runicTranslations.importCatalog"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -60,88 +83,446 @@
     ],
     "commands": [
       {
-        "command": "runicTranslations.restart",
-        "title": "Runic: Restart Language Server"
+        "command": "runic.translations.restart",
+        "title": "Restart Language Server",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.showOutput",
-        "title": "Runic: Show Output"
+        "command": "runic.translations.showOutput",
+        "title": "Show Output",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.preview",
-        "title": "Runic: Preview Message"
+        "command": "runic.translations.preview",
+        "title": "Preview Message",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.previewSamples",
-        "title": "Runic: Change Preview Samples"
+        "command": "runic.translations.previewSamples",
+        "title": "Change Preview Samples",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.previewLocale",
-        "title": "Runic: Change Preview Locale"
+        "command": "runic.translations.previewLocale",
+        "title": "Change Preview Locale",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.previewRequestedLocale",
-        "title": "Runic: Change Preview Regional Locale"
+        "command": "runic.translations.previewRequestedLocale",
+        "title": "Change Preview Regional Locale",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.previewTimeZone",
-        "title": "Runic: Change Preview Time Zone"
+        "command": "runic.translations.previewTimeZone",
+        "title": "Change Preview Time Zone",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.renameInput",
-        "title": "Runic: Rename Input in Resource Sources"
+        "command": "runic.translations.renameInput",
+        "title": "Rename Input in Resource Sources",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.renameSlot",
-        "title": "Runic: Rename Slot in Resource Sources"
+        "command": "runic.translations.renameSlot",
+        "title": "Rename Slot in Resource Sources",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.extractGroup",
-        "title": "Runic: Extract Group to Directory"
+        "command": "runic.translations.extractGroup",
+        "title": "Extract Group to Directory",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.inlineResource",
-        "title": "Runic: Inline Resource into Ancestor"
+        "command": "runic.translations.inlineResource",
+        "title": "Inline Resource into Ancestor",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.renameResource",
-        "title": "Runic: Rename Resource in Resource Sources"
+        "command": "runic.translations.renameResource",
+        "title": "Rename Resource in Resource Sources",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.exportXliff",
-        "title": "Runic: Export XLIFF"
+        "command": "runic.translations.exportXliff",
+        "title": "Export XLIFF",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.importXliffDryRun",
-        "title": "Runic: Import XLIFF (dry run)"
+        "command": "runic.translations.importXliffDryRun",
+        "title": "Import XLIFF (dry run)",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.overrideLibraryMessage",
-        "title": "Runic: Override Library Message…"
+        "command": "runic.translations.overrideLibraryMessage",
+        "title": "Override Library Message…",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.showStatus",
-        "title": "Runic: Show Translation Status"
+        "command": "runic.translations.showStatus",
+        "title": "Show Translation Status",
+        "category": "Runic"
       },
       {
-        "command": "runicTranslations.importCatalog",
-        "title": "Runic: Import .resx or i18next Catalog"
+        "command": "runic.translations.importCatalog",
+        "title": "Import .resx or i18next Catalog",
+        "category": "Runic"
+      },
+      {
+        "command": "runic.dev.start",
+        "title": "Start dotnet runic dev",
+        "category": "Runic",
+        "icon": "$(play)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dev.startNoWindow",
+        "title": "Start dotnet runic dev --no-window (frontend only)",
+        "category": "Runic",
+        "icon": "$(play-circle)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dev.stop",
+        "title": "Stop dotnet runic dev",
+        "category": "Runic",
+        "icon": "$(debug-stop)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dev.debugWindow",
+        "title": "Debug the Window (F5 with dotnet runic dev --no-window)",
+        "category": "Runic",
+        "icon": "$(debug-alt)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dev.openBrowser",
+        "title": "Open the Development Server",
+        "category": "Runic",
+        "icon": "$(globe)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dev.openSessionFile",
+        "title": "Open the dev Session File",
+        "category": "Runic",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dev.actions",
+        "title": "dotnet runic dev Actions…",
+        "category": "Runic",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.doctor.run",
+        "title": "Run dotnet runic doctor",
+        "category": "Runic",
+        "icon": "$(refresh)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.viewModels.refresh",
+        "title": "Refresh ViewModels",
+        "category": "Runic",
+        "icon": "$(refresh)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.openSourceLocation",
+        "title": "Open C# Member",
+        "category": "Runic"
+      },
+      {
+        "command": "runic.translations.refreshStatusView",
+        "title": "Refresh Translation Status",
+        "category": "Runic",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "runic.showOutput",
+        "title": "Show Runic SDK Output",
+        "category": "Runic",
+        "enablement": "runic.sdkProject"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "runic",
+          "title": "Runic",
+          "icon": "media/runic-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "runic": [
+        {
+          "id": "runic.devSession",
+          "name": "Dev Session",
+          "when": "runic.sdkProject"
+        },
+        {
+          "id": "runic.viewModels",
+          "name": "ViewModels",
+          "when": "runic.sdkProject"
+        },
+        {
+          "id": "runic.doctor",
+          "name": "Doctor",
+          "when": "runic.sdkProject"
+        },
+        {
+          "id": "runic.translationsStatus",
+          "name": "Translations",
+          "when": "runic.translationsProject"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "runic.devSession",
+        "contents": "dotnet runic dev runs the development server and the Window and restarts it after C# edits.\n[Start dotnet runic dev](command:runic.dev.start)\n[Debug the Window](command:runic.dev.debugWindow)"
+      },
+      {
+        "view": "runic.viewModels",
+        "contents": "No development source map yet. Build the project, or start dotnet runic dev, to list its ViewModels and Bridge members.\n[Start dotnet runic dev](command:runic.dev.start)"
+      },
+      {
+        "view": "runic.doctor",
+        "contents": "dotnet runic doctor checks this machine and the project: the .NET SDK, the JavaScript runtime, lock files, the Window host's runtime and more.\n[Run dotnet runic doctor](command:runic.doctor.run)"
+      },
+      {
+        "view": "runic.translationsStatus",
+        "contents": "No translation status yet. Restore the project's runic-translations tool (dotnet tool restore).\n[Show Translation Status](command:runic.translations.showStatus)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "runic.dev.start",
+          "when": "view == runic.devSession && !runic.devActive",
+          "group": "navigation@1"
+        },
+        {
+          "command": "runic.dev.stop",
+          "when": "view == runic.devSession && runic.devActive",
+          "group": "navigation@1"
+        },
+        {
+          "command": "runic.dev.debugWindow",
+          "when": "view == runic.devSession",
+          "group": "navigation@2"
+        },
+        {
+          "command": "runic.dev.startNoWindow",
+          "when": "view == runic.devSession && !runic.devActive",
+          "group": "more@1"
+        },
+        {
+          "command": "runic.dev.openBrowser",
+          "when": "view == runic.devSession && runic.devActive",
+          "group": "more@2"
+        },
+        {
+          "command": "runic.viewModels.refresh",
+          "when": "view == runic.viewModels",
+          "group": "navigation"
+        },
+        {
+          "command": "runic.doctor.run",
+          "when": "view == runic.doctor",
+          "group": "navigation"
+        },
+        {
+          "command": "runic.translations.refreshStatusView",
+          "when": "view == runic.translationsStatus",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "runic.dev.start",
+          "when": "view == runic.devSession && viewItem =~ /^runic(Project|Dev)\\.stopped$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "runic.dev.stop",
+          "when": "view == runic.devSession && viewItem =~ /^runic(Project|Dev)\\.active$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "runic.dev.debugWindow",
+          "when": "view == runic.devSession && viewItem =~ /^runic(Project|Dev)\\./",
+          "group": "inline@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "runic.openSourceLocation",
+          "when": "false"
+        },
+        {
+          "command": "runic.translations.refreshStatusView",
+          "when": "false"
+        }
+      ]
+    },
+    "taskDefinitions": [
+      {
+        "type": "runic",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "build",
+              "doctor"
+            ],
+            "description": "dev: dotnet runic dev; build: dotnet build; doctor: dotnet runic doctor."
+          },
+          "noWindow": {
+            "type": "boolean",
+            "description": "dev only: dotnet runic dev --no-window, for a Window that the debugger starts."
+          },
+          "project": {
+            "type": "string",
+            "description": "The project file, relative to the workspace folder; needed when the folder has several Runic SDK projects."
+          }
+        }
+      }
+    ],
+    "problemPatterns": [
+      {
+        "name": "runic-dev",
+        "regexp": "^\\s*(?:\\d+>)?(\\S.*?)(?:\\((\\d+)(?:,(\\d+))?(?:,\\d+,\\d+)?\\))?\\s*:\\s+(?:\\S+\\s+)?(error|warning)\\s+([A-Za-z]+\\d+)\\s*:\\s*(.*?)(?:\\s+\\[[^\\]]+\\])?$",
+        "file": 1,
+        "line": 2,
+        "column": 3,
+        "severity": 4,
+        "code": 5,
+        "message": 6
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "runic-dev",
+        "label": "dotnet runic dev",
+        "owner": "runic",
+        "source": "runic",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": "$runic-dev",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[dev\\] (Evaluating|Window exited|Reloading)",
+          "endsPattern": "^\\[dev\\] Ready$"
+        }
+      },
+      {
+        "name": "runic-dev-no-window",
+        "label": "dotnet runic dev --no-window",
+        "owner": "runic",
+        "source": "runic",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": "$runic-dev",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[dev\\] Evaluating",
+          "endsPattern": "^\\[dev\\] Ready$"
+        }
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "runic",
+        "label": "Runic Window",
+        "languages": [
+          "csharp"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "The Window's project file, relative to the workspace folder; optional with one Runic SDK project."
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "More environment variables for the Window, besides the ones the dev session file names."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "runic",
+            "request": "launch",
+            "name": "Runic: Window"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Runic: Window",
+            "description": "Starts dotnet runic dev --no-window, builds, and debugs the Window with the C# extension.",
+            "body": {
+              "type": "runic",
+              "request": "launch",
+              "name": "Runic: Window"
+            }
+          }
+        ]
       }
     ],
     "configuration": {
-      "title": "Runic Translations",
+      "title": "Runic",
       "properties": {
+        "runic.dotnetPath": {
+          "type": "string",
+          "default": "dotnet",
+          "scope": "machine-overridable",
+          "description": "The dotnet executable that runs the project-local Runic tools (dotnet runic, runic-translations). Replaces runicTranslations.dotnetPath."
+        },
+        "runic.translations.serverAssembly": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Optional compiled Runic Translations tool DLL, relative to the workspace. Empty uses dotnet tool run runic-translations. Replaces runicTranslations.serverAssembly."
+        },
+        "runic.translations.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication with the Runic language server in its output. Replaces runicTranslations.trace.server."
+        },
         "runicTranslations.dotnetPath": {
           "type": "string",
           "default": "dotnet",
           "scope": "machine-overridable",
-          "description": "Executable used for the project-local Runic .NET tool."
+          "markdownDeprecationMessage": "Use `#runic.dotnetPath#`. This setting still applies while that one is not set.",
+          "description": "Former setting of the Translations extension; use runic.dotnetPath."
         },
         "runicTranslations.serverAssembly": {
           "type": "string",
           "default": "",
           "scope": "resource",
-          "description": "Optional compiled Runic tool DLL, relative to the workspace. Empty uses dotnet tool run runic-translations."
+          "markdownDeprecationMessage": "Use `#runic.translations.serverAssembly#`. This setting still applies while that one is not set.",
+          "description": "Former setting of the Translations extension; use runic.translations.serverAssembly."
         },
         "runicTranslations.trace.server": {
           "type": "string",
@@ -150,7 +531,9 @@
             "messages",
             "verbose"
           ],
-          "default": "off"
+          "default": "off",
+          "markdownDeprecationMessage": "Use `#runic.translations.trace.server#`. This setting still applies while that one is not set.",
+          "description": "Former setting of the Translations extension; use runic.translations.trace.server."
         }
       }
     }
@@ -158,7 +541,7 @@
   "scripts": {
     "build": "bun build src/extension.ts --target=node --format=cjs --external=vscode --outfile=dist/extension.cjs && node package-assets.mjs",
     "check": "tsc --noEmit",
-    "test": "bun test test/unit.test.ts",
+    "test": "bun test test/unit.test.ts test/sdk.test.ts",
     "test:host": "node test/run-host.mjs",
     "package": "bun run build && node package.mjs"
   },

@@ -136,5 +136,5 @@ export function toolLaunch(root: string, dotnet: string, assembly: string, toolA
     if (parent === directory) break;
     directory = parent;
   }
-  throw new Error("No project-local runic-translations tool was found. Add it to .config/dotnet-tools.json and run dotnet tool restore, or configure runicTranslations.serverAssembly for SDK development.");
+  throw new Error("No project-local runic-translations tool was found. Add it to .config/dotnet-tools.json and run dotnet tool restore, or configure runic.translations.serverAssembly for SDK development.");
 }

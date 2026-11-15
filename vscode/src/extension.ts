@@ -1,15 +1,16 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
-import { LanguageClient, State, type LanguageClientOptions, type WorkspaceEdit as ProtocolEdit } from "vscode-languageclient/node";
+import { LanguageClient, State, Trace, type LanguageClientOptions, type WorkspaceEdit as ProtocolEdit } from "vscode-languageclient/node";
 import { importArguments, nearestProjectManifest, projectManifest, serverLaunch, sourceWatchRoots, statusArguments, toolLaunch, xliffExportArguments, xliffImportDryRunArguments } from "./server.js";
 import { escapeHtml, resolvePreviewHtml, type Preview, type RenderedPreview } from "./preview.js";
 import { PreviewSession, exampleSamples, sampleChoices, type Samples } from "./preview-session.js";
 import { ForwardedWatchers } from "./watchers.js";
 import { OneTimeNotice, errorSummary, localeStatus, parseStatus, statusHtml, statusPresentation, type DocumentInfo, type ServerState, type StatusResult } from "./status.js";
+import { RunicSdk } from "./sdk.js";
+import { commandId, extensionId, formerCommandId, formerExtensionId, formerSettingsInUse, settingValue } from "./identity.js";
 import { canonicalLocale, isOverriddenIn, libraryCatalogChoices, libraryInstallPattern, libraryDocumentProject, libraryLocaleChoices, libraryMessageChoices, libraryScheme, messageLine, overrideSourcePath, overridesAddArguments, unsavedDocuments, type LibraryCatalogs } from "./libraries.js";
 
-const extensionId = "runic-artifex.runic-translations";
 /**
  * The extension reports a failed start once per workspace folder, with install guidance, so the
  * client's own "couldn't create connection" notification is logged instead of shown while starting.
@@ -47,8 +48,7 @@ let statusPanel: vscode.WebviewPanel | undefined;
 /** Runs the workspace's local runic-translations tool (the language server's) with other arguments. */
 function runLocalTool(folder: vscode.WorkspaceFolder, toolArguments: string[], quiet = false): Promise<string> {
   return new Promise<string>((resolveRun, rejectRun) => {
-    const config = vscode.workspace.getConfiguration("runicTranslations", folder.uri);
-    const launch = toolLaunch(folder.uri.fsPath, config.get<string>("dotnetPath", "dotnet"), config.get<string>("serverAssembly", ""), toolArguments);
+    const launch = toolLaunch(folder.uri.fsPath, dotnetPath(folder.uri), serverAssembly(folder.uri), toolArguments);
     if (!quiet) output.appendLine(`> runic-translations ${toolArguments.join(" ")}`);
     execFile(launch.command, launch.args, { cwd: launch.cwd, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (!quiet && stdout) output.appendLine(stdout.trimEnd());
@@ -59,10 +59,20 @@ function runLocalTool(folder: vscode.WorkspaceFolder, toolArguments: string[], q
   });
 }
 
+/** A setting of the resource, or the Translations extension's former setting when only that is set (identity.ts). */
+function setting<T>(key: string, fallback: T, resource?: vscode.Uri): T {
+  const config = vscode.workspace.getConfiguration(undefined, resource);
+  return settingValue(key, fallback, { inspect: name => config.inspect<T>(name), get: name => config.get<T>(name) });
+}
+const dotnetPath = (resource?: vscode.Uri) => setting("runic.dotnetPath", "dotnet", resource) || "dotnet";
+const serverAssembly = (resource?: vscode.Uri) => setting("runic.translations.serverAssembly", "", resource);
+let sdk: RunicSdk | undefined;
+
 /** Marks every project's status stale; the next status refresh reruns the command. */
 function invalidateProjectStatus() {
   for (const entry of projectStatus.values()) entry.stale = true;
   scheduleStatusRefresh();
+  sdk?.translationsChanged();
 }
 
 /** The project's status, running the command when there is none or it is stale. */
@@ -173,8 +183,7 @@ async function clientFor(uri: vscode.Uri): Promise<LanguageClient> {
     pending = (async () => {
       setServerState(key, "starting");
       try {
-        const config = vscode.workspace.getConfiguration("runicTranslations", uri);
-        const launch = serverLaunch(folder.uri.fsPath, config.get<string>("dotnetPath", "dotnet"), config.get<string>("serverAssembly", ""));
+        const launch = serverLaunch(folder.uri.fsPath, dotnetPath(uri), serverAssembly(uri));
         // The manifest is also synchronized by the LSP and must be watched even
         // when a project has no translation files yet.
         const manifestWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, "**/runic.json"));
@@ -216,7 +225,7 @@ async function clientFor(uri: vscode.Uri): Promise<LanguageClient> {
             return sent;
           } },
         };
-        const runic = client = new RunicLanguageClient("runicTranslations", `Runic: ${folder.name}`, { command: launch.command, args: launch.args, options: { cwd: launch.cwd } }, options);
+        const runic = client = new RunicLanguageClient("runic.translations", `Runic: ${folder.name}`, { command: launch.command, args: launch.args, options: { cwd: launch.cwd } }, options);
         runic.onDidChangeState(event => {
           // A restart clears the map before stopping the old client; only the current client reports.
           if (clients.get(key) !== pending) return;
@@ -224,6 +233,9 @@ async function clientFor(uri: vscode.Uri): Promise<LanguageClient> {
           else if (event.newState === State.Stopped && !runic.starting) setServerState(key, "stopped");
         });
         try { await runic.start(); } finally { runic.starting = false; }
+        // The client reads runic.translations.trace.server itself; the former runicTranslations.trace.server still applies when only it is set.
+        const trace = setting<string>("runic.translations.trace.server", "off", uri);
+        if (trace !== "off") await runic.setTrace(Trace.fromString(trace));
         // Initial open notifications are scheduled during client initialization.
         // Custom requests must wait for them, including after a server restart.
         await Promise.all(openingDocuments);
@@ -266,15 +278,24 @@ async function renamePart(part: "Input" | "Slot") {
 }
 export function activate(context: vscode.ExtensionContext) {
   output = vscode.window.createOutputChannel("Runic Translations", { log: true }); context.subscriptions.push(output);
-  const item = statusItem = vscode.window.createStatusBarItem("runicTranslations.status", vscode.StatusBarAlignment.Left, 100);
-  item.name = "Runic Translations"; item.command = "runicTranslations.showOutput";
+  const item = statusItem = vscode.window.createStatusBarItem("runic.translations.status", vscode.StatusBarAlignment.Left, 100);
+  item.name = "Runic Translations"; item.command = commandId("showOutput");
+  // The Runic SDK features; their views stay hidden in a workspace without a Runic SDK project.
+  const runicSdk = sdk = new RunicSdk({ dotnetPath: folder => dotnetPath(folder.uri), translationsStatus: (folder, project) => projectStatusFor(folder, project) });
+  context.subscriptions.push(runicSdk, { dispose: () => { if (sdk === runicSdk) sdk = undefined; } });
+  noticeIdentityChange();
   context.subscriptions.push(item, { dispose: () => { if (statusTimer) clearTimeout(statusTimer); statusItem = undefined; } },
-    vscode.commands.registerCommand("runicTranslations.showOutput", () => output.show(true)),
+    vscode.commands.registerCommand(commandId("showOutput"), () => output.show(true)),
+    vscode.commands.registerCommand(formerCommandId("showOutput"), () => output.show(true)),
     vscode.window.onDidChangeActiveTextEditor(() => refreshStatus()),
     vscode.workspace.onDidChangeTextDocument(event => { if (isRunicDocument(event.document)) scheduleStatusRefresh(); }),
     // status reads the files on disk, so coverage follows saves (watched changes from other tools also invalidate it).
     vscode.workspace.onDidSaveTextDocument(document => { if (isRunicDocument(document) || document.uri.path.endsWith(".review.json")) invalidateProjectStatus(); }));
-  const register = (name: string, action: (options?: PreviewOptions) => Promise<unknown>) => context.subscriptions.push(vscode.commands.registerCommand(`runicTranslations.${name}`, async (options?: PreviewOptions) => { try { return await action(options); } catch (error) { output.appendLine(String(error)); await vscode.window.showErrorMessage(String(error)); } }));
+  // Each command runs under its runic.translations.* ID and, for keybindings of the Translations extension, its former runicTranslations.* ID.
+  const register = (name: string, action: (options?: PreviewOptions) => Promise<unknown>) => {
+    const run = async (options?: PreviewOptions) => { try { return await action(options); } catch (error) { output.appendLine(String(error)); await vscode.window.showErrorMessage(String(error)); } };
+    context.subscriptions.push(vscode.commands.registerCommand(commandId(name), run), vscode.commands.registerCommand(formerCommandId(name), run));
+  };
   const session = previewSession = new PreviewSession({
     revision: () => previewRevision,
     load: async target => (await clientFor(vscode.Uri.parse(target.uri))).sendRequest<Preview>("workspace/executeCommand", { command: "runic.preview", arguments: [target.uri, target.key, target.locale] }),
@@ -535,8 +556,22 @@ export function activate(context: vscode.ExtensionContext) {
   register("previewRequestedLocale", options => openPreview(options, false, false, "requestedLocale"));
   register("previewTimeZone", options => openPreview(options, false, false, "timeZone"));
   refreshStatus();
-  return { ready: (uri: vscode.Uri) => clientFor(uri), previewState: () => session.state, statusHtml: () => statusPanel?.webview.html,
+  return { sdk: runicSdk.api(), ready: (uri: vscode.Uri) => clientFor(uri), previewState: () => session.state, statusHtml: () => statusPanel?.webview.html,
     status: () => statusItem?.text, serverState: (uri: vscode.Uri) => { const folder = vscode.workspace.getWorkspaceFolder(uri); return folder && serverStates.get(folder.uri.toString())?.state; } };
+}
+/**
+ * The Translations extension (runic-artifex.runic-translations) is this extension's former identity: installed side by
+ * side, both would start a language server for the same files. Say so once per session, and where its settings went.
+ */
+function noticeIdentityChange() {
+  if (vscode.extensions.getExtension(formerExtensionId)) {
+    const uninstall = "Uninstall Runic MF2 Translations";
+    void vscode.window.showWarningMessage("The Runic extension replaces Runic MF2 Translations (runic-artifex.runic-translations), which is still installed. Uninstall it so only one Runic language server runs.", uninstall)
+      .then(choice => { if (choice === uninstall) void vscode.commands.executeCommand("workbench.extensions.uninstallExtension", formerExtensionId); });
+  }
+  const config = vscode.workspace.getConfiguration();
+  const former = formerSettingsInUse(key => config.inspect(key));
+  if (former.length) output.warn(`${former.join(", ")} still apply; they moved to runic.dotnetPath, runic.translations.serverAssembly and runic.translations.trace.server.`);
 }
 export async function deactivate() {
   previewSelection++;

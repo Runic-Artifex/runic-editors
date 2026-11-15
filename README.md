@@ -1,12 +1,13 @@
 # Runic editor extensions
 
-The editor extensions for [Runic](https://github.com/Runic-Artifex): authoring
-direct `.mf2` and grouped `.rmf2` Runic Translations resources through the Runic
-language server.
+The editor extensions for [Runic](https://github.com/Runic-Artifex): the Runic
+SDK's development loop (`dotnet runic dev`, F5 of the Window, doctor, the
+ViewModel/Bridge tree) and authoring direct `.mf2` and grouped `.rmf2` Runic
+Translations resources through the Runic language server.
 
 | Directory | Extension | Package |
 | --- | --- | --- |
-| [`vscode/`](vscode/README.md) | Runic MF2 Translations for VS Code (`runic-artifex.runic-translations`) | `runic-translations.vsix` |
+| [`vscode/`](vscode/README.md) | Runic for VS Code: Runic SDK and Translations (`runic-artifex.runic`) | `runic.vsix` |
 | [`visualstudio/`](visualstudio/README.md) | Runic MF2 Translations for Visual Studio 2026 (`Runic.Artifex.Translations.Rmf2`) | `runic-translations-visualstudio.vsix` |
 
 Both moved here from
@@ -15,9 +16,13 @@ with their history (`tools/vscode-runic-translations`,
 `tools/visualstudio-runic-translations`). Both are **previews** until the
 production language server (2.0). They are released as VSIX files attached to
 the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
-of this repository, not on an extension marketplace. The VS Code extension will
-become the one Runic extension for Translations and the Runic SDK
-([#2](https://github.com/Runic-Artifex/runic-editors/issues/2)).
+of this repository, not on an extension marketplace. Since 0.20 the VS Code
+extension is the one Runic extension for the Runic SDK and Translations; it
+replaces Runic MF2 Translations (`runic-artifex.runic-translations`), so uninstall
+that one when you install it ([Moving from Runic MF2
+Translations](vscode/README.md#moving-from-runic-mf2-translations)). Its Runic SDK
+views stay hidden in workspaces without a Runic SDK project. The Visual Studio
+extension gets the Runic SDK features later.
 
 ## Language server and supported Translations versions
 
@@ -63,7 +68,7 @@ VS Code extension (any platform), from `vscode/`:
 bun install --frozen-lockfile
 bun run --bun check        # TypeScript
 bun run --bun test         # unit tests
-bun run package            # artifacts/runic-translations.vsix
+bun run package            # artifacts/runic.vsix
 bun run test:host          # VS Code extension host against the pinned language server (needs `code`)
 ```
 
