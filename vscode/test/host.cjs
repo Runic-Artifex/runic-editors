@@ -26,7 +26,12 @@ exports.run = async function () {
   assert.ok(JSON.stringify(rendered.runs).includes('positive'));
   await assert.rejects(client.sendRequest('workspace/executeCommand', {command: 'runic.renderPreview', arguments: [en.toString(), 'payment', 'en', {count: 'invalid', tone: 'positive'}]}));
   stage = 'status bar and whole-catalog diagnostics';
-  await waitFor(() => api.status() === '$(globe) Runic: checkout · en', `Status bar did not show the catalog and locale: ${api.status()}`);
+  // The item shows the catalog and the file's locale once the server answers, then adds the locale's coverage when
+  // runic-translations status reports (a separate tool run), so wait for that final text: which one a poll sees first
+  // depends on timing.
+  const statusText = /^\$\(globe\) Runic: checkout · en(?: (\d+(?:\.\d+)?%))?$/;
+  await waitFor(() => statusText.exec(api.status() ?? '')?.[1] !== undefined, () => `Status bar did not show the catalog, locale and coverage: ${api.status()}`, 30000);
+  assert.equal(api.status(), '$(globe) Runic: checkout · en 100%');
   assert.equal(api.serverState(en), 'running');
   // A catalog error in a closed translation reaches the Problems view with its documentation link.
   const de = vscode.Uri.joinPath(root, 'de.rmf2');
@@ -118,7 +123,7 @@ async function runicSdk(api, fs) {
   assert.deepEqual(sdk.workspaceKind(appFolder.uri).sdkProjects, [project]);
   assert.deepEqual(sdk.projects(), [project]);
   assert.equal(sdk.devState(project).state, 'none');
-  await waitFor(() => /Runic dev: not started/.test(sdk.devLabel()), `Status bar: ${sdk.devLabel()}`);
+  await waitFor(() => /Runic dev: not started/.test(sdk.devLabel()), () => `Status bar: ${sdk.devLabel()}`);
   stage = 'tasks';
   const tasks = await vscode.tasks.fetchTasks({ type: 'runic' });
   assert.deepEqual(tasks.map(task => task.name).sort(), ['build', 'dev', 'dev --no-window', 'doctor']);
@@ -134,10 +139,10 @@ async function runicSdk(api, fs) {
     frontend: { developmentServer: 'vite', url: null, port: null, stateUrl: null, directory: path.join(appFolder.uri.fsPath, 'Frontend'), outputDirectory: path.join(appFolder.uri.fsPath, 'Frontend', 'dist'), generatedDirectory: null },
     webRoot: path.join(appFolder.uri.fsPath, 'bin', 'Debug', 'net10.0', 'www'), pages: [], window: { owner: 'ide', program: 'App', processId: null, starts: 0, environment: { DOTNET_ENVIRONMENT: 'Development' } }, debugEndpoints: [] };
   write(session);
-  await waitFor(() => sdk.devState(project).state === 'starting', `The session file's starting state was not followed: ${JSON.stringify(sdk.devState(project))}`);
+  await waitFor(() => sdk.devState(project).state === 'starting', () => `The session file's starting state was not followed: ${JSON.stringify(sdk.devState(project))}`);
   write({ ...session, state: 'ready', frontend: { ...session.frontend, url: 'http://127.0.0.1:5173/', port: 5173 } });
   await waitFor(() => sdk.devState(project).state === 'ready', 'The session file\'s ready state was not followed');
-  await waitFor(() => sdk.devLabel().endsWith('Runic dev: ready'), `Status bar: ${sdk.devLabel()}`);
+  await waitFor(() => sdk.devLabel().endsWith('Runic dev: ready'), () => `Status bar: ${sdk.devLabel()}`);
   // dotnet runic dev killed: the file keeps "ready", and its process is gone.
   process.kill(pid, 'SIGKILL');
   await waitFor(() => sdk.devState(project).state === 'stopped' && sdk.devState(project).exited === true, 'A dead dotnet runic dev must read as stopped', 15000);
@@ -177,7 +182,8 @@ async function runicSdk(api, fs) {
 async function waitFor(predicate, message, timeout = 10000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 50)); }
-  assert.fail(message);
+  // A function message reads the state at the timeout, not when the wait started.
+  assert.fail(typeof message === 'function' ? message() : message);
 }
 const execute = exports.run;
 exports.run = async () => {
