@@ -50,7 +50,7 @@ test("each VSIX must carry its identity and the version CI stamps for the releas
   const check = (version, overrides) => { rmSync(vsix, { recursive: true, force: true }); writeVsixFixtures(vsix, version, overrides); return () => scanVsix(vsix, version); };
   try {
     expect(check("0.12.0")().map(p => p.identity)).toEqual([
-      { id: "runic-translations", version: "0.12.1000", publisher: "runic-artifex" },
+      { id: "runic", version: "0.12.1000", publisher: "runic-artifex" },
       { id: "Runic.Artifex.Translations.Rmf2", version: "0.12.0.1000", publisher: "Runic Artifex" }]);
     expect(check("1.0.0-rc.2")().map(p => p.identity.version)).toEqual(["1.0.502", "1.0.0.502"]);
     // The unstamped placeholder of the committed manifests is never released.
@@ -111,7 +111,7 @@ const fakeGh = ({ release = false, tag, draft = false, assets = [], target = sha
   return { spawn, calls };
 };
 const writes = calls => calls.some(c => c[1] === "release" && ["create", "upload", "edit"].includes(c[2]));
-const files = ["a/vscode-vsix/runic-translations.vsix", "a/visualstudio-vsix/runic-translations-visualstudio.vsix", "r/SHA256SUMS"];
+const files = ["a/vscode-vsix/runic.vsix", "a/visualstudio-vsix/runic-translations-visualstudio.vsix", "r/SHA256SUMS"];
 
 test("the release check only reads and accepts only a release of this exact commit", () => {
   const { spawn, calls } = fakeGh();
@@ -140,10 +140,10 @@ test("a rerun keeps a release of this commit, never modifies a published one and
   expect(create.slice(4, 7)).toEqual(files);
   expect(create[create.indexOf("--target") + 1]).toBe(sha);
   expect(create).toContain("--generate-notes");
-  ({ spawn, calls } = fakeGh({ release: true, tag: sha, assets: ["runic-translations.vsix"] }));
+  ({ spawn, calls } = fakeGh({ release: true, tag: sha, assets: ["runic.vsix"] }));
   expect(createRelease("1.2.3", sha, files, spawn)).toContain("kept unchanged without runic-translations-visualstudio.vsix, SHA256SUMS");
   expect(writes(calls)).toBe(false);
-  ({ spawn, calls } = fakeGh({ release: true, draft: true, assets: ["runic-translations.vsix"] }));
+  ({ spawn, calls } = fakeGh({ release: true, draft: true, assets: ["runic.vsix"] }));
   expect(createRelease("1.2.3", sha, files, spawn)).toContain("Completed");
   expect(calls.slice(-2).map(c => c.slice(0, 3))).toEqual([["gh", "release", "upload"], ["gh", "release", "edit"]]);
   expect(calls.at(-1)).toContain("--draft=false");

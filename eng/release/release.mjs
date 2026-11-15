@@ -18,7 +18,7 @@ export const REPOSITORY = "Runic-Artifex/runic-editors";
 export const CI_WORKFLOW = ".github/workflows/ci.yml";
 // The VSIX files CI builds and stamps for a commit; each CI artifact holds one file, released under the same name.
 export const VSIX = [
-  { artifact: "vscode-vsix", file: "runic-translations.vsix", id: "runic-translations", publisher: "runic-artifex", format: "vscode" },
+  { artifact: "vscode-vsix", file: "runic.vsix", id: "runic", publisher: "runic-artifex", format: "vscode" },
   { artifact: "visualstudio-vsix", file: "runic-translations-visualstudio.vsix", id: "Runic.Artifex.Translations.Rmf2",
     publisher: "Runic Artifex", format: "visualStudio" },
 ];

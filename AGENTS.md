@@ -5,14 +5,19 @@ Use the locked development environment described in README.md and .envrc
 
 This repository holds two independent extensions: `vscode/` (TypeScript, Bun) and
 `visualstudio/` (C#, Visual Studio SDK, Windows-only packaging). Keep both
-extensions' identities (`runic-artifex.runic-translations`,
-`Runic.Artifex.Translations.Rmf2`), settings and commands stable unless a change
-is about them.
+extensions' identities (`runic-artifex.runic`, since 0.20 the merged Runic SDK and
+Translations extension, and `Runic.Artifex.Translations.Rmf2`), settings and
+commands stable unless a change is about them; the VS Code extension keeps reading
+its former `runicTranslations.*` settings and running its former command IDs
+(`vscode/src/identity.ts`).
 
 The language server is not built here: the extensions run the workspace's
 `dotnet-runic-translations` tool, and this repository tests against the version in
 `.config/dotnet-tools.json`, restored from NuGet. Do not add a build of
-runic-translations-sdk to CI.
+runic-translations-sdk to CI. The VS Code extension's Runic SDK features run the
+project's `dotnet-runic` tool and read the contracts runic-sdk documents (the dev
+session file, doctor JSON, the development source map); the host test uses
+fixtures for them, not a build of runic-sdk.
 
 Match verification to the changed behavior. Run the focused checks of the
 extension you changed (CONTRIBUTING.md); GitHub owns the Windows build and the

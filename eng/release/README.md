@@ -5,7 +5,7 @@ from the released commit and a `SHA256SUMS` file:
 
 | Asset | Extension |
 | --- | --- |
-| `runic-translations.vsix` | VS Code, `runic-artifex.runic-translations` |
+| `runic.vsix` | VS Code, `runic-artifex.runic` (Runic SDK and Translations; until 0.11 `runic-translations.vsix`, `runic-artifex.runic-translations`) |
 | `runic-translations-visualstudio.vsix` | Visual Studio 2026, `Runic.Artifex.Translations.Rmf2` |
 | `SHA256SUMS` | `sha256sum` lines of both VSIX files |
 
@@ -15,7 +15,10 @@ Marketplace (D066.25 #4); install a VSIX from the release.
 Up to 0.11.0 both extensions were released with Runic Translations
 (runic-translations-sdk), as `0.11.1000` (VS Code) and `0.11.0.1000` (Visual
 Studio). A release from this repository must map above that:
-`eng/release/release.mjs` refuses `0.11.0` and older versions.
+`eng/release/release.mjs` refuses `0.11.0` and older versions. Since 0.20 the
+VS Code extension is the one Runic extension, `runic-artifex.runic`; VS Code
+installs it next to the former `runic-artifex.runic-translations`, which users
+uninstall ([Moving from Runic MF2 Translations](../../vscode/README.md#moving-from-runic-mf2-translations)).
 
 ## Versioning
 
@@ -115,7 +118,7 @@ never modifies a published release. `release.test.mjs` pins this contract.
 
 ```sh
 sha256sum --check SHA256SUMS
-gh attestation verify runic-translations.vsix -R Runic-Artifex/runic-editors \
+gh attestation verify runic.vsix -R Runic-Artifex/runic-editors \
   --signer-workflow Runic-Artifex/runic-editors/.github/workflows/release.yml
 ```
 
