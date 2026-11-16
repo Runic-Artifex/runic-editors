@@ -184,6 +184,19 @@ const sourceMap: SourceMap = {
   ],
 };
 
+test("a source map with the current format ID is accepted", () => {
+  expect(parseSourceMap(JSON.stringify({ ...sourceMap, format: "runic.views.bridge-sources/1" })).format).toBe("runic.views.bridge-sources/1");
+});
+
+test("a source map with the 0.20 format ID is accepted", () => {
+  expect(parseSourceMap(JSON.stringify(sourceMap)).format).toBe("runic-bridge-sources/1");
+});
+
+test("a source map with an unknown format version is rejected", () => {
+  expect(() => parseSourceMap(JSON.stringify({ ...sourceMap, format: "runic.views.bridge-sources/2" }))).toThrow("Unsupported");
+  expect(() => parseSourceMap(JSON.stringify({ ...sourceMap, format: "runic-bridge-sources/2" }))).toThrow("Unsupported");
+});
+
 test("the source map tree lists ViewModels with their members in client order and their C# locations", () => {
   const tree = sourceMapTree(parseSourceMap(JSON.stringify(sourceMap)));
   expect(tree.map(node => [node.label, node.description])).toEqual([["About", undefined], ["Counter", "route counter"], ["Demo.Orphan", undefined]]);
@@ -194,7 +207,6 @@ test("the source map tree lists ViewModels with their members in client order an
   expect(increment.location).toEqual({ file: "/src/Demo/CounterViewModel.cs", line: 18, column: 18 });
   expect(increment.tooltip).toContain("via Demo.CounterViewModel.IncrementCommand");
   expect(counter.children[1].tooltip).toContain("no source location");
-  expect(() => parseSourceMap(JSON.stringify({ ...sourceMap, format: "runic-bridge-sources/2" }))).toThrow("Unsupported");
 });
 
 test("the newest source map under obj/<Configuration>/<TargetFramework> is used", () => {
