@@ -39,8 +39,8 @@ dotnet tool install dotnet-runic-translations --version <VERSION>
 
 | Translations (`dotnet-runic-translations`) | Extensions |
 | --- | --- |
-| 0.11.0 | This repository's `main`; CI runs the VS Code host test against this release from NuGet |
-| Older releases | The VSIX files attached to that [Translations release](https://github.com/Runic-Artifex/runic-translations-sdk/releases) |
+| 0.12.0 | runic-editors 0.20.0 and this repository's `main`; CI runs the VS Code host test against this release from NuGet |
+| 0.11.0 and older | The VSIX files attached to that [Translations release](https://github.com/Runic-Artifex/runic-translations-sdk/releases) |
 
 The `lsp` protocol is outside the Translations 1.0 compatibility rules, so use a
 Translations release listed here. The tested release is the version in
