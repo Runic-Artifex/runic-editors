@@ -2,8 +2,10 @@ import { readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /**
- * The development source map (`runic-bridge-sources/1`) that the Bridge generator writes to
+ * The development source map that the Bridge generator writes to
  * `obj/<Configuration>/<TargetFramework>/runic-bridge/sources.json` (Runic.Application.Views README, "Development source map").
+ * Its format ID is `runic.views.bridge-sources/1` from runic-sdk 0.21; `runic-bridge-sources/1` is the 0.20 ID, which
+ * this extension keeps reading so that it works with both. Other versions are rejected.
  */
 export interface SourceLocation { file: string; line: number; column: number }
 export interface SourceViewModel { id: string; name: string; route?: string; contract?: string; pageKinds?: string[]; symbol?: string; location?: SourceLocation }
@@ -11,11 +13,12 @@ export type SourceMemberKind = "state" | "setter" | "command" | "commandState" |
 export interface SourceMember { id: string; viewModel: string; member: string; kind: SourceMemberKind | string; symbol?: string; property?: string; location?: SourceLocation }
 export interface SourceMap { format: string; viewModels: SourceViewModel[]; members: SourceMember[] }
 
-export const sourceMapFormat = "runic-bridge-sources/1";
+/** The accepted format IDs: the current one, then the 0.20 one. */
+export const sourceMapFormats: readonly string[] = ["runic.views.bridge-sources/1", "runic-bridge-sources/1"];
 
 export function parseSourceMap(text: string): SourceMap {
   const map = JSON.parse(text) as Partial<SourceMap>;
-  if (map.format !== sourceMapFormat) throw new Error(`Unsupported development source map format ${JSON.stringify(map.format)}; this extension reads ${sourceMapFormat}.`);
+  if (typeof map.format !== "string" || !sourceMapFormats.includes(map.format)) throw new Error(`Unsupported development source map format ${JSON.stringify(map.format)}; this extension reads ${sourceMapFormats.join(" and ")}.`);
   if (!Array.isArray(map.viewModels) || !Array.isArray(map.members)) throw new Error("The development source map has no viewModels or members.");
   return map as SourceMap;
 }

@@ -153,7 +153,7 @@ async function runicSdk(api, fs) {
   const viewModel = path.join(appFolder.uri.fsPath, 'CounterViewModel.cs');
   const sources = path.join(appFolder.uri.fsPath, 'obj', 'Debug', 'net10.0', 'runic-bridge', 'sources.json');
   fs.mkdirSync(path.dirname(sources), { recursive: true });
-  fs.writeFileSync(sources, JSON.stringify({ format: 'runic-bridge-sources/1',
+  fs.writeFileSync(sources, JSON.stringify({ format: 'runic.views.bridge-sources/1',
     viewModels: [{ id: 'Demo.CounterViewModel', name: 'Counter', route: 'counter', symbol: 'Demo.CounterViewModel', location: { file: viewModel, line: 3, column: 29 } }],
     members: [{ id: 'Demo.CounterViewModel/command/increment', viewModel: 'Demo.CounterViewModel', member: 'increment', kind: 'command', symbol: 'Demo.CounterViewModel.Increment()', location: { file: viewModel, line: 7, column: 17 } },
       { id: 'Demo.CounterViewModel/state/count', viewModel: 'Demo.CounterViewModel', member: 'count', kind: 'state', symbol: 'Demo.CounterViewModel.Count', location: { file: viewModel, line: 5, column: 16 } }] }));
