@@ -4,6 +4,14 @@ The VS Code extension's changes per runic-editors release. Releases are GitHub
 releases of [runic-editors](https://github.com/Runic-Artifex/runic-editors/releases);
 nothing is published to an extension marketplace.
 
+## 0.21.0
+
+- The **ViewModels** view reads the development source map of Runic SDK 0.21
+  (format ID `runic.views.bridge-sources/1`) and still reads that of 0.20
+  (`runic-bridge-sources/1`).
+- Tested against `dotnet-runic-translations` 0.13.0; the bundled `runic.json`
+  schema is unchanged. **Import XLIFF (dry run)** works with 0.12.0 and 0.13.0.
+
 ## 0.20.0
 
 **One Runic extension.** The Translations extension, Runic MF2 Translations
