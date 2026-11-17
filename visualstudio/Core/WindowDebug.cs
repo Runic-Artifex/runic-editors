@@ -1,0 +1,376 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace RunicArtifex.DevKit.VisualStudio.Core;
+
+/// <summary>
+/// The Visual Studio debugger's identifiers that Debug the Window and Attach to the Page use (SPIKE-VS-0 §3, observed in
+/// Visual Studio 2026 18.8 and 18.12). Visual Studio documents none of them for this use.
+/// </summary>
+public static class DebugEngines
+{
+    /// <summary>"Managed (.NET Core, .NET 5+)", the CoreCLR engine.</summary>
+    public const string CoreClr = "{2E36F1D4-B23C-435D-AB41-18E608940038}";
+    /// <summary>The transport "JavaScript and TypeScript (Chrome DevTools/V8 Inspector)"; its qualifier is <c>http://&lt;host&gt;:&lt;port&gt;/</c>.</summary>
+    public const string CdpTransport = "{61D1E397-7AA6-4ED9-815A-0C5CA0E728B4}";
+    /// <summary>The "JavaScript and TypeScript" engine of the CDP transport (js-debug's <c>pwa-chrome</c> attach).</summary>
+    public const string JavaScriptOverCdp = "{394120B6-2FF9-4D0D-8953-913EF5CD0BCD}";
+}
+
+/// <summary>The MSBuild properties <c>dotnet run</c> starts a project with (VS Code: <c>RunProperties</c>).</summary>
+public sealed class RunProperties
+{
+    public RunProperties(string? runCommand, string? runArguments, string? runWorkingDirectory, string? targetPath)
+    {
+        RunCommand = runCommand; RunArguments = runArguments; RunWorkingDirectory = runWorkingDirectory; TargetPath = targetPath;
+    }
+
+    public string? RunCommand { get; }
+    public string? RunArguments { get; }
+    public string? RunWorkingDirectory { get; }
+    public string? TargetPath { get; }
+}
+
+/// <summary>The program, arguments and directory of the Window, as <c>dotnet run</c> would start it.</summary>
+public sealed class WindowProgram
+{
+    public WindowProgram(string program, IReadOnlyList<string> arguments, string workingDirectory)
+    {
+        Program = program; Arguments = arguments; WorkingDirectory = workingDirectory;
+    }
+
+    public string Program { get; }
+    public IReadOnlyList<string> Arguments { get; }
+    public string WorkingDirectory { get; }
+    /// <summary>The arguments as one command line.</summary>
+    public string CommandLineArguments => string.Join(" ", Arguments.Select(CommandLine.Quote));
+}
+
+/// <summary>Which page engine Debug the Window opens a DevTools Protocol port for.</summary>
+public enum PageHost { WebView2, CsWebUi }
+
+/// <summary>
+/// The environment and port of a Window that Debug the Window starts: the session file's <c>window.environment</c> on
+/// top of Visual Studio's own, and the page's Chrome DevTools Protocol port (SPIKE-VS-0 §6, D070.17).
+/// </summary>
+public sealed class WindowDebugPlan
+{
+    public WindowDebugPlan(PageHost host, int port, IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> added)
+    {
+        Host = host; Port = port; Environment = environment; Added = added;
+    }
+
+    public PageHost Host { get; }
+    /// <summary>The loopback port the page's engine listens on.</summary>
+    public int Port { get; }
+    /// <summary>The Window's whole environment.</summary>
+    public IReadOnlyDictionary<string, string> Environment { get; }
+    /// <summary>What the plan sets beyond Visual Studio's environment (for the Output pane).</summary>
+    public IReadOnlyDictionary<string, string> Added { get; }
+    /// <summary>The endpoint the JavaScript engine attaches to.</summary>
+    public string EndpointUrl => CdpEndpoints.Url(Port);
+}
+
+/// <summary>Debug the Window's decisions that need no Visual Studio (VS Code: <c>window-debug.ts</c>).</summary>
+public static class WindowDebug
+{
+    public const string WebView2ArgumentsVariable = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+    /// <summary>Runic.Desktop's CS-WebUI switch since 0.22 (runic-sdk#1082): <c>0</c> or a fixed port, in Development only.</summary>
+    public const string WebUiPortVariable = "RUNIC_WEBUI_REMOTE_DEBUGGING_PORT";
+    public const string EnvironmentVariable = "DOTNET_ENVIRONMENT";
+
+    private static readonly Regex RemoteDebuggingPort = new(@"(?:^|\s)--remote-debugging-port=(\d+)(?=\s|$)", RegexOptions.CultureInvariant);
+
+    /// <summary><c>dotnet msbuild &lt;project&gt; -getProperty:…</c> for the program <c>dotnet run</c> starts.</summary>
+    public static IReadOnlyList<string> RunPropertiesArguments(string project, string configuration)
+        => new[] { "msbuild", project, "-p:Configuration=" + configuration, "-getProperty:RunCommand", "-getProperty:RunArguments", "-getProperty:RunWorkingDirectory", "-getProperty:TargetPath" };
+
+    /// <summary><c>dotnet msbuild -getProperty</c> prints <c>{ "Properties": { … } }</c> for several properties.</summary>
+    public static RunProperties ParseRunProperties(string stdout)
+    {
+        Dictionary<string, object?>? properties;
+        try { properties = Json.Object(Json.Get(Json.Object(Json.Parse(stdout.Trim())), "Properties")); }
+        catch (FormatException error) { throw new InvalidOperationException("dotnet msbuild did not return the run properties: " + error.Message, error); }
+        if (properties == null) throw new InvalidOperationException("dotnet msbuild returned no properties.");
+        return new RunProperties(Json.String(properties, "RunCommand"), Json.String(properties, "RunArguments"), Json.String(properties, "RunWorkingDirectory"), Json.String(properties, "TargetPath"));
+    }
+
+    /// <summary>Splits MSBuild's <c>RunArguments</c> the way a shell would for plain and double-quoted arguments.</summary>
+    public static IReadOnlyList<string> SplitArguments(string? text)
+    {
+        var result = new List<string>();
+        foreach (Match match in Regex.Matches(text ?? "", @"""((?:[^""\\]|\\.)*)""|(\S+)"))
+            result.Add(match.Groups[1].Success ? Regex.Replace(match.Groups[1].Value, @"\\(.)", "$1") : match.Groups[2].Value);
+        return result;
+    }
+
+    /// <summary>
+    /// The program <c>dotnet run</c> starts: the application host, or the DLL's <see cref="RunProperties.TargetPath"/>
+    /// when <c>RunCommand</c> is <c>dotnet</c> (then the debugger runs it on the shared host).
+    /// </summary>
+    public static WindowProgram Program(string project, RunProperties properties)
+    {
+        string? command = properties.RunCommand?.Trim();
+        if (string.IsNullOrEmpty(command)) throw new InvalidOperationException($"The project has no RunCommand; is {Path.GetFileName(project)} an executable?");
+        string name = command!.Replace('\\', '/');
+        name = name.Substring(name.LastIndexOf('/') + 1);
+        bool viaDotnet = Regex.IsMatch(name, "^dotnet(?:\\.exe)?$", RegexOptions.IgnoreCase);
+        var arguments = SplitArguments(properties.RunArguments).ToList();
+        if (viaDotnet)
+        {
+            if (arguments.Count > 0 && arguments[0] == "exec") arguments.RemoveAt(0);
+            if (arguments.Count > 0 && arguments[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) arguments.RemoveAt(0);
+        }
+        string? program = viaDotnet ? properties.TargetPath : command;
+        if (string.IsNullOrEmpty(program)) throw new InvalidOperationException("The project names no program to debug.");
+        string directory = properties.RunWorkingDirectory?.Trim() is { Length: > 0 } run ? run : Path.GetDirectoryName(project) ?? "";
+        return new WindowProgram(program!, arguments, directory);
+    }
+
+    /// <summary>
+    /// <c>WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS</c> with <c>--remote-debugging-port=&lt;port&gt;</c> added to an existing
+    /// value; a value that already names a port keeps it, and that port is the one to attach to.
+    /// </summary>
+    public static (string Value, int Port) MergeBrowserArguments(string? existing, int port)
+    {
+        string current = (existing ?? "").Trim();
+        var match = RemoteDebuggingPort.Match(current);
+        if (match.Success && int.TryParse(match.Groups[1].Value, out int named) && named > 0) return (current, named);
+        // --remote-debugging-port=0 asks WebView2 for a free port it reports only over js-debug's pipe: replace it.
+        current = Regex.Replace(current, @"(?:^|\s)--remote-debugging-port=\S*", "").Trim();
+        string flag = "--remote-debugging-port=" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return (current.Length == 0 ? flag : current + " " + flag, port);
+    }
+
+    /// <summary>
+    /// The Window's environment and port. CS-WebUI when the session asks for its port (<c>RUNIC_WEBUI_REMOTE_DEBUGGING_PORT</c>
+    /// in <c>window.environment</c>, 9225 with <c>--no-window</c> since 0.22; <c>0</c> becomes <paramref name="freePort"/>);
+    /// otherwise WebView2, whose port goes into <c>WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS</c>, merged with the session's or
+    /// Visual Studio's value. <c>DOTNET_ENVIRONMENT</c> defaults to Development, as <c>dev</c> sets it.
+    /// </summary>
+    public static WindowDebugPlan Plan(IReadOnlyDictionary<string, string> visualStudio, IReadOnlyDictionary<string, string>? session, Func<int> freePort)
+    {
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in visualStudio) environment[pair.Key] = pair.Value;
+        var added = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        void Set(string key, string value)
+        {
+            if (environment.TryGetValue(key, out string? old) && old == value) return;
+            environment[key] = value; added[key] = value;
+        }
+        Set(EnvironmentVariable, "Development");
+        foreach (var pair in session ?? new Dictionary<string, string>()) Set(pair.Key, pair.Value);
+
+        if (session != null && session.TryGetValue(WebUiPortVariable, out string? webUi))
+        {
+            int port = int.TryParse(webUi.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int fixedPort) && fixedPort is > 0 and < 65536 ? fixedPort : freePort();
+            Set(WebUiPortVariable, port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return new WindowDebugPlan(PageHost.CsWebUi, port, environment, added);
+        }
+        environment.TryGetValue(WebView2ArgumentsVariable, out string? existing);
+        var (value, webView2Port) = MergeBrowserArguments(existing, freePort());
+        Set(WebView2ArgumentsVariable, value);
+        return new WindowDebugPlan(PageHost.WebView2, webView2Port, environment, added);
+    }
+
+    /// <summary>A Win32 environment block (<c>VsDebugTargetInfo4.bstrEnv</c>): <c>name=value\0</c> each, sorted, and a final <c>\0</c>.</summary>
+    public static string EnvironmentBlock(IReadOnlyDictionary<string, string> environment)
+    {
+        var block = new StringBuilder();
+        foreach (var pair in environment.Where(pair => pair.Key.Length > 0 && pair.Key.IndexOf('=') < 0 && pair.Key.IndexOf('\0') < 0 && pair.Value.IndexOf('\0') < 0)
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            block.Append(pair.Key).Append('=').Append(pair.Value).Append('\0');
+        return block.Append('\0').ToString();
+    }
+
+    /// <summary>A free TCP port on 127.0.0.1, for the page's endpoint.</summary>
+    public static int FreePort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try { return ((IPEndPoint)listener.LocalEndpoint).Port; }
+        finally { listener.Stop(); }
+    }
+}
+
+/// <summary>A page's Chrome DevTools Protocol endpoint that Attach to the Page offers.</summary>
+public sealed class PageEndpoint
+{
+    public PageEndpoint(string engine, string url, string source) { Engine = engine; Url = url; Source = source; }
+
+    /// <summary><c>webview2</c> or <c>chromium</c>.</summary>
+    public string Engine { get; }
+    /// <summary><c>http://127.0.0.1:&lt;port&gt;/</c>.</summary>
+    public string Url { get; }
+    /// <summary>Where it comes from, for the picker: the session file, or a Window Debug the Window started.</summary>
+    public string Source { get; }
+    public int Port => new Uri(Url).Port;
+}
+
+/// <summary>The session file's CDP endpoints and the attach qualifier (SPIKE-VS-0 §3: <c>http://localhost:&lt;port&gt;/</c> or the IP form).</summary>
+public static class CdpEndpoints
+{
+    private static readonly string[] PageEngines = { "webview2", "chromium" };
+
+    /// <summary>The loopback endpoint of a port, on 127.0.0.1 rather than <c>localhost</c>, which can resolve to <c>[::1]</c> (DEV-SEC-55).</summary>
+    public static string Url(int port) => "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/";
+
+    /// <summary>The <c>debugEndpoints</c> a JavaScript engine can attach to: WebView2's and CS-WebUI's Chromium CDP endpoints on loopback.</summary>
+    public static IReadOnlyList<PageEndpoint> FromSession(DevSessionFile? session)
+    {
+        if (session == null) return Array.Empty<PageEndpoint>();
+        return session.DebugEndpoints
+            .Where(endpoint => endpoint.Protocol == "cdp" && PageEngines.Contains(endpoint.Engine))
+            .Select(endpoint => Normalize(endpoint.Url) is { } url ? new PageEndpoint(endpoint.Engine, url, "dev session") : null)
+            .OfType<PageEndpoint>().ToList();
+    }
+
+    /// <summary>The endpoints in order, without repeated URLs (the first wins).</summary>
+    public static IReadOnlyList<PageEndpoint> Distinct(IEnumerable<PageEndpoint> endpoints)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return endpoints.Where(endpoint => seen.Add(endpoint.Url)).ToList();
+    }
+
+    /// <summary><c>http://127.0.0.1:&lt;port&gt;/</c> for a loopback HTTP URL with a port (<c>localhost</c> becomes 127.0.0.1); null otherwise.</summary>
+    public static string? Normalize(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttp || uri.IsDefaultPort) return null;
+        if (!(uri.Host == "127.0.0.1" || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase))) return null;
+        return Url(uri.Port);
+    }
+
+    /// <summary>The URL that says whether the endpoint answers (<c>/json/version</c>).</summary>
+    public static string VersionUrl(string url) => url.TrimEnd('/') + "/json/version";
+
+    /// <summary>The qualifiers to try with the CDP transport, in order: the endpoint URL, its <c>host:port</c> form, and the <c>localhost</c> URL the spike used.</summary>
+    public static IReadOnlyList<string> Qualifiers(string url)
+    {
+        var uri = new Uri(url);
+        string port = uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return new[] { Url(uri.Port), "127.0.0.1:" + port, "http://localhost:" + port + "/" };
+    }
+
+    /// <summary>
+    /// Which targets the CDP transport lists to attach to: the pages, not DevTools or extension pages (the Runic DevTools
+    /// extension's) and not <c>about:blank</c>.
+    /// </summary>
+    public static bool IsPageTarget(string? name)
+    {
+        string text = (name ?? "").Trim();
+        if (text.Length == 0 || text.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return false;
+        string[] skipped = { "devtools://", "chrome-extension://", "chrome://", "edge://", "extension://" };
+        return !skipped.Any(prefix => text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Whether a <c>/json/version</c> response is a DevTools endpoint's (it names a <c>webSocketDebuggerUrl</c> or a <c>Browser</c>).</summary>
+    public static bool IsVersionResponse(string text)
+    {
+        try
+        {
+            var value = Json.Object(Json.Parse(text));
+            return Json.String(value, "webSocketDebuggerUrl") != null || Json.String(value, "Browser") != null;
+        }
+        catch (FormatException) { return false; }
+    }
+}
+
+/// <summary>
+/// Whether the project's <c>dotnet-runic</c> has <c>dev --debug-endpoint</c> (0.22, runic-sdk#1082), which a CS-WebUI
+/// Window needs to open its DevTools Protocol port when DevKit starts <c>dev</c> with its Window (D070.17).
+/// </summary>
+public static class DevToolVersions
+{
+    private static readonly Regex Version = new(@"(?<![\d.])(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?", RegexOptions.CultureInvariant);
+
+    /// <summary>The first version in <c>dotnet runic --version</c>'s output (<c>0.22.0</c>, <c>0.22.0+abc</c>, <c>dotnet-runic 0.22.0</c>), or null.</summary>
+    public static string? ParseVersionOutput(string? text)
+    {
+        var match = Version.Match(text ?? "");
+        return match.Success ? match.Value : null;
+    }
+
+    /// <summary>0.22.0 and later, including 0.22's pre-releases and 1.x; false for an unknown version.</summary>
+    public static bool SupportsDebugEndpoint(string? version)
+    {
+        var match = Version.Match(version ?? "");
+        if (!match.Success) return false;
+        int major = int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        int minor = int.Parse(match.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
+        return major > 0 || minor >= 22;
+    }
+
+    /// <summary>
+    /// The tool manifest's version when it has one, else <c>&lt;dotnet&gt; runic --version</c> in the project's directory
+    /// (within 15 seconds); null when neither says.
+    /// </summary>
+    public static async Task<string?> DetectAsync(string dotnet, string project, string? manifestVersion, CancellationToken cancellationToken)
+    {
+        if (manifestVersion != null) return manifestVersion;
+        try
+        {
+            var result = await ToolProcess.RunAsync(dotnet, new[] { "runic", "--version" }, Path.GetDirectoryName(project) ?? Environment.CurrentDirectory, TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+            return result.ExitCode == 0 ? ParseVersionOutput(result.Output) : null;
+        }
+        catch (Exception error) when (error is InvalidOperationException or TimeoutException) { return null; }
+    }
+}
+
+/// <summary>A finished command: its exit code and output.</summary>
+public sealed class ToolProcessResult
+{
+    public ToolProcessResult(int exitCode, string output, string error) { ExitCode = exitCode; Output = output; Error = error; }
+    public int ExitCode { get; }
+    public string Output { get; }
+    public string Error { get; }
+    /// <summary>The last line of standard error, else the exit code, for a message.</summary>
+    public string Detail => (Error.Trim().Length > 0 ? Error : Output.Trim().Length > 0 ? Output : $"exit code {ExitCode}").Trim().Split('\n').Last().Trim();
+}
+
+/// <summary>Runs a short command with redirected output (<c>dotnet msbuild -getProperty</c>, <c>dotnet runic --version</c>).</summary>
+public static class ToolProcess
+{
+    public static async Task<ToolProcessResult> RunAsync(string program, IReadOnlyList<string> arguments, string directory, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var start = new ProcessStartInfo
+        {
+            FileName = program,
+            Arguments = string.Join(" ", arguments.Select(CommandLine.Quote)),
+            WorkingDirectory = directory,
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+        };
+        start.EnvironmentVariables["DOTNET_NOLOGO"] = "1";
+        start.EnvironmentVariables["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        using var process = new Process { StartInfo = start, EnableRaisingEvents = true };
+        var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.Exited += (_, _) => exited.TrySetResult(true);
+        try { if (!process.Start()) throw new InvalidOperationException($"Could not start {program}."); }
+        catch (System.ComponentModel.Win32Exception error) { throw new InvalidOperationException($"Could not start {program}: {error.Message}", error); }
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        void Kill() { try { process.Kill(); } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { } }
+        using (cancellationToken.Register(Kill))
+        {
+            var all = Task.WhenAll(stdout, stderr, exited.Task);
+            if (await Task.WhenAny(all, Task.Delay(timeout)).ConfigureAwait(false) != all)
+            {
+                Kill();
+                throw new TimeoutException($"{Path.GetFileName(program)} {string.Join(" ", arguments.Take(2))} did not finish within {Math.Round(timeout.TotalSeconds)} seconds.");
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        process.WaitForExit();
+        return new ToolProcessResult(process.ExitCode, stdout.Result, stderr.Result);
+    }
+}

@@ -35,9 +35,9 @@ public sealed class DevProcess : IDisposable
     /// <summary>The command line, for the Output pane.</summary>
     public string CommandLine { get; private set; } = "";
 
-    /// <summary>Starts <c>&lt;dotnet&gt; runic dev [--no-window] --project &lt;project&gt;</c>.</summary>
-    public static DevProcess Start(string dotnet, string project, bool noWindow, Action<string> onLine)
-        => Start(dotnet, DevOutput.Arguments(project, noWindow).ToArray(), project, noWindow, onLine);
+    /// <summary>Starts <c>&lt;dotnet&gt; runic dev [--no-window | --debug-endpoint] --project &lt;project&gt;</c>.</summary>
+    public static DevProcess Start(string dotnet, string project, bool noWindow, Action<string> onLine, bool debugEndpoint = false)
+        => Start(dotnet, DevOutput.Arguments(project, noWindow, debugEndpoint).ToArray(), project, noWindow, onLine);
 
     /// <summary>Starts another program in the project's directory (tests use a stand-in for <c>dotnet</c>).</summary>
     public static DevProcess Start(string program, string[] arguments, string project, bool noWindow, Action<string> onLine)

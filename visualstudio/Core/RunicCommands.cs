@@ -105,8 +105,8 @@ public static class RunicCommandCatalog
         new RunicCommand(RunicCommandIds.ShowSdkOutput, nameof(RunicCommandIds.ShowSdkOutput), "Show Runic SDK Output", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.RunDoctor, nameof(RunicCommandIds.RunDoctor), "Run dotnet runic doctor", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.RefreshViewModels, nameof(RunicCommandIds.RefreshViewModels), "Refresh ViewModels", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.DebugWindow, nameof(RunicCommandIds.DebugWindow), "Debug the Window", RunicSlice.Vs5),
-        new RunicCommand(RunicCommandIds.AttachToPage, nameof(RunicCommandIds.AttachToPage), "Attach to the Page (JavaScript)", RunicSlice.Vs5),
+        new RunicCommand(RunicCommandIds.DebugWindow, nameof(RunicCommandIds.DebugWindow), "Debug the Window", RunicSlice.Implemented),
+        new RunicCommand(RunicCommandIds.AttachToPage, nameof(RunicCommandIds.AttachToPage), "Attach to the Page (JavaScript)", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.ShowToolWindow, nameof(RunicCommandIds.ShowToolWindow), "Runic", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.OpenOptions, nameof(RunicCommandIds.OpenOptions), "Options...", RunicSlice.Implemented),
     };

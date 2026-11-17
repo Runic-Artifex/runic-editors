@@ -163,7 +163,6 @@
         <Icon guid="ImageCatalogGuid" id="DebugSelection" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Debug the Window</ButtonText><CanonicalName>.Runic.DebugWindow</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="AttachToPage" priority="0x0112" type="Button">
@@ -171,7 +170,6 @@
         <Icon guid="ImageCatalogGuid" id="Attach" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Attach to the Page (JavaScript)</ButtonText><CanonicalName>.Runic.AttachToPage</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="ShowToolWindow" priority="0x0113" type="Button">

@@ -78,13 +78,15 @@ public sealed class DevWindow
 
 public sealed class DevDebugEndpoint
 {
-    internal DevDebugEndpoint(string engine, string protocol, string url) { Engine = engine; Protocol = protocol; Url = url; }
+    internal DevDebugEndpoint(string engine, string protocol, string url, string? reason = null) { Engine = engine; Protocol = protocol; Url = url; Reason = reason; }
 
     /// <summary><c>webview2</c>, <c>chromium</c>, <c>webkitgtk</c>…</summary>
     public string Engine { get; }
     /// <summary><c>cdp</c>, <c>webkit-remote-inspector</c>…</summary>
     public string Protocol { get; }
     public string Url { get; }
+    /// <summary>Why an entry of <c>unavailableDebugEndpoints</c> is not open (<c>elevated</c>, <c>port-taken</c>…); null in <c>debugEndpoints</c>.</summary>
+    public string? Reason { get; }
 }
 
 /// <summary>
@@ -112,6 +114,8 @@ public sealed class DevSessionFile
     public IReadOnlyList<DevPage> Pages { get; private set; } = Array.Empty<DevPage>();
     public DevWindow? Window { get; private set; }
     public IReadOnlyList<DevDebugEndpoint> DebugEndpoints { get; private set; } = Array.Empty<DevDebugEndpoint>();
+    /// <summary>Endpoints the environment asks for that the engine does not open, with the reason; since 0.20.</summary>
+    public IReadOnlyList<DevDebugEndpoint> UnavailableDebugEndpoints { get; private set; } = Array.Empty<DevDebugEndpoint>();
 
     /// <summary>The development server's address, else the first page's: what Open the Development Server opens.</summary>
     public string? ServerUrl => Frontend?.Url ?? Pages.FirstOrDefault(page => page.Url != null)?.Url;
@@ -148,6 +152,9 @@ public sealed class DevSessionFile
             DebugEndpoints = (Json.Array(Json.Get(value, "debugEndpoints")) ?? new List<object?>()).Select(Json.Object)
                 .Where(endpoint => Json.String(endpoint, "engine") != null && Json.String(endpoint, "url") != null)
                 .Select(endpoint => new DevDebugEndpoint(Json.String(endpoint, "engine")!, Json.String(endpoint, "protocol") ?? "", Json.String(endpoint, "url")!)).ToList(),
+            UnavailableDebugEndpoints = (Json.Array(Json.Get(value, "unavailableDebugEndpoints")) ?? new List<object?>()).Select(Json.Object)
+                .Where(endpoint => Json.String(endpoint, "engine") != null)
+                .Select(endpoint => new DevDebugEndpoint(Json.String(endpoint, "engine")!, Json.String(endpoint, "protocol") ?? "", Json.String(endpoint, "url") ?? "", Json.String(endpoint, "reason"))).ToList(),
         };
     }
 
