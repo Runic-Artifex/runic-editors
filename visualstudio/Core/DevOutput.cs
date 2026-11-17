@@ -100,7 +100,7 @@ public sealed class DevProblems
     }
 }
 
-/// <summary>What the pre-F5 guard does when F5 (or Ctrl+F5) builds a Runic startup project (D070.6).</summary>
+/// <summary>What the pre-F5 guard does when F5 (or Ctrl+F5) starts a Runic startup project (D070.6).</summary>
 public enum DevGuardDecision
 {
     /// <summary><c>dev --no-window</c> is ready with owner <c>ide</c>: launch.</summary>
@@ -114,13 +114,48 @@ public enum DevGuardDecision
 }
 
 /// <summary>
-/// The pre-F5 guard (PARITY §2.2, D070.6): Visual Studio has no <c>preLaunchTask</c>, so when a debug launch builds a
+/// The pre-F5 guard (PARITY §2.2, D070.6): Visual Studio has no <c>preLaunchTask</c>, so when F5 or Ctrl+F5 starts a
 /// Runic startup project and no <c>dotnet runic dev --no-window</c> (owner <c>ide</c>) runs, the extension asks first.
 /// VS Code's <c>runic</c> debug type starts <c>dev --no-window</c> without asking and remembers nothing, so the guard
 /// asks each time (no per-solution choice).
 /// </summary>
 public static class DevGuard
 {
+    /// <summary>The command set of Debug.Start and Debug.StartWithoutDebugging (Visual Studio's guidVSStd97).</summary>
+    public static readonly Guid LaunchCommandSet = new("5efc7975-14bc-11cf-9b2b-00aa00573819");
+    /// <summary>Debug.Start (F5; cmdidStart). In break mode the same command continues.</summary>
+    public const uint StartCommand = 295;
+    /// <summary>Debug.StartWithoutDebugging (Ctrl+F5; cmdidStartNoDebug).</summary>
+    public const uint StartWithoutDebuggingCommand = 368;
+
+    /// <summary>
+    /// Which launch a command is: true for Debug.Start, false for Debug.StartWithoutDebugging, null for any other
+    /// command, which the guard passes on.
+    /// </summary>
+    public static bool? LaunchKind(Guid commandSet, uint command)
+    {
+        if (commandSet != LaunchCommandSet) return null;
+        return command switch
+        {
+            StartCommand => true,
+            StartWithoutDebuggingCommand => false,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// The project the guard asks about when a launch command runs: the first startup project (in the solution's
+    /// startup order) that is a Runic SDK project, as <paramref name="sdkProjects"/> spells it (the dev session's key). Null while the debugger is not in design mode (F5 then continues a
+    /// running session) and when no startup project is a Runic SDK project.
+    /// </summary>
+    public static string? Target(IReadOnlyList<string> startupProjects, IReadOnlyList<string> sdkProjects, bool debuggerInDesignMode)
+    {
+        if (!debuggerInDesignMode) return null;
+        foreach (string startup in startupProjects)
+            if (sdkProjects.FirstOrDefault(project => string.Equals(project, startup, StringComparison.OrdinalIgnoreCase)) is { } match) return match;
+        return null;
+    }
+
     public static DevGuardDecision Decide(DevSnapshot snapshot)
     {
         if (snapshot.IsActive && snapshot.Session?.Window?.OwnedByIde == true)

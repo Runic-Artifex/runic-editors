@@ -49,6 +49,7 @@ them and the SDK project, and puts the project into a solution. Then, in Visual 
 | Commands | Every button of `Commands.vsct` is registered (command set and ID). The receipt lists those Visual Studio does not name: commands placed only on the tool window's toolbar (Refresh ViewModels, Refresh Translation Status) |
 | The package loads | `Runic.ShowToolWindow` opens the Runic tool window with its Dev Session, ViewModels, Doctor and Translations sections (UI Automation) |
 | Dev session followed | A session file (`obj/runic/dev-session.json`, state `ready`, Window owned by the IDE) of a running stand-in process reads as ready in the Runic SDK Output pane and the Dev Session section; Open the dev Session File opens it; when the process ends, the session reads as stopped |
+| F5 asks first | With no `dev --no-window` running, F5 (a key press posted to Visual Studio's window) shows the D070.6 question about the project, and Cancel leaves the debugger in design mode |
 | Doctor runs | Run dotnet runic doctor runs the real tool on the project and its summary reaches the Runic SDK pane |
 | Language server | It starts (Runic Translations pane) when an RMF2 document opens |
 | Translations | Preview Message renders inert rich content, reports and recovers from an invalid number, switches locale and has samples; Restart Language Server keeps an unsaved buffer |

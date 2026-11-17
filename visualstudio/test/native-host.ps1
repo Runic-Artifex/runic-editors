@@ -63,6 +63,20 @@ function Texts($window) {
     return (@($window.FindAll([Windows.Automation.TreeScope]::Descendants,
         [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)) | ForEach-Object {$_.Current.Name}) -join '|')
 }
+# The pre-F5 guard's question: a Visual Studio message box ("Microsoft Visual Studio") whose text starts with "Runic DevKit".
+function Guard-Question {
+    $main = (Get-Process -Id $ide.Id).MainWindowHandle
+    $windows = @([Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children,
+        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, $ide.Id)))
+    if ($main -ne [IntPtr]::Zero) { $windows += @([Windows.Automation.AutomationElement]::FromHandle($main).FindAll([Windows.Automation.TreeScope]::Children,
+        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window))) }
+    foreach ($window in $windows) {
+        if ($window.Current.NativeWindowHandle -eq [int]$main) { continue }
+        # Visual Studio shows the title and the message as one text.
+        if (@($window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)) |
+            Where-Object { $_.Current.Name -like '*Runic DevKit*' }).Count) { return $window }
+    }
+}
 function Render($window) { (Named $window 'Render preview' ([Windows.Automation.ControlType]::Button)).GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke() }
 function Close-Preview($window) { $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern).Close() }
 function Write-Session([string]$path, $session) {
@@ -177,6 +191,24 @@ try {
     $stopped = "App.csproj: dotnet runic dev stopped (process $($session.processId) exited)"
     Wait-Pane 'Runic SDK' { param($text) $text.Contains($stopped) } "The Runic SDK pane did not report: $stopped" 30 | Out-Null
     Passed 'dev session liveness: an ended dev reads as stopped'
+
+    # 5b. The pre-F5 guard (D070.6): F5 with no dev --no-window running asks first; Cancel starts nothing. The key press
+    #     is posted to Visual Studio's window: launched through DTE from this process, the question would open inside
+    #     that automation call, and Visual Studio would not take the answer.
+    $main = (Get-Process -Id $ide.Id).MainWindowHandle
+    [VisualStudioAutomation]::SetForegroundWindow($main) | Out-Null
+    [VisualStudioAutomation]::PostKey($main, 0x74) # VK_F5
+    $question = Wait-For { Guard-Question } 'F5 did not ask whether to start dotnet runic dev --no-window.' 60
+    $text = (Texts $question)
+    if ($text -notlike '*dotnet runic dev --no-window does not run for App.csproj*') { throw "Unexpected F5 question: $text" }
+    $cancel = @($question.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)) |
+        Where-Object { ($_.Current.Name -replace '&', '') -match '^(Cancel|Abbrechen)$' })[0]
+    $cancel.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-For { -not (Guard-Question) } 'The F5 question stayed open after Cancel.' 30 | Out-Null
+    Start-Sleep -Seconds 3
+    $mode = Wait-For { [VisualStudioAutomation]::Get([VisualStudioAutomation]::Get($dte, 'Debugger'), 'CurrentMode') } 'The debugger mode is unreadable.'
+    if ($mode -ne 1) { throw "Cancel in the F5 question still started debugging (debugger mode $mode)." }
+    Passed 'F5 asks to start dotnet runic dev --no-window; Cancel starts nothing'
 
     # 6. Run dotnet runic doctor (the pinned tool) on the project; its summary reaches the Runic SDK pane.
     Run-Command 'Runic.RunDoctor'
