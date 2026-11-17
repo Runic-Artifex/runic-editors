@@ -18,8 +18,8 @@
     </Buttons>
   </Commands>
   <Symbols>
-    <GuidSymbol name="guidRunicPackage" value="{38646832-a96f-4fd1-b33a-108353a854da}" />
-    <GuidSymbol name="guidRunicCommands" value="{f381baca-8a08-46bd-8a1e-e2c7c4972886}">
+    <GuidSymbol name="guidRunicPackage" value="{be2a06be-886d-4e5b-ac97-5853699532bb}" />
+    <GuidSymbol name="guidRunicCommands" value="{95a991f7-e4e2-4ce5-ad24-454213efa92f}">
       <IDSymbol name="RunicGroup" value="0x1020" /><IDSymbol name="Preview" value="0x100" /><IDSymbol name="Restart" value="0x101" />
     </GuidSymbol>
   </Symbols>

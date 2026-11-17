@@ -1,4 +1,4 @@
-# Runic for VS Code
+# Runic DevKit for VS Code
 
 **Preview.** This extension is a preview product until the production language
 server (2.0): its commands and settings, and the `lsp` protocol it uses, are
@@ -22,23 +22,34 @@ One extension for the Runic SDK and Runic Translations:
   `runic.json` buffers so mounted/slot configuration changes participate in
   refactors without requiring an intermediate save.
 
-## Moving from Runic MF2 Translations
+## Moving from Runic or Runic MF2 Translations
 
-Up to 0.11 the Translations part was its own extension, **Runic MF2
-Translations** (`runic-artifex.runic-translations`, `runic-translations.vsix`).
-Since 0.20 it is part of this extension, **Runic** (`runic-artifex.runic`,
-`runic.vsix`), and Translations-only workspaces use the same extension: the
-Runic SDK views stay hidden there. VS Code treats the new identity as another
-extension, so a `.vsix` install does not replace the old one:
+This extension has had three identities:
 
-1. Uninstall Runic MF2 Translations (Extensions view, or
-   `code --uninstall-extension runic-artifex.runic-translations`). While both are
-   installed, both start a language server for the same files; Runic says so
-   once per window and offers to uninstall it.
-2. Install `runic.vsix` from the release (`code --install-extension runic.vsix`).
+| Releases | Name | Extension ID | VSIX |
+| --- | --- | --- | --- |
+| 0.22 and later | **Runic DevKit** | `runic-artifex.runic-devkit` | `runic-devkit.vsix` |
+| 0.20–0.21 | Runic | `runic-artifex.runic` | `runic.vsix` |
+| up to 0.11 | Runic MF2 Translations (Translations only) | `runic-artifex.runic-translations` | `runic-translations.vsix` |
 
-Settings and commands moved to the `runic.` namespace. The former settings still
-apply while the new ones are not set (and are marked deprecated in the Settings
+0.22 only renames the extension, before its first Marketplace listing: its
+commands, settings, views and Command Palette titles stay the same. Since 0.20
+Translations-only workspaces use the same extension; the Runic SDK views stay
+hidden there. VS Code treats each identity as another extension, so a `.vsix`
+install does not replace the former one:
+
+1. Uninstall the former extension (Extensions view, or
+   `code --uninstall-extension runic-artifex.runic` and
+   `code --uninstall-extension runic-artifex.runic-translations`). While one is
+   installed, both register the same `runic.*` commands and start a language
+   server for the same files. On activation Runic DevKit shows one notification
+   that names the former extensions it finds and offers to uninstall them; reload
+   the window afterwards.
+2. Install `runic-devkit.vsix` from the release
+   (`code --install-extension runic-devkit.vsix`).
+
+From Runic MF2 Translations, settings and commands also moved to the `runic.`
+namespace. The former settings still apply while the new ones are not set (and are marked deprecated in the Settings
 editor), and the former command IDs still run, so keybindings keep working:
 
 | Former (Translations extension) | Now |
@@ -389,7 +400,7 @@ the session must follow, and a stand-in `dotnet` answers `dotnet runic doctor`. 
 `RUNIC_TRANSLATIONS_SERVER_ASSEMBLY` to a built `dotnet-runic-translations.dll`
 to test a local server build instead. The check requires an assertion
 report, not merely a zero CLI exit code. Failure logs are retained under
-`artifacts/host-failure`. Packaging produces `artifacts/runic.vsix`;
+`artifacts/host-failure`. Packaging produces `artifacts/runic-devkit.vsix`;
 no marketplace upload or user-profile installation is part of these commands.
 
 The `version` in `package.json` is a placeholder. `bun run package` (`package.mjs`)

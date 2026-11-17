@@ -17,11 +17,20 @@ export const root = fileURLToPath(new URL("../..", import.meta.url));
 export const REPOSITORY = "Runic-Artifex/runic-editors";
 export const CI_WORKFLOW = ".github/workflows/ci.yml";
 // The VSIX files CI builds and stamps for a commit; each CI artifact holds one file, released under the same name.
+// Both extensions are Runic DevKit since 0.22 (D070.5); until 0.21 they were runic.vsix (runic-artifex.runic) and
+// runic-translations-visualstudio.vsix (Runic.Artifex.Translations.Rmf2).
 export const VSIX = [
-  { artifact: "vscode-vsix", file: "runic.vsix", id: "runic", publisher: "runic-artifex", format: "vscode" },
-  { artifact: "visualstudio-vsix", file: "runic-translations-visualstudio.vsix", id: "Runic.Artifex.Translations.Rmf2",
+  { artifact: "vscode-vsix", file: "runic-devkit.vsix", id: "runic-devkit", publisher: "runic-artifex", format: "vscode" },
+  { artifact: "visualstudio-vsix", file: "runic-devkit-vs.vsix", id: "RunicArtifex.DevKit.VisualStudio",
     publisher: "Runic Artifex", format: "visualStudio" },
 ];
+// The store identities (D070.5, D070.12). They are permanent once published; the marketplace publish jobs and the
+// Visual Studio publishManifest.json (identity.internalName) take them from here.
+export const MARKETPLACE = {
+  publisher: "runic-artifex",
+  vscode: { itemName: "runic-artifex.runic-devkit" },
+  visualStudio: { internalName: "runic-devkit-vs", itemName: "runic-artifex.runic-devkit-vs" },
+};
 // Runic Translations attached both extensions to its own releases up to this version (the VS Code extension as
 // 0.11.1000, the Visual Studio one as 0.11.0.1000), so a release from this repository must map above it.
 export const LAST_TRANSLATIONS_RELEASE = "0.11.0";

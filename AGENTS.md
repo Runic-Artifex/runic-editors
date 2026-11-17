@@ -4,12 +4,14 @@ Use the locked development environment described in README.md and .envrc
 (`direnv exec . <command>`).
 
 This repository holds two independent extensions: `vscode/` (TypeScript, Bun) and
-`visualstudio/` (C#, Visual Studio SDK, Windows-only packaging). Keep both
-extensions' identities (`runic-artifex.runic`, since 0.20 the merged Runic SDK and
-Translations extension, and `Runic.Artifex.Translations.Rmf2`), settings and
-commands stable unless a change is about them; the VS Code extension keeps reading
-its former `runicTranslations.*` settings and running its former command IDs
-(`vscode/src/identity.ts`).
+`visualstudio/` (C#, Visual Studio SDK, Windows-only packaging). Both are
+**Runic DevKit** since 0.22 (D070.5). Keep both extensions' identities
+(`runic-artifex.runic-devkit` and `RunicArtifex.DevKit.VisualStudio`, with the store
+names in `eng/release/release.mjs` `MARKETPLACE`, which are permanent once
+published), settings and commands stable unless a change is about them. The VS Code
+extension keeps reading its former `runicTranslations.*` settings and running its
+former command IDs, and both extensions ask users to uninstall their former
+identities (`vscode/src/identity.ts`, `visualstudio/Migration/`).
 
 The language server is not built here: the extensions run the workspace's
 `dotnet-runic-translations` tool, and this repository tests against the version in

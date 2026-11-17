@@ -1,4 +1,4 @@
-# Runic MF2 Translations for Visual Studio
+# Runic DevKit for Visual Studio
 
 **Preview** for Visual Studio 2026 (18.x), Windows x64. The extension is a preview
 product until the production language server (2.0): its commands, environment
@@ -27,6 +27,29 @@ before starting Visual Studio. `RUNIC_DOTNET` optionally selects the installed
 .NET executable. Initialization failures appear in an IDE notification; server
 stderr is drained to diagnostic trace output. One server serves the current IDE
 session. Restart it after switching solutions or changing the selected tool.
+
+## Moving from Runic MF2 Translations
+
+Up to 0.21 this extension was **Runic MF2 Translations**
+(`Runic.Artifex.Translations.Rmf2`, `runic-translations-visualstudio.vsix`). Since
+0.22 it is **Runic DevKit** (`RunicArtifex.DevKit.VisualStudio`,
+`runic-devkit-vs.vsix`), the one Runic extension for the Runic SDK and Translations,
+as in VS Code. Its Translations features, commands and environment variables are
+unchanged. Visual Studio treats the new identity as another extension, so
+installing `runic-devkit-vs.vsix` does not replace the former one, and while both
+are installed both start a language server for the same files:
+
+1. Uninstall Runic MF2 Translations: **Extensions > Manage Extensions >
+   Installed**, select **Runic MF2 Translations**, choose **Uninstall**, then
+   restart Visual Studio. Runic DevKit finds it through the extension manager when
+   a solution is open and shows an InfoBar with these steps and a link to Manage
+   Extensions.
+2. Install `runic-devkit-vs.vsix` from the release.
+
+Keyboard shortcuts assigned to the former **Tools → Runic** commands belong to the
+former command set; assign them again.
+
+## Commands
 
 Commands appear in the Tools menu. Assign preferred shortcuts in Visual Studio’s
 keyboard options; the extension does not override existing IDE bindings.
@@ -107,7 +130,7 @@ Create the installable VSIX with Visual Studio's full-framework MSBuild on
 Windows (for example, from its Developer PowerShell):
 
 ```powershell
-MSBuild visualstudio/Runic.Translations.VisualStudio.csproj /restore /m:1
+MSBuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1
 python visualstudio/package.py
 ```
 
@@ -116,7 +139,7 @@ no global extension-development workload is required. Packaging includes the
 installer's generated `manifest.json` and `catalog.json`, the registered command
 package, TextMate registration and grammar. The verifier rejects missing assets
 and redistributed host-owned DLLs. Output:
-`visualstudio/artifacts/runic-translations-visualstudio.vsix`.
+`visualstudio/artifacts/runic-devkit-vs.vsix`.
 A native-built archive copied to Linux can be verified with `package.py --input
 /path/to/native.vsix`. Cross-compilation alone does not produce an installable
 archive.

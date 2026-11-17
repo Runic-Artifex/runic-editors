@@ -65,26 +65,26 @@ if args.check_source:
     identity = dict(source_contract['identity'])
     target = dict(source_contract['target'][0])
     prerequisite = dict(source_contract['prerequisite'])
-    assert identity == {'Id': 'Runic.Artifex.Translations.Rmf2', 'Language': 'en-US', 'Publisher': 'Runic Artifex'}, 'Unexpected source VSIX identity'
+    assert identity == {'Id': 'RunicArtifex.DevKit.VisualStudio', 'Language': 'en-US', 'Publisher': 'Runic Artifex'}, 'Unexpected source VSIX identity'
     assert target == {'Id': 'Microsoft.VisualStudio.Community', 'Version': '[18.0,19.0)'}, 'Manifest must declare the Visual Studio 2026 (18.x) host line'
     assert prerequisite['Id'] == 'Microsoft.VisualStudio.Component.CoreEditor' and prerequisite['Version'] == '[18.0,19.0)', 'Core editor prerequisite must match the declared installation range'
     assert source_contract['target'][1] == 'amd64', 'VSIX must declare the amd64 product architecture'
     assert source_contract['license'] == 'LICENSE.txt', 'VSIX must carry the packaged license name'
     assert {(dict(asset)['Type'], dict(asset)['Path']) for asset in source_contract['assets']} == {
-        ('Microsoft.VisualStudio.MefComponent', 'Runic.Translations.VisualStudio.dll'),
+        ('Microsoft.VisualStudio.MefComponent', 'RunicArtifex.DevKit.VisualStudio.dll'),
         ('Microsoft.VisualStudio.VsPackage', 'Runic.pkgdef'),
-        ('Microsoft.VisualStudio.VsPackage', 'Runic.Translations.VisualStudio.pkgdef'),
+        ('Microsoft.VisualStudio.VsPackage', 'RunicArtifex.DevKit.VisualStudio.pkgdef'),
     }, 'Unexpected source VSIX asset contract'
     print(f'PASS source VSIX manifest, host range and prerequisite contract; {release_version} stamps version {expected_version}')
     raise SystemExit(0)
 
-source = args.input or root / 'bin' / args.configuration / 'net472/Runic.Translations.VisualStudio.vsix'
+source = args.input or root / 'bin' / args.configuration / 'net472/RunicArtifex.DevKit.VisualStudio.vsix'
 if not source.is_file():
     parser.error('Build with Visual Studio MSBuild on Windows first, or supply --input with that VSIX.')
 with zipfile.ZipFile(source) as archive:
     assert archive.testzip() is None, 'Corrupt VSIX'
     names = set(archive.namelist())
-    for name in ('manifest.json', 'catalog.json', '[Content_Types].xml', 'LICENSE.txt', 'Runic.pkgdef', 'Runic.Translations.VisualStudio.pkgdef'):
+    for name in ('manifest.json', 'catalog.json', '[Content_Types].xml', 'LICENSE.txt', 'Runic.pkgdef', 'RunicArtifex.DevKit.VisualStudio.pkgdef'):
         assert name in names, f'Missing native installer metadata: {name}'
     manifest = ET.fromstring(archive.read('extension.vsixmanifest'))
     embedded = manifest_contract(manifest)
@@ -93,10 +93,10 @@ with zipfile.ZipFile(source) as archive:
     for asset in manifest.findall('v:Assets/v:Asset', ns):
         assert asset.attrib['Path'].replace('\\', '/') in names, 'Missing declared VSIX asset'
     dlls = [name for name in names if name.lower().endswith('.dll')]
-    assert dlls == ['Runic.Translations.VisualStudio.dll'], 'Do not redistribute VS-owned assemblies'
+    assert dlls == ['RunicArtifex.DevKit.VisualStudio.dll'], 'Do not redistribute VS-owned assemblies'
     assert archive.read(dlls[0])[:2] == b'MZ', 'Missing managed extension'
     assert 'rmf2' in json.loads(archive.read('Grammars/rmf2.tmLanguage.json'))['fileTypes']
-output = root / 'artifacts/runic-translations-visualstudio.vsix'
+output = root / 'artifacts/runic-devkit-vs.vsix'
 output.parent.mkdir(exist_ok=True)
 if source.resolve() != output.resolve():
     shutil.copyfile(source, output)

@@ -288,11 +288,27 @@ test("the template's F5 configuration is found by its preLaunchTask, else by its
   expect(templateWindowConfiguration(undefined)).toBeUndefined();
 });
 
+test("one notice offers to uninstall the former identities that are still installed", async () => {
+  const { extensionId, formerExtensions, formerExtensionsNotice } = await import("../src/identity.js");
+  expect(extensionId).toBe("runic-artifex.runic-devkit");
+  expect(formerExtensions.map(extension => extension.id)).toEqual(["runic-artifex.runic", "runic-artifex.runic-translations"]);
+  expect(formerExtensionsNotice(() => false)).toBeUndefined();
+  // The new identity itself is never reported.
+  expect(formerExtensionsNotice(id => id === extensionId)).toBeUndefined();
+  const runic = formerExtensionsNotice(id => id === "runic-artifex.runic");
+  expect(runic).toEqual({ ids: ["runic-artifex.runic"], action: "Uninstall Runic",
+    message: "Runic DevKit replaces Runic (runic-artifex.runic), which is still installed. Both register the same Runic commands and language server; uninstall it and reload the window." });
+  const both = formerExtensionsNotice(() => true)!;
+  expect(both.ids).toEqual(["runic-artifex.runic", "runic-artifex.runic-translations"]);
+  expect(both.action).toBe("Uninstall both");
+  expect(both.message).toContain("Runic (runic-artifex.runic) and Runic MF2 Translations (runic-artifex.runic-translations), which are still installed");
+});
+
 test("the manifest keeps the Translations commands and settings under the new identity, and gates the SDK views", async () => {
   const { readFileSync } = await import("node:fs");
   const { formerSettings, translationsCommands, commandId, formerCommandId } = await import("../src/identity.js");
   const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"));
-  expect(`${manifest.publisher}.${manifest.name}`).toBe("runic-artifex.runic");
+  expect(`${manifest.publisher}.${manifest.name}`).toBe("runic-artifex.runic-devkit");
   const commands = new Set((manifest.contributes.commands as { command: string }[]).map(command => command.command));
   for (const name of translationsCommands) {
     expect(commands.has(commandId(name))).toBe(true);

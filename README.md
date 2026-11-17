@@ -7,8 +7,8 @@ Translations resources through the Runic language server.
 
 | Directory | Extension | Package |
 | --- | --- | --- |
-| [`vscode/`](vscode/README.md) | Runic for VS Code: Runic SDK and Translations (`runic-artifex.runic`) | `runic.vsix` |
-| [`visualstudio/`](visualstudio/README.md) | Runic MF2 Translations for Visual Studio 2026 (`Runic.Artifex.Translations.Rmf2`) | `runic-translations-visualstudio.vsix` |
+| [`vscode/`](vscode/README.md) | Runic DevKit for VS Code: Runic SDK and Translations (`runic-artifex.runic-devkit`) | `runic-devkit.vsix` |
+| [`visualstudio/`](visualstudio/README.md) | Runic DevKit for Visual Studio 2026 (`RunicArtifex.DevKit.VisualStudio`) | `runic-devkit-vs.vsix` |
 
 Both moved here from
 [runic-translations-sdk](https://github.com/Runic-Artifex/runic-translations-sdk)
@@ -17,12 +17,18 @@ with their history (`tools/vscode-runic-translations`,
 production language server (2.0). They are released as VSIX files attached to
 the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
 of this repository, not on an extension marketplace. Since 0.20 the VS Code
-extension is the one Runic extension for the Runic SDK and Translations; it
-replaces Runic MF2 Translations (`runic-artifex.runic-translations`), so uninstall
-that one when you install it ([Moving from Runic MF2
-Translations](vscode/README.md#moving-from-runic-mf2-translations)). Its Runic SDK
-views stay hidden in workspaces without a Runic SDK project. The Visual Studio
-extension gets the Runic SDK features later.
+extension is the one Runic extension for the Runic SDK and Translations; its Runic
+SDK views stay hidden in workspaces without a Runic SDK project. The Visual Studio
+extension gets the Runic SDK features in 0.22.
+
+Since 0.22 both extensions are named **Runic DevKit** and have new identities. The
+editors install them next to the former ones, so uninstall those: **Runic**
+(`runic-artifex.runic`, 0.20–0.21) or **Runic MF2 Translations**
+(`runic-artifex.runic-translations`, up to 0.11) in VS Code ([Moving from Runic or
+Runic MF2 Translations](vscode/README.md#moving-from-runic-or-runic-mf2-translations)),
+and **Runic MF2 Translations** (`Runic.Artifex.Translations.Rmf2`) in Visual Studio
+([Moving from Runic MF2 Translations](visualstudio/README.md#moving-from-runic-mf2-translations)).
+Both extensions say so when they find a former one.
 
 ## Language server and supported Translations versions
 
@@ -69,7 +75,7 @@ VS Code extension (any platform), from `vscode/`:
 bun install --frozen-lockfile
 bun run --bun check        # TypeScript
 bun run --bun test         # unit tests
-bun run package            # artifacts/runic.vsix
+bun run package            # artifacts/runic-devkit.vsix
 bun run test:host          # VS Code extension host against the pinned language server (needs `code`)
 ```
 
@@ -77,8 +83,8 @@ Visual Studio extension: the installable VSIX needs Visual Studio's full-framewo
 MSBuild on Windows:
 
 ```powershell
-msbuild visualstudio/Runic.Translations.VisualStudio.csproj /restore /m:1 /p:Configuration=Release
-python visualstudio/package.py --configuration Release   # visualstudio/artifacts/runic-translations-visualstudio.vsix
+msbuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1 /p:Configuration=Release
+python visualstudio/package.py --configuration Release   # visualstudio/artifacts/runic-devkit-vs.vsix
 ```
 
 On Linux, `dotnet build visualstudio` cross-compiles the extension (no VSIX) and

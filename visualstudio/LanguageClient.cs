@@ -12,7 +12,7 @@ using Microsoft.VisualStudio.Threading;
 using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
 
-namespace Runic.Translations.VisualStudio;
+namespace RunicArtifex.DevKit.VisualStudio;
 
 internal static class ContentTypes
 {

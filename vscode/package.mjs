@@ -1,4 +1,4 @@
-// Packages artifacts/runic.vsix with the release version of eng/version.json.
+// Packages artifacts/runic-devkit.vsix with the release version of eng/version.json.
 //   node package.mjs [release-version [output]]   package another release mapping (CI checks a final one)
 // The committed package.json keeps a placeholder version: the files vsce would package are
 // copied to a staging directory, package.json is stamped there and vsce packs the copy, so
@@ -17,7 +17,7 @@ const here = import.meta.dirname;
 const vsce = join(dirname(createRequire(import.meta.url).resolve('@vscode/vsce/package.json')), 'vsce');
 const run = (args, cwd) => execFileSync(process.execPath, [vsce, ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 const versions = ideVersions(process.argv[2] ?? releaseVersion());
-const output = resolve(process.argv[3] ?? join(here, 'artifacts', 'runic.vsix'));
+const output = resolve(process.argv[3] ?? join(here, 'artifacts', 'runic-devkit.vsix'));
 const staging = join(here, 'artifacts', 'package');
 
 const files = run(['ls', '--no-dependencies'], here).split('\n').map(line => line.trim()).filter(Boolean);
@@ -37,7 +37,7 @@ try {
 }
 
 const packed = vsixMetadata(output);
-assert.deepEqual(packed, { id: 'runic', version: versions.vscode, publisher: 'runic-artifex',
+assert.deepEqual(packed, { id: 'runic-devkit', version: versions.vscode, publisher: 'runic-artifex',
   preRelease: versions.vscodePreRelease, preview: versions.vscodePreview, packageVersion: versions.vscode,
   packagePreview: versions.vscodePreview },
   `${output} does not carry the ${versions.release} mapping ${JSON.stringify(versions)}`);

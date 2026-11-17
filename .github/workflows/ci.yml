@@ -86,7 +86,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vscode-vsix
-          path: vscode/artifacts/runic.vsix
+          path: vscode/artifacts/runic-devkit.vsix
           if-no-files-found: error
           # The release workflow takes the VSIX from the CI run of the released commit.
           retention-days: 30
@@ -128,13 +128,13 @@ jobs:
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
       # The project stamps the VSIX version from eng/version.json; package.py checks it.
       - name: Build the VSIX with full-framework MSBuild
-        run: msbuild visualstudio/Runic.Translations.VisualStudio.csproj /restore /m:1 /p:Configuration=Release /p:RestoreLockedMode=true
+        run: msbuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1 /p:Configuration=Release /p:RestoreLockedMode=true
       - name: Verify the VSIX against the source manifest
         run: python visualstudio/package.py --configuration Release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: visualstudio-vsix
-          path: visualstudio/artifacts/runic-translations-visualstudio.vsix
+          path: visualstudio/artifacts/runic-devkit-vs.vsix
           if-no-files-found: error
           retention-days: 30
 

@@ -2,10 +2,32 @@
  * The extension's identity. 0.20 merged the Translations extension (`runic-artifex.runic-translations`) into the one
  * Runic extension (`runic-artifex.runic`); its settings and commands moved from `runicTranslations.*` to `runic.*`.
  * The former settings are still read when the new ones are not set, and the former command IDs still run, so
- * keybindings and settings of the Translations extension keep working.
+ * keybindings and settings of the Translations extension keep working. 0.22 renamed the extension to Runic DevKit
+ * (`runic-artifex.runic-devkit`, D070.5) before its first Marketplace listing; command IDs and settings stay.
  */
-export const extensionId = "runic-artifex.runic";
-export const formerExtensionId = "runic-artifex.runic-translations";
+export const extensionId = "runic-artifex.runic-devkit";
+
+/** The extension's former identities, newest first. Each registers the same `runic.*` commands as this one. */
+export const formerExtensions: readonly { id: string; name: string }[] = [
+  { id: "runic-artifex.runic", name: "Runic" },
+  { id: "runic-artifex.runic-translations", name: "Runic MF2 Translations" },
+];
+
+/**
+ * The one notice for the former extensions that are still installed, or undefined when none is. While one is
+ * installed, both register the same `runic.*` commands and start a language server for the same files.
+ */
+export function formerExtensionsNotice(installed: (id: string) => boolean): { ids: string[]; message: string; action: string } | undefined {
+  const found = formerExtensions.filter(extension => installed(extension.id));
+  if (!found.length) return undefined;
+  const names = found.map(extension => `${extension.name} (${extension.id})`);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return {
+    ids: found.map(extension => extension.id),
+    message: `Runic DevKit replaces ${list}, ${found.length === 1 ? "which is" : "which are"} still installed. Both register the same Runic commands and language server; uninstall ${found.length === 1 ? "it" : "them"} and reload the window.`,
+    action: found.length === 1 ? `Uninstall ${found[0].name}` : "Uninstall both",
+  };
+}
 
 /** New setting → the Translations extension's setting it replaces. */
 export const formerSettings: Readonly<Record<string, string>> = {
