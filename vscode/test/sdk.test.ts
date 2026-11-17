@@ -3,6 +3,9 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { detectToolVersion, devArguments, forceStop, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
 import { DevSessionFollower, devSessionPath, devSessionSchema, devStateLabel, isDevCommandLine, isRunningDevProcess, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
 import { detectWorkspace, isRunicSdkProject, projectRunicToolVersion, runicToolVersion } from "../src/workspace.js";
@@ -330,3 +333,93 @@ test("the manifest keeps the Translations commands and settings under the new id
   expect(pattern.exec("/app/App.csproj : error RAPPDEV1007: The vite development server exited unexpectedly with code 1.")?.slice(1, 7)).toEqual(["/app/App.csproj", undefined, undefined, "error", "RAPPDEV1007", "The vite development server exited unexpectedly with code 1."]);
   expect(pattern.exec("CounterViewModel.cs(18,5): error CS1002: ; expected [/app/App.csproj]")?.slice(1, 7)).toEqual(["CounterViewModel.cs", "18", "5", "error", "CS1002", "; expected"]);
 });
+
+// ---- dotnet-runic 0.22: --debug-endpoint and the stop request on dev's input ---------------------------------------
+
+test("--debug-endpoint and the stop request need dotnet-runic 0.22", () => {
+  for (const version of ["0.22.0", "0.22.0-rc.1", "0.23.1", "1.0.0-rc.2", "1.0.0"]) expect(supportsDevSdk022(version)).toBe(true);
+  for (const version of ["0.21.0", "0.21.9", "0.9.0", "0.2.30", undefined, "", "main"]) expect(supportsDevSdk022(version)).toBe(false);
+  expect(parseToolVersion("0.22.0+abc123\n")).toBe("0.22.0");
+  expect(parseToolVersion("dotnet-runic 0.21.0\r\n")).toBe("0.21.0");
+  expect(parseToolVersion("Could not execute because the specified command or file was not found.")).toBeUndefined();
+  expect(devArguments("/a/App.csproj", false, true)).toEqual(["runic", "dev", "--debug-endpoint", "--project", "/a/App.csproj"]);
+  expect(devArguments("/a/App.csproj", false, false)).toEqual(["runic", "dev", "--project", "/a/App.csproj"]);
+  expect(devArguments("/a/App.csproj", true, true)).toEqual(["runic", "dev", "--no-window", "--project", "/a/App.csproj"]);
+  expect(terminalText("a\nb\r\nc")).toBe("a\r\nb\r\nc");
+});
+
+test("the tool version comes from the manifest, else from dotnet runic --version", async () => {
+  expect(await detectToolVersion("/nonexistent/dotnet", tmpdir(), "0.22.0")).toBe("0.22.0");
+  expect(await detectToolVersion(join(tmpdir(), "no-such-dotnet"), tmpdir(), undefined)).toBeUndefined();
+  if (process.platform === "win32") return;
+  const directory = temporary("version");
+  try {
+    const fake = join(directory, "dotnet");
+    writeFileSync(fake, "#!/bin/sh\necho \"0.22.1+deadbeef\"\n", { mode: 0o755 });
+    expect(await detectToolVersion(fake, directory, undefined)).toBe("0.22.1");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+/** A stand-in for dev with a standard input: it exits when `onInput` says so. */
+class FakeDev extends EventEmitter implements StoppableProcess {
+  pid = 41250; exitCode: number | null = null; signalCode: NodeJS.Signals | null = null;
+  readonly input: string[] = [];
+  readonly stdin = new PassThrough();
+  forced: number[] = [];
+  constructor(onInput: (fake: FakeDev, text: string, ended: boolean) => void) {
+    super();
+    this.stdin.setEncoding("utf8");
+    this.stdin.on("data", (text: string) => { this.input.push(text); onInput(this, text, false); });
+    this.stdin.on("end", () => onInput(this, "", true));
+  }
+  exit(code: number) { if (this.exitCode !== null) return; this.exitCode = code; this.emit("exit", code, null); }
+}
+
+test("a 0.22 dev stops on a stop line and the end of its input", async () => {
+  const dev = new FakeDev((fake, text, ended) => { if (ended || text.trim() === "stop") fake.exit(130); });
+  const how = await stopDevProcess(dev, { stopOnInput: true, inputTimeout: 2000, force: (_, attempt) => dev.forced.push(attempt) });
+  expect(how).toBe("input");
+  expect(dev.input.join("")).toBe("stop\n");
+  expect(dev.forced).toEqual([]);
+  expect(dev.stdin.writableEnded).toBe(true);
+  expect(await stopDevProcess(dev, { stopOnInput: true, force: () => { throw new Error("no force for an exited dev"); } })).toBe("exited");
+});
+
+test("a dev that does not stop on its input is ended by force after the bounded wait", async () => {
+  const dev = new FakeDev(() => { /* an older dev never reads its input */ });
+  const started = Date.now();
+  const how = await stopDevProcess(dev, { stopOnInput: true, inputTimeout: 200, forceTimeout: 1000, force: (fake, attempt) => { dev.forced.push(attempt); (fake as FakeDev).exit(1); } });
+  expect(how).toBe("forced");
+  expect(Date.now() - started).toBeGreaterThanOrEqual(190);
+  expect(dev.forced).toEqual([1]);
+});
+
+test("without the stop request dev is ended by force at once, and a second force follows a hang", async () => {
+  const dev = new FakeDev(() => { throw new Error("no input without the variable"); });
+  const how = await stopDevProcess(dev, { stopOnInput: false, forceTimeout: 100, force: (fake, attempt) => { dev.forced.push(attempt); if (attempt === 2) (fake as FakeDev).exit(137); } });
+  expect(how).toBe("forced");
+  expect(dev.forced).toEqual([1, 2]);
+  expect(dev.input).toEqual([]);
+});
+
+test("spawnDev passes RUNIC_DEV_STOP_ON_INPUT only when asked, and a real child stops on its input", async () => {
+  if (process.platform === "win32") return;
+  const run = async (stopOnInput: boolean) => {
+    const child = spawnDev("/bin/sh", ["-c", "echo \"variable=${RUNIC_DEV_STOP_ON_INPUT:-unset}\"; read line; echo \"input=$line\"; exit 130"], tmpdir(), stopOnInput, { ...process.env, [stopOnInputVariable]: "1" });
+    const closed = new Promise(resolveClose => child.once("close", resolveClose));
+    let output = "";
+    child.stdout!.setEncoding("utf8"); child.stdout!.on("data", (text: string) => { output += text; });
+    await new Promise(resolveOutput => child.stdout!.once("data", resolveOutput));
+    const how = await stopDevProcess(child, { stopOnInput, inputTimeout: 5000, forceTimeout: 1000, force: forceStop });
+    await closed;
+    return { how, output, code: child.exitCode };
+  };
+  const asked = await run(true);
+  expect(asked.how).toBe("input");
+  expect(asked.code).toBe(130);
+  expect(asked.output).toContain("variable=1");
+  expect(asked.output).toContain("input=stop");
+  const older = await run(false);
+  expect(older.output).toContain("variable=unset");
+  expect(older.how).toBe("forced");
+}, 30000);

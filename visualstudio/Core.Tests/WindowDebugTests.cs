@@ -156,6 +156,15 @@ public class WindowDebugTests
     }
 
     [Test]
+    public void Stop_on_input_needs_dotnet_runic_0_22()
+    {
+        foreach (string version in new[] { "0.22.0", "0.22.0-rc.1", "0.23.1", "1.0.0" })
+            Check.True(DevToolVersions.SupportsStopOnInput(version), version);
+        foreach (string? version in new[] { "0.21.0", "0.21.5", null, "", "main" })
+            Check.True(!DevToolVersions.SupportsStopOnInput(version), version ?? "null");
+    }
+
+    [Test]
     public async Task Detect_prefers_the_manifest_and_falls_back_to_the_tools_version()
     {
         Check.Equal("0.22.0", await DevToolVersions.DetectAsync("/nonexistent/dotnet", "/a/App.csproj", "0.22.0", CancellationToken.None));

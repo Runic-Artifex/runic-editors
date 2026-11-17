@@ -279,6 +279,89 @@ public class DevSessionTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    /// <summary>A stand-in for <c>dotnet runic dev</c> on <c>/bin/sh</c> (none on Windows): Ready, then <paramref name="script"/>.</summary>
+    private static DevProcess FakeDev(string root, string script, bool stopOnInput, List<string> lines, TaskCompletionSource<bool> ready)
+        => DevProcess.Start("/bin/sh", new[] { "-c", "echo '[dev] Ready'; " + script }, Path.Combine(root, "App.csproj"), noWindow: true, line =>
+        {
+            lock (lines) lines.Add(line);
+            if (DevOutput.IsReady(line)) ready.TrySetResult(true);
+        }, stopOnInput);
+
+    private static async Task WithRoot(Func<string, Task> test)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+        string root = Path.Combine(Path.GetTempPath(), $"runic-vs-devstop-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try { await test(root); }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Test]
+    public Task A_0_22_dev_stops_on_a_stop_line_on_its_input() => WithRoot(async root =>
+    {
+        var lines = new List<string>();
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // As dev 0.22 with RUNIC_DEV_STOP_ON_INPUT=1 (runic-sdk#1092): a stop line ends it with 130, as Ctrl+C does.
+        using var dev = FakeDev(root, "echo \"variable=$RUNIC_DEV_STOP_ON_INPUT\"; read line; echo \"input=$line\"; exit 130", stopOnInput: true, lines, ready);
+        Check.True(dev.StopOnInput, "stop on input");
+        Check.True(ready.Task.Wait(TimeSpan.FromSeconds(20)), "Ready line");
+        Check.Equal(DevStop.Input, await dev.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)));
+        Check.Equal(130, await dev.Exited);
+        lock (lines)
+        {
+            Check.True(lines.Contains("variable=1"), "RUNIC_DEV_STOP_ON_INPUT=1 in dev's environment");
+            Check.True(lines.Contains("input=stop"), "the stop line");
+        }
+        Check.Equal(DevStop.AlreadyExited, await dev.StopAsync(TimeSpan.FromSeconds(1)));
+    });
+
+    [Test]
+    public Task A_0_22_dev_stops_at_the_end_of_its_input() => WithRoot(async root =>
+    {
+        var lines = new List<string>();
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Lines other than stop are ignored by dev; the closed pipe still ends it.
+        using var dev = FakeDev(root, "cat > /dev/null; echo ended; exit 130", stopOnInput: true, lines, ready);
+        Check.True(ready.Task.Wait(TimeSpan.FromSeconds(20)), "Ready line");
+        Check.Equal(DevStop.Input, await dev.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)));
+        lock (lines) Check.True(lines.Contains("ended"), "end of input");
+    });
+
+    [Test]
+    public Task A_dev_that_ignores_its_input_is_stopped_by_force_after_the_wait() => WithRoot(async root =>
+    {
+        var lines = new List<string>();
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // An older dev, or one that hangs while stopping: the bounded wait ends and the forced stop follows.
+        using var dev = FakeDev(root, "exec sleep 60", stopOnInput: true, lines, ready);
+        Check.True(ready.Task.Wait(TimeSpan.FromSeconds(20)), "Ready line");
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Check.Equal(DevStop.Forced, await dev.StopAsync(TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(10)));
+        Check.True(watch.Elapsed >= TimeSpan.FromMilliseconds(450), "waited for the input stop first");
+        Check.True(dev.HasExited, "stopped");
+    });
+
+    [Test]
+    public Task Without_stop_on_input_dev_gets_no_variable_and_is_stopped_by_force() => WithRoot(async root =>
+    {
+        var lines = new List<string>();
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? inherited = Environment.GetEnvironmentVariable(DevProcess.StopOnInputVariable);
+        Environment.SetEnvironmentVariable(DevProcess.StopOnInputVariable, "1");
+        try
+        {
+            // dotnet-runic 0.21: the variable is not passed on even when Visual Studio's own environment has it.
+            using var dev = FakeDev(root, "echo \"variable=${RUNIC_DEV_STOP_ON_INPUT:-unset}\"; exec sleep 60", stopOnInput: false, lines, ready);
+            Check.True(!dev.StopOnInput, "no stop on input");
+            Check.True(ready.Task.Wait(TimeSpan.FromSeconds(20)), "Ready line");
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            Check.Equal(DevStop.Forced, await dev.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)));
+            Check.True(watch.Elapsed < TimeSpan.FromSeconds(9), "no wait for an input stop");
+            lock (lines) Check.True(lines.Contains("variable=unset"), "no variable");
+        }
+        finally { Environment.SetEnvironmentVariable(DevProcess.StopOnInputVariable, inherited); }
+    });
+
     [Test]
     public void Starting_a_missing_program_says_which()
     {

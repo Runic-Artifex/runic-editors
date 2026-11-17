@@ -18,7 +18,7 @@ on:
         type: boolean
         default: true
       stores:
-        description: Stores to publish to after the GitHub release (Visual Studio gets final versions only); none until the store accounts exist
+        description: Stores to publish to after the GitHub release through the runic-artifex Microsoft publisher (Visual Studio gets final versions only); none for a GitHub release alone
         required: false
         type: choice
         options: [all, vscode, visualstudio, none]

@@ -310,6 +310,12 @@ public static class DevToolVersions
     }
 
     /// <summary>
+    /// Whether <c>dev</c> stops at a <c>stop</c> line or the end of its standard input with
+    /// <c>RUNIC_DEV_STOP_ON_INPUT=1</c> (0.22, runic-sdk#1092, WIN-06); the same versions as <see cref="SupportsDebugEndpoint"/>.
+    /// </summary>
+    public static bool SupportsStopOnInput(string? version) => SupportsDebugEndpoint(version);
+
+    /// <summary>
     /// The tool manifest's version when it has one, else <c>&lt;dotnet&gt; runic --version</c> in the project's directory
     /// (within 15 seconds); null when neither says.
     /// </summary>

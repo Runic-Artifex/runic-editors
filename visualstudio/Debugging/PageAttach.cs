@@ -25,6 +25,17 @@ internal static class PageAttach
 {
     /// <summary>How long a Window may take to open its endpoint and page. A paused .NET breakpoint extends it (see <see cref="WaitForPageAsync"/>).</summary>
     public static readonly TimeSpan PageTimeout = TimeSpan.FromMinutes(3);
+    /// <summary>
+    /// How long one <c>Process2.Attach2</c> may take. A broken JavaScript adapter (a stale <c>.vs</c> folder) makes it
+    /// never return (runic-editors#23); DevKit then stops waiting and says so in the Runic SDK Output pane.
+    /// </summary>
+    public static readonly TimeSpan AttachTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>The Output pane's advice when Visual Studio's JavaScript debugger does not attach.</summary>
+    public static string HungAttachMessage(string page) =>
+        $"Visual Studio's JavaScript debugger did not finish attaching to {page} within {AttachTimeout.TotalSeconds:0} seconds; Runic DevKit stopped waiting, and Debug the Window can run again. "
+        + "If it happens again, close Visual Studio, delete the solution's .vs folder and reopen the solution (see Troubleshooting in the Runic DevKit README).";
+
     private const int CallRejected = unchecked((int)0x80010001);
 
     private static readonly object gate = new();
@@ -90,7 +101,7 @@ internal static class PageAttach
     /// or when <paramref name="stillRunning"/> turns false; <paramref name="status"/> reports progress.
     /// Returns the attached pages' names.
     /// </summary>
-    public static async Task<IReadOnlyList<string>> WaitForPageAsync(string url, int? debuggedProcess, Func<bool>? stillRunning, Func<string, Task> status, CancellationToken cancellationToken)
+    public static async Task<IReadOnlyList<string>> WaitForPageAsync(string url, int? debuggedProcess, Func<bool>? stillRunning, Func<string, Task> status, CancellationToken cancellationToken, Action? attachHung = null)
     {
         var settled = System.Diagnostics.Stopwatch.StartNew();
         // Wall-clock time of the Window running; an iteration that ends in break mode does not count.
@@ -117,7 +128,7 @@ internal static class PageAttach
                 {
                     if (listing != lastListing) SdkOutput.WriteLine("Debug the Window: " + listing);
                     lastListing = listing;
-                });
+                }, attachHung);
                 if (attached.Count > 0) return attached;
             }
             await Task.Delay(step, cancellationToken);
@@ -156,7 +167,9 @@ internal static class PageAttach
     /// One attempt: lists the endpoint's targets on the CDP transport and attaches to the pages; empty when none is listed
     /// yet. <paramref name="report"/> receives what each qualifier listed, for the Output pane.
     /// </summary>
-    public static async Task<IReadOnlyList<string>> TryAttachAsync(string url, CancellationToken cancellationToken, Action<string>? report = null)
+    /// <paramref name="attachHung"/> runs on the thread pool when an <c>Attach2</c> has not returned within
+    /// <see cref="AttachTimeout"/> (after the Output pane says so); the call itself cannot be cancelled.
+    public static async Task<IReadOnlyList<string>> TryAttachAsync(string url, CancellationToken cancellationToken, Action<string>? report = null, Action? attachHung = null)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is not EnvDTE80.DTE2 dte) throw new InvalidOperationException("Visual Studio automation (DTE) is unavailable.");
@@ -184,7 +197,12 @@ internal static class PageAttach
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
                 string name = page.Name;
                 SdkOutput.WriteLine($"Attaching the JavaScript debugger to {name} ({qualifier}).");
-                await RetryAsync(() => { ThreadHelper.ThrowIfNotOnUIThread(); page.Attach2(DebugEngines.JavaScriptOverCdp); return true; }, cancellationToken);
+                using (var watchdog = Watchdog.Start(AttachTimeout, () => { SdkOutput.WriteLine(HungAttachMessage(name)); attachHung?.Invoke(); }))
+                {
+                    await RetryAsync(() => { ThreadHelper.ThrowIfNotOnUIThread(); page.Attach2(DebugEngines.JavaScriptOverCdp); return true; }, cancellationToken);
+                    if (watchdog.Expired) SdkOutput.WriteLine($"The JavaScript debugger's attach to {name} returned after Runic DevKit stopped waiting.");
+                }
+                cancellationToken.ThrowIfCancellationRequested();
                 attached.Add(name);
             }
             return attached;
