@@ -90,7 +90,7 @@ public static class RunicCommandCatalog
     {
         new RunicCommand(RunicCommandIds.PreviewMessage, nameof(RunicCommandIds.PreviewMessage), "Preview Message", RunicSlice.Implemented, "Tools.RunicPreviewMessage"),
         new RunicCommand(RunicCommandIds.RestartLanguageServer, nameof(RunicCommandIds.RestartLanguageServer), "Restart Language Server", RunicSlice.Implemented, "Tools.RunicRestartLanguageServer"),
-        new RunicCommand(RunicCommandIds.ShowTranslationsOutput, nameof(RunicCommandIds.ShowTranslationsOutput), "Show Translations Output", RunicSlice.Vs2),
+        new RunicCommand(RunicCommandIds.ShowTranslationsOutput, nameof(RunicCommandIds.ShowTranslationsOutput), "Show Translations Output", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.ExportXliff, nameof(RunicCommandIds.ExportXliff), "Export XLIFF...", RunicSlice.Vs6),
         new RunicCommand(RunicCommandIds.ImportXliffDryRun, nameof(RunicCommandIds.ImportXliffDryRun), "Import XLIFF (Dry Run)...", RunicSlice.Vs6),
         new RunicCommand(RunicCommandIds.ImportCatalog, nameof(RunicCommandIds.ImportCatalog), "Import .resx or i18next Catalog...", RunicSlice.Vs6),
@@ -102,13 +102,13 @@ public static class RunicCommandCatalog
         new RunicCommand(RunicCommandIds.StopDev, nameof(RunicCommandIds.StopDev), "Stop dotnet runic dev", RunicSlice.Vs3),
         new RunicCommand(RunicCommandIds.OpenDevServer, nameof(RunicCommandIds.OpenDevServer), "Open the Development Server", RunicSlice.Vs3),
         new RunicCommand(RunicCommandIds.OpenSessionFile, nameof(RunicCommandIds.OpenSessionFile), "Open the dev Session File", RunicSlice.Vs3),
-        new RunicCommand(RunicCommandIds.ShowSdkOutput, nameof(RunicCommandIds.ShowSdkOutput), "Show Runic SDK Output", RunicSlice.Vs2),
+        new RunicCommand(RunicCommandIds.ShowSdkOutput, nameof(RunicCommandIds.ShowSdkOutput), "Show Runic SDK Output", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.RunDoctor, nameof(RunicCommandIds.RunDoctor), "Run dotnet runic doctor", RunicSlice.Vs4),
         new RunicCommand(RunicCommandIds.RefreshViewModels, nameof(RunicCommandIds.RefreshViewModels), "Refresh ViewModels", RunicSlice.Vs4),
         new RunicCommand(RunicCommandIds.DebugWindow, nameof(RunicCommandIds.DebugWindow), "Debug the Window", RunicSlice.Vs5),
         new RunicCommand(RunicCommandIds.AttachToPage, nameof(RunicCommandIds.AttachToPage), "Attach to the Page (JavaScript)", RunicSlice.Vs5),
         new RunicCommand(RunicCommandIds.ShowToolWindow, nameof(RunicCommandIds.ShowToolWindow), "Runic", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.OpenOptions, nameof(RunicCommandIds.OpenOptions), "Options...", RunicSlice.Vs2),
+        new RunicCommand(RunicCommandIds.OpenOptions, nameof(RunicCommandIds.OpenOptions), "Options...", RunicSlice.Implemented),
     };
 
     public static RunicCommand Get(int id) => All.FirstOrDefault(command => command.Id == id)

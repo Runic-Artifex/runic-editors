@@ -116,9 +116,9 @@ than traversed.
 | Rename Input, Rename Slot, Rename Resource in Resource Sources | No (2.0) | Commands |
 | Extract Group to Directory, Inline Resource into Ancestor | No (2.0) | Commands |
 | Restart Language Server | Tools → Runic menu | Command |
-| Server output | Server stderr in the diagnostic trace | Show Output command and status bar |
+| Server output | "Runic Translations" Output pane (Tools → Runic → Show Translations Output); trace in Tools → Options → Runic DevKit | Show Output command and status bar |
 | Server state, catalog and locale | No | Status bar |
-| Start failure | IDE notification on initialization failure | One notification per folder, with install help |
+| Start failure | One InfoBar per solution, with the reason, Show output and install help | One notification per folder, with install help |
 
 Full command parity waits for the production language server (2.0).
 
