@@ -279,6 +279,27 @@ published URL); templates write the published `project-v1.schema.json` URI.
 
 ## Commands and preview
 
+| Command | What it does |
+| --- | --- |
+| Runic: Restart Language Server | Stops and starts the language server; reopens unsaved buffers |
+| Runic: Show Output | The language server's log |
+| Runic: Preview Message | The message preview panel |
+| Runic: Change Preview Samples | Another `@example` sample set, or custom values |
+| Runic: Change Preview Locale | The open panel's language, pseudo-locales included |
+| Runic: Change Preview Regional Locale | The locale a user requests, such as `de-CH` for `de` text |
+| Runic: Change Preview Time Zone | The zone `timeZone=local` formats in |
+| Runic: Rename Input in Resource Sources | F2 on the input (protocol 2), or a pick list and an input box (0.13) |
+| Runic: Rename Slot in Resource Sources | F2 on the slot reference (protocol 2), or a pick list and an input box (0.13) |
+| Runic: Rename Resource in Resource Sources | F2 on the resource (protocol 2); renames in resource sources only |
+| Runic: Extract Group to Directory | The Extract code action (protocol 2) |
+| Runic: Inline Resource into Ancestor | The Inline code action (protocol 2), or a file dialog (0.13) |
+| Runic: Export XLIFF | One XLIFF 2.1 document per translated locale |
+| Runic: Import XLIFF (dry run) | What an import would do, written to the output |
+| Runic: Override Library Message… | Adds a library message to the application's overrides |
+| Runic: Show Translation Status | Coverage per locale |
+| Runic: Import .resx or i18next Catalog | A dry run, then the import after you confirm |
+| Runic: Refresh Translation Status | The Translations view |
+
 **Export XLIFF** writes one XLIFF 2.1 document per translated locale into a
 folder you choose, and **Import XLIFF (dry run)** reports what importing a
 translated document would do, unit by unit, without writing anything (the
