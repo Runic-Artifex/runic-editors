@@ -1,0 +1,8 @@
+{
+  "protocol": "runic.commandline/1", "success": false, "exitCode": 1, "payloadType": null, "payload": null,
+  "fault": { "code": "RAPPCLI1009", "message": "Doctor checks failed.", "data": { "type": "runic.application.tool.doctor/1", "payload": {
+    "project": "/app/App.csproj", "host": "desktop", "target": null, "healthy": false,
+    "summary": { "passed": 0, "warnings": 0, "failed": 1 },
+    "checks": [ { "id": "views-window", "status": "fail", "message": "Not a Window project.", "remediation": "Set RunicApplicationFrontendWindowProject." } ]
+  } } }
+}

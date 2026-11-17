@@ -1,0 +1,13 @@
+{
+  "format": "runic.views.bridge-sources/1",
+  "viewModels": [
+    { "id": "Demo.CounterViewModel", "name": "Counter", "route": "counter", "contract": "Demo.CounterViewModel:EE06", "pageKinds": ["counter"], "symbol": "Demo.CounterViewModel", "location": { "file": "/src/Demo/CounterViewModel.cs", "line": 6, "column": 29 } },
+    { "id": "Demo.AboutViewModel", "name": "About", "symbol": "Demo.AboutViewModel" }
+  ],
+  "members": [
+    { "id": "Demo.CounterViewModel/command/increment", "viewModel": "Demo.CounterViewModel", "member": "increment", "kind": "command", "symbol": "Demo.CounterViewModel.Increment()", "property": "Demo.CounterViewModel.IncrementCommand", "location": { "file": "/src/Demo/CounterViewModel.cs", "line": 18, "column": 18 } },
+    { "id": "Demo.CounterViewModel/state/count", "viewModel": "Demo.CounterViewModel", "member": "count", "kind": "state", "symbol": "Demo.CounterViewModel.Count", "location": { "file": "/src/Demo/CounterViewModel.cs", "line": 10, "column": 9 } },
+    { "id": "Demo.CounterViewModel/commandState/canIncrement", "viewModel": "Demo.CounterViewModel", "member": "canIncrement", "kind": "commandState" },
+    { "id": "Demo.Orphan/state/x", "viewModel": "Demo.Orphan", "member": "x", "kind": "state" }
+  ]
+}

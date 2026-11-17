@@ -58,7 +58,7 @@ public enum RunicSlice
     Vs2,
     /// <summary>Dev session follower, start/stop dev, open server and session file.</summary>
     Vs3,
-    /// <summary>ViewModels and Doctor sections (VS-4a), Dev Session section and toolbar state (VS-4b).</summary>
+    /// <summary>Dev Session section and toolbar state (VS-4b); the ViewModels and Doctor sections (VS-4a) are implemented.</summary>
     Vs4,
     /// <summary>Debug the Window, attach to the page.</summary>
     Vs5,
@@ -103,8 +103,8 @@ public static class RunicCommandCatalog
         new RunicCommand(RunicCommandIds.OpenDevServer, nameof(RunicCommandIds.OpenDevServer), "Open the Development Server", RunicSlice.Vs3),
         new RunicCommand(RunicCommandIds.OpenSessionFile, nameof(RunicCommandIds.OpenSessionFile), "Open the dev Session File", RunicSlice.Vs3),
         new RunicCommand(RunicCommandIds.ShowSdkOutput, nameof(RunicCommandIds.ShowSdkOutput), "Show Runic SDK Output", RunicSlice.Vs2),
-        new RunicCommand(RunicCommandIds.RunDoctor, nameof(RunicCommandIds.RunDoctor), "Run dotnet runic doctor", RunicSlice.Vs4),
-        new RunicCommand(RunicCommandIds.RefreshViewModels, nameof(RunicCommandIds.RefreshViewModels), "Refresh ViewModels", RunicSlice.Vs4),
+        new RunicCommand(RunicCommandIds.RunDoctor, nameof(RunicCommandIds.RunDoctor), "Run dotnet runic doctor", RunicSlice.Implemented),
+        new RunicCommand(RunicCommandIds.RefreshViewModels, nameof(RunicCommandIds.RefreshViewModels), "Refresh ViewModels", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.DebugWindow, nameof(RunicCommandIds.DebugWindow), "Debug the Window", RunicSlice.Vs5),
         new RunicCommand(RunicCommandIds.AttachToPage, nameof(RunicCommandIds.AttachToPage), "Attach to the Page (JavaScript)", RunicSlice.Vs5),
         new RunicCommand(RunicCommandIds.ShowToolWindow, nameof(RunicCommandIds.ShowToolWindow), "Runic", RunicSlice.Implemented),
