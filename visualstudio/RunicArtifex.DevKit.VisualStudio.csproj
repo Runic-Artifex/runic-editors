@@ -18,7 +18,11 @@
     <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Remove="test/**/*.cs" />
+    <!-- Core and its tests are their own projects in subdirectories. -->
+    <Compile Remove="test/**/*.cs;Core/**;Core.Tests/**" />
+    <None Remove="Core/**;Core.Tests/**" />
+    <!-- netstandard2.0, no dependencies; the VSIX ships it next to the extension's assembly (package.py). -->
+    <ProjectReference Include="Core/RunicArtifex.DevKit.VisualStudio.Core.csproj" IncludeOutputGroupsInVSIX="BuiltProjectOutputGroup" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Client" Version="17.14.60" />

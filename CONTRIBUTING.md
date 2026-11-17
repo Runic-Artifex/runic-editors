@@ -12,9 +12,9 @@ pushing:
 
 | CI job | Local command |
 | --- | --- |
-| Source checks | `actionlint`, `bun test eng`, `bun eng/translations.mjs --check` and `python3 visualstudio/package.py --check-source` |
+| Source checks | `actionlint`, `bun test eng`, `bun eng/translations.mjs --check`, `python3 visualstudio/package.py --check-source` and `dotnet run --project visualstudio/Core.Tests` |
 | VS Code extension | `bun install --frozen-lockfile && bun run --bun check && bun run --bun test && bun run package` in `vscode`, then `dotnet tool restore` and `bun run test:host` (needs an installed `code` or `VSCODE_EXECUTABLE_PATH`) |
-| Visual Studio extension | Windows only: `msbuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1 /p:Configuration=Release /p:RestoreLockedMode=true`, then `python visualstudio/package.py --configuration Release`. On Linux, `dotnet build visualstudio` cross-compiles it |
+| Visual Studio extension | Windows only: `msbuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1 /p:Configuration=Release /p:RestoreLockedMode=true`, then `python visualstudio/package.py --configuration Release` and `dotnet run --project visualstudio/Core.Tests`. On Linux, `dotnet build visualstudio` cross-compiles it |
 
 The VS Code host test and CI run the language server of the
 `dotnet-runic-translations` release in `.config/dotnet-tools.json`, restored from

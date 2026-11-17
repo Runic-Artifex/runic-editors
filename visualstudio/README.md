@@ -46,17 +46,22 @@ are installed both start a language server for the same files:
    Extensions.
 2. Install `runic-devkit-vs.vsix` from the release.
 
-Keyboard shortcuts assigned to the former **Tools → Runic** commands belong to the
-former command set; assign them again.
+Keyboard shortcuts assigned to the former **Tools → Runic: …** commands belong to
+the former command set; assign them again. Their command names
+(`Tools.RunicPreviewMessage`, `Tools.RunicRestartLanguageServer`) are unchanged.
 
 ## Commands
 
-Commands appear in the Tools menu. Assign preferred shortcuts in Visual Studio’s
+Commands appear in the **Tools → Runic** menu. **View → Other Windows → Runic**
+(also **Tools → Runic → Runic**) opens the Runic tool window, with sections for
+the Dev Session, ViewModels, Doctor and Translations and a toolbar; in this build
+the sections are placeholders and the Runic SDK commands stay hidden until they
+are implemented (the 0.22 parity work, see [Layout](#layout)). Assign preferred shortcuts in Visual Studio’s
 keyboard options; the extension does not override existing IDE bindings.
 
 Within an MF2 editor:
 
-- **Tools → Runic: Preview Message** opens the native message preview. The
+- **Tools → Runic → Preview Message** (also in the editor context menu) opens the native message preview. The
   **Preview locale** selector switches the language and **Sample values** offers
   each `@example` set of the message; either change renders at once. Edit a value
   (the selector then shows **Custom values**) and choose **Render preview**. The locale selector also lists the
@@ -67,7 +72,7 @@ Within an MF2 editor:
   locale it formatted in and the time zone. The server executes its verified runtime
   plan. Links and actions are inert, icons use slot labels, and custom components
   use labeled spans. The extension never loads application renderers.
-- **Tools → Runic: Restart Language Server** stops and restarts the server.
+- **Tools → Runic → Restart Language Server** stops and restarts the server.
 - Standard IDE navigation, Find All References, Format Document and Rename use
   Visual Studio's LSP support. F2 refuses a resource rename when application or
   other non-resource files make whole-workspace correctness unsupported. MF2 local rename
@@ -103,19 +108,47 @@ than traversed.
 | F2 rename of resources and MF2 locals | Yes | Yes |
 | Unsaved `runic.json` in refactors | Yes | Yes |
 | `runic.json` schema validation | `$schema` (published schema) | Bundled schema, or `$schema` |
-| Preview Message | Tools menu | Command |
+| Preview Message | Tools → Runic menu, editor context menu | Command |
 | Change Preview Samples | Sample selector in the preview window | Command |
 | Change Preview Locale | Locale selector in the preview window | Command |
 | Pseudo-locales (`pseudoLocales`) in the preview | Locale selector in the preview window | Change Preview Locale |
 | Regional locale and time zone of the preview | Fields in the preview window | Commands |
 | Rename Input, Rename Slot, Rename Resource in Resource Sources | No (2.0) | Commands |
 | Extract Group to Directory, Inline Resource into Ancestor | No (2.0) | Commands |
-| Restart Language Server | Tools menu | Command |
+| Restart Language Server | Tools → Runic menu | Command |
 | Server output | Server stderr in the diagnostic trace | Show Output command and status bar |
 | Server state, catalog and locale | No | Status bar |
 | Start failure | IDE notification on initialization failure | One notification per folder, with install help |
 
 Full command parity waits for the production language server (2.0).
+
+## Layout
+
+`Commands.vsct` holds the whole command table: every command ID, the **Tools →
+Runic** menu, the editor and Error List context-menu groups, **View → Other
+Windows → Runic** and the tool window's toolbar groups. `RunicPackage.cs`
+registers every command with its handler (`Commands/CommandRegistrar.cs`) and
+the tool window. Each command has one handler file, `<Command>Command.cs`, in
+the folder of the work that implements it, and each tool-window section one
+`ToolWindow/Sections/<Section>Section.cs`; until then a handler derives from
+`NotAvailableYetHandler` (hidden, `DefaultInvisible`) and a section shows a
+placeholder. Implementing a command means changing its handler file, not the
+`.vsct` or the package class.
+
+| Folder | Commands |
+| --- | --- |
+| `Translations/` | Preview Message, Restart Language Server (implemented); Export XLIFF, Import XLIFF (dry run), Import Catalog, Override Library Message, Show/Refresh Translation Status |
+| `Output/`, `Settings/` | Show Translations Output, Show Runic SDK Output, Options |
+| `DevSession/` | Start `dotnet runic dev`, Start `--no-window`, Stop, Open the Development Server, Open the dev Session File |
+| `ToolWindow/` | Runic tool window (implemented), Run `dotnet runic doctor`, Refresh ViewModels |
+| `Debugging/` | Debug the Window, Attach to the Page (JavaScript) |
+
+`Core/` (`RunicArtifex.DevKit.VisualStudio.Core`, netstandard2.0, no
+dependencies) holds the logic that needs no Visual Studio: the command and
+section catalogs now, and the dev session, doctor and source-map readers
+later. The VSIX ships it next to the extension's assembly. `Core.Tests/` (TUnit)
+checks `Commands.vsct`, the catalog and the handler files against each other and
+runs on Linux and Windows: `dotnet run --project visualstudio/Core.Tests`.
 
 ## Build and package
 

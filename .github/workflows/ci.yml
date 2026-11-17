@@ -54,6 +54,9 @@ jobs:
         run: bun eng/translations.mjs --check
       - name: Check the Visual Studio source manifest
         run: python3 visualstudio/package.py --check-source
+      # The Visual Studio extension's Core library and its command table (Commands.vsct, catalog, handlers).
+      - name: Test the Visual Studio Core library
+        run: dotnet run --project visualstudio/Core.Tests --configuration Release -p:RestoreLockedMode=true
 
   vscode:
     name: VS Code extension
@@ -131,6 +134,8 @@ jobs:
         run: msbuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1 /p:Configuration=Release /p:RestoreLockedMode=true
       - name: Verify the VSIX against the source manifest
         run: python visualstudio/package.py --configuration Release
+      - name: Test the Core library on Windows
+        run: dotnet run --project visualstudio/Core.Tests --configuration Release -p:RestoreLockedMode=true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: visualstudio-vsix

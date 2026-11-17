@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The Visual Studio extension's logic that needs no Visual Studio: command and tool-window catalogs now, and
+    later the dev session file, doctor JSON, the development source map and `dotnet runic dev` output (PARITY §6).
+    netstandard2.0 so the net472 extension loads it in Visual Studio and the tests run on Linux and Windows.
+    It has no package dependencies: the VSIX ships this assembly next to the extension's (package.py).
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RootNamespace>RunicArtifex.DevKit.VisualStudio.Core</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>
