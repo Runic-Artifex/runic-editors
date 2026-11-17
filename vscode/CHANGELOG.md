@@ -1,10 +1,15 @@
 # Changelog
 
 The VS Code extension's changes per runic-editors release. Releases are GitHub
-releases of [runic-editors](https://github.com/Runic-Artifex/runic-editors/releases);
-nothing is published to an extension marketplace.
+releases of [runic-editors](https://github.com/Runic-Artifex/runic-editors/releases)
+and, from 0.22.0, versions on the VS Code Marketplace.
 
 ## 0.22.0
+
+**VS Code Marketplace.** Runic DevKit is published to the VS Code Marketplace as
+[runic-artifex.runic-devkit](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit),
+with an icon and store metadata; the VSIX stays on the GitHub release. It is not on
+Open VSX for now. See [Install](README.md#install).
 
 **Runic DevKit.** The extension is renamed **Runic DevKit**
 (`runic-artifex.runic-devkit`, `runic-devkit.vsix`), the name it will have on the

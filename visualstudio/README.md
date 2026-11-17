@@ -28,6 +28,24 @@ before starting Visual Studio. `RUNIC_DOTNET` optionally selects the installed
 stderr is drained to diagnostic trace output. One server serves the current IDE
 session. Restart it after switching solutions or changing the selected tool.
 
+## Install
+
+- **Visual Studio Marketplace** (final versions; from 0.22.0 once the parity
+  work lands, D070.11): in **Extensions > Manage Extensions**, search for **Runic
+  DevKit**, or open
+  [runic-artifex.runic-devkit-vs](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit-vs).
+  The Marketplace has no pre-release channel, so release candidates are not
+  published there.
+- **VSIX file:** download `runic-devkit-vs.vsix` from the
+  [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
+  (release candidates included) and open it to install.
+
+The Marketplace listing comes from `publishManifest.json` (publisher
+`runic-artifex`, internal name `runic-devkit-vs`, permanent once published),
+`overview.md` and the listing fields of `source.extension.vsixmanifest`; the
+images in `media/` are rendered by `eng/brand/render-icons.sh`. `package.py`
+checks them (`--check-source`, and the built VSIX).
+
 ## Moving from Runic MF2 Translations
 
 Up to 0.21 this extension was **Runic MF2 Translations**
@@ -44,7 +62,7 @@ are installed both start a language server for the same files:
    restart Visual Studio. Runic DevKit finds it through the extension manager when
    a solution is open and shows an InfoBar with these steps and a link to Manage
    Extensions.
-2. Install `runic-devkit-vs.vsix` from the release.
+2. Install Runic DevKit ([Install](#install)).
 
 Keyboard shortcuts assigned to the former **Tools → Runic: …** commands belong to
 the former command set; assign them again. Their command names

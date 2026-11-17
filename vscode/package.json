@@ -5,7 +5,17 @@
   "version": "0.0.1",
   "preview": true,
   "publisher": "runic-artifex",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1f2427",
+    "theme": "dark"
+  },
   "license": "MIT",
+  "homepage": "https://github.com/Runic-Artifex/runic-editors/tree/main/vscode#readme",
+  "bugs": {
+    "url": "https://github.com/Runic-Artifex/runic-editors/issues"
+  },
+  "qna": false,
   "repository": {
     "type": "git",
     "url": "https://github.com/Runic-Artifex/runic-editors",
@@ -18,6 +28,24 @@
     "Programming Languages",
     "Debuggers",
     "Other"
+  ],
+  "keywords": [
+    "runic",
+    "runic sdk",
+    "runic translations",
+    "mf2",
+    "messageformat",
+    "messageformat 2",
+    "rmf2",
+    "i18n",
+    "l10n",
+    "translations",
+    "localization",
+    "xliff",
+    "dotnet",
+    "csharp",
+    "lsp",
+    "language server"
   ],
   "main": "./dist/extension.cjs",
   "activationEvents": [
@@ -552,7 +580,7 @@
     "@types/vscode": "1.100.0",
     "@types/node": "24.19.1",
     "typescript": "6.0.3",
-    "@vscode/vsce": "4.0.0"
+    "@vscode/vsce": "4.1.1"
   },
   "packageManager": "bun@1.4.4"
 }
