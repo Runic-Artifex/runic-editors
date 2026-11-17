@@ -64,6 +64,12 @@ internal sealed class DevSessionService
 
     public string SessionPath(string project) => DevSessions.PathFor(project);
 
+    /// <summary>Which dev commands are enabled (the toolbar and Tools → Runic).</summary>
+    public DevCommandState CommandState()
+    {
+        lock (gate) return new DevCommandState(entries.Values.Select(entry => (entry.Follower.Snapshot, entry.Run is { HasExited: false })).ToList());
+    }
+
     /// <summary>Starts following the solution's projects and the pre-F5 guard; stops owned <c>dev</c> processes when Visual Studio closes.</summary>
     public async Task InitializeAsync(RunicPackage package, CancellationToken cancellationToken)
     {
@@ -144,13 +150,35 @@ internal sealed class DevSessionService
     private void OnSnapshot(Entry entry, DevSnapshot snapshot)
     {
         SdkOutput.WriteLine($"{Path.GetFileName(entry.Follower.Project)}: dotnet runic dev {snapshot.Label}{(snapshot.Session != null ? $" (process {snapshot.Session.ProcessId})" : "")}");
+        string status;
+        lock (gate) status = DevSessionRows.StatusText(entries.Values.Select(item => item.Follower.Snapshot).ToList());
+        _ = RunicSdkState.Background.RunAsync(() => ShowStatusAsync(status));
         Raise();
+    }
+
+    /// <summary>VS Code's "Runic dev" status bar item; Visual Studio's status text is shared, so it shows on each change.</summary>
+    private static async Task ShowStatusAsync(string text)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
+        {
+            bar.IsFrozen(out int frozen);
+            if (frozen == 0) bar.SetText(text);
+        }
     }
 
     private void Raise()
     {
         Changed?.Invoke(this, EventArgs.Empty);
         RunicSdkState.Instance.NotifyChanged();
+        _ = RunicSdkState.Background.RunAsync(UpdateCommandsAsync);
+    }
+
+    /// <summary>The toolbar's start and stop buttons follow the state at once, not at the next idle query.</summary>
+    private static async Task UpdateCommandsAsync()
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(SVsUIShell)) is IVsUIShell shell) shell.UpdateCommandUI(0);
     }
 
     // ---- Picking a project ------------------------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio.Shell;
 using RunicArtifex.DevKit.VisualStudio.Commands;
 using RunicArtifex.DevKit.VisualStudio.Core;
 
@@ -13,6 +14,13 @@ namespace RunicArtifex.DevKit.VisualStudio.DevSession;
 internal sealed class StopDevCommand : RunicCommandHandler
 {
     public override int Id => RunicCommandIds.StopDev;
+
+    public override void BeforeQueryStatus(OleMenuCommand command)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        command.Visible = true;
+        command.Enabled = DevSessionService.Instance.CommandState().CanStop;
+    }
 
     public override async Task ExecuteAsync(RunicPackage package, CancellationToken cancellationToken)
     {
