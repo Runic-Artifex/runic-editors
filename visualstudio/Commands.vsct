@@ -113,7 +113,6 @@
         <Icon guid="ImageCatalogGuid" id="Run" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Start dotnet runic dev</ButtonText><CanonicalName>.Runic.StartDev</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="StartDevNoWindow" priority="0x010A" type="Button">
@@ -121,7 +120,6 @@
         <Icon guid="ImageCatalogGuid" id="RunOutline" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Start dotnet runic dev --no-window</ButtonText><CanonicalName>.Runic.StartDevNoWindow</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="StopDev" priority="0x010B" type="Button">
@@ -129,7 +127,6 @@
         <Icon guid="ImageCatalogGuid" id="Stop" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Stop dotnet runic dev</ButtonText><CanonicalName>.Runic.StopDev</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="OpenDevServer" priority="0x010C" type="Button">
@@ -137,7 +134,6 @@
         <Icon guid="ImageCatalogGuid" id="OpenWebSite" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Open the Development Server</ButtonText><CanonicalName>.Runic.OpenDevServer</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="OpenSessionFile" priority="0x010D" type="Button">
@@ -145,7 +141,6 @@
         <Icon guid="ImageCatalogGuid" id="JSONScript" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Open the dev Session File</ButtonText><CanonicalName>.Runic.OpenSessionFile</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="ShowSdkOutput" priority="0x010E" type="Button">
