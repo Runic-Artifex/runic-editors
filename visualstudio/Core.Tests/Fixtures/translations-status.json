@@ -1,0 +1,43 @@
+{
+  "protocol": "runic.commandline/1",
+  "command": "status",
+  "success": true,
+  "exitCode": 0,
+  "payloadType": "runic.translations.status/1",
+  "payload": {
+    "belowThreshold": false,
+    "projects": [
+      {
+        "project": "runic.json",
+        "catalog": "app",
+        "baseLocale": "en",
+        "messages": 40,
+        "reviewFile": "app.review.json",
+        "locales": [
+          {
+            "locale": "en",
+            "translated": 40,
+            "fallback": 0,
+            "missing": 0,
+            "coverage": 100,
+            "belowThreshold": false
+          },
+          {
+            "locale": "de-CH",
+            "fallbackLocale": "de",
+            "translated": 30,
+            "fallback": 5,
+            "missing": 5,
+            "coverage": 87.5,
+            "stale": 1,
+            "minimumCoverage": 90,
+            "belowThreshold": true,
+            "completeness": "warning"
+          }
+        ]
+      }
+    ]
+  },
+  "fault": null,
+  "diagnostics": []
+}

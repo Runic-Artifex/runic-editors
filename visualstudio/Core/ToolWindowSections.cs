@@ -35,7 +35,7 @@ public static class ToolWindowSections
         new RunicSectionInfo(RunicSection.DevSession, "Dev Session", sdkOnly: true, RunicSlice.Implemented),
         new RunicSectionInfo(RunicSection.ViewModels, "ViewModels", sdkOnly: true, RunicSlice.Implemented),
         new RunicSectionInfo(RunicSection.Doctor, "Doctor", sdkOnly: true, RunicSlice.Implemented),
-        new RunicSectionInfo(RunicSection.Translations, "Translations", sdkOnly: false, RunicSlice.Vs6),
+        new RunicSectionInfo(RunicSection.Translations, "Translations", sdkOnly: false, RunicSlice.Implemented),
     };
 
     public static string Placeholder(RunicSectionInfo section) => $"{section.Title} is not available yet in this build of Runic DevKit.";
