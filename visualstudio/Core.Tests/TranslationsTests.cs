@@ -201,9 +201,11 @@ public class TranslationsTests
         Check.Equal("", locales[2].Value);
 
         string manifest = Path.Combine("/work", "shop", "translations", "runic.json");
-        Check.Same(new[] { "overrides", "add", "acme.table", "--locale", "fr", "--key", "header_sort", "--project", Path.Combine("/work", "shop", "translations") },
+        // The project directory as the platform spells it (Windows turns the leading "/" into "\").
+        string project = Path.GetDirectoryName(manifest)!;
+        Check.Same(new[] { "overrides", "add", "acme.table", "--locale", "fr", "--key", "header_sort", "--project", project },
             TranslationsTool.OverridesAddArguments(manifest, "acme.table", "fr", "header_sort"));
-        Check.Equal(Path.Combine("/work", "shop", "translations", "overrides", "acme.table", "fr.rmf2"), LibraryCatalogs.OverrideSourcePath(manifest, "acme.table", "fr"));
+        Check.Equal(Path.Combine(project, "overrides", "acme.table", "fr.rmf2"), LibraryCatalogs.OverrideSourcePath(manifest, "acme.table", "fr"));
         Check.Equal(5, LibraryCatalogs.MessageLine("# header {\n#   sort = x\n# }\nrows = Rows\nheader {\n  sort = Trier\n}\n", "header.sort"));
         Check.Equal(0, LibraryCatalogs.MessageLine("rows = Rows\n", "missing"));
         Check.Equal(10, LibraryCatalogs.MessageLine(File.ReadAllText(Path.Combine(Rmf2, "en.rmf2")), "plain"));
