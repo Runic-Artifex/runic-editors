@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A TUnit test application on Microsoft.Testing.Platform: run it with dotnet run (project visualstudio/Core.Tests);
+       CI runs it on Linux and Windows. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <TUnitImplicitUsings>false</TUnitImplicitUsings>
+    <RootNamespace>RunicArtifex.DevKit.VisualStudio.Core.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="TUnit.Core" Version="1.73.19" />
+    <PackageReference Include="TUnit.Engine" Version="1.73.19" />
+    <ProjectReference Include="../Core/RunicArtifex.DevKit.VisualStudio.Core.csproj" />
+  </ItemGroup>
+</Project>

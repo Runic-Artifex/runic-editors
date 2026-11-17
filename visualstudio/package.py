@@ -93,8 +93,8 @@ with zipfile.ZipFile(source) as archive:
     for asset in manifest.findall('v:Assets/v:Asset', ns):
         assert asset.attrib['Path'].replace('\\', '/') in names, 'Missing declared VSIX asset'
     dlls = [name for name in names if name.lower().endswith('.dll')]
-    assert dlls == ['RunicArtifex.DevKit.VisualStudio.dll'], 'Do not redistribute VS-owned assemblies'
-    assert archive.read(dlls[0])[:2] == b'MZ', 'Missing managed extension'
+    assert sorted(dlls) == ['RunicArtifex.DevKit.VisualStudio.Core.dll', 'RunicArtifex.DevKit.VisualStudio.dll'], 'Ship only the extension and its Core library; do not redistribute VS-owned assemblies'
+    assert all(archive.read(dll)[:2] == b'MZ' for dll in dlls), 'Missing managed extension'
     assert 'rmf2' in json.loads(archive.read('Grammars/rmf2.tmLanguage.json'))['fileTypes']
 output = root / 'artifacts/runic-devkit-vs.vsix'
 output.parent.mkdir(exist_ok=True)
