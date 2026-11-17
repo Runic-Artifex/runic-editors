@@ -58,7 +58,10 @@ exports.run = async function () {
   assert.equal(await vscode.workspace.applyEdit(exampleEdit), true);
   const samplePosition = document.positionAt(document.getText().indexOf('payment ='));
   editor.selection = new vscode.Selection(samplePosition, samplePosition);
-  const examples = await client.sendRequest('workspace/executeCommand', {command: 'runic.preview', arguments: [en.toString(), 'payment', 'en']});
+  // The previous stage's writes to de.rmf2 reach the server as workspace/didChangeWatchedFiles, and a write can arrive
+  // as more than one change event after its diagnostics already cleared. The server answers a request pending across
+  // any such revision with ContentModified (#9), so retry it as the client does for its own requests.
+  const examples = await retryModified(() => client.sendRequest('workspace/executeCommand', {command: 'runic.preview', arguments: [en.toString(), 'payment', 'en']}));
   assert.equal(examples.examples.length, 2);
   const selected = await vscode.commands.executeCommand('runic.translations.preview', {locale: 'en', exampleIndex: 1});
   assert.deepEqual(selected.samples, {count: '0', tone: 'neutral'});
@@ -280,7 +283,7 @@ async function runicSdk(api, fs) {
   assert.equal(String(help[0].command.arguments[0]), 'https://github.com/Runic-Artifex/runic-sdk/blob/main/docs/diagnostics.md#runicbridge013');
   console.log('PASS Runic SDK: workspace detection, tasks, session file liveness, ViewModels tree, doctor and code actions.');
 }
-/** Retries a request the server answered with ContentModified: a just-started server may still be reading its documents. */
+/** Retries a request the server answered with ContentModified: a just-started server may still be reading its documents, or a watched-file change arrived while it was pending. */
 async function retryModified(request, attempts = 20, also) {
   for (let attempt = 1; ; attempt++) {
     try { return await request(); }
