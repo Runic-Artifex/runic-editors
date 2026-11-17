@@ -193,6 +193,16 @@ internal sealed class SdkTreeView : ContentControl
         RowIcon.Running => KnownMonikers.Loading,
         RowIcon.NotRun => KnownMonikers.StatusNotStarted,
         RowIcon.Fix => KnownMonikers.IntellisenseLightBulb,
+        RowIcon.DevReady => KnownMonikers.StatusRunning,
+        RowIcon.DevStarting => KnownMonikers.Loading,
+        RowIcon.DevStopped => KnownMonikers.StatusStopped,
+        RowIcon.Globe => KnownMonikers.OpenWebSite,
+        RowIcon.Watcher => KnownMonikers.Refresh,
+        RowIcon.Window => KnownMonikers.Application,
+        RowIcon.IdeWindow => KnownMonikers.Run,
+        RowIcon.Page => KnownMonikers.HTMLFile,
+        RowIcon.DebugEndpoint => KnownMonikers.RemoteDebugger,
+        RowIcon.Folder => KnownMonikers.FolderClosed,
         _ => default,
     };
 }

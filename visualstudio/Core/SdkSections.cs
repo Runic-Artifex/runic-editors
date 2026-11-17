@@ -10,10 +10,12 @@ public enum RowIcon
 {
     None, Project, ViewModel, Property, Boolean, Method, Event, Interface, Field,
     Healthy, NotHealthy, Pass, Warning, Error, Running, NotRun, Fix,
+    // The Dev Session section.
+    DevReady, DevStarting, DevStopped, Globe, Watcher, Window, IdeWindow, Page, DebugEndpoint, Folder,
 }
 
 /// <summary>What activating (double-clicking, Enter, Open C# Member) a row does.</summary>
-public enum RowAction { None, OpenLocation, RunDoctor }
+public enum RowAction { None, OpenLocation, RunDoctor, OpenUrl, OpenFile, OpenFolder }
 
 /// <summary>One row of a tool-window section tree; the WPF side renders it without further logic.</summary>
 public sealed class TreeRow
@@ -30,6 +32,8 @@ public sealed class TreeRow
     public string? Description { get; set; }
     public string? Tooltip { get; set; }
     public SourceLocation? Location { get; set; }
+    /// <summary>The URL, file or folder that <see cref="RowAction.OpenUrl"/>, <see cref="RowAction.OpenFile"/> or <see cref="RowAction.OpenFolder"/> opens.</summary>
+    public string? Target { get; set; }
     public RowAction Action { get; set; }
     public bool Expanded { get; set; }
     public List<TreeRow> Children { get; } = new();
@@ -99,7 +103,7 @@ public static class SdkSections
         }, state => state.Doctor != null ? Core.Doctor.Summary(state.Doctor) : null);
     }
 
-    private static IReadOnlyList<TreeRow> PerProject(IReadOnlyList<SdkProjectState> projects, Func<SdkProjectState, IReadOnlyList<TreeRow>> build, Func<SdkProjectState, string?> describe)
+    internal static IReadOnlyList<TreeRow> PerProject(IReadOnlyList<SdkProjectState> projects, Func<SdkProjectState, IReadOnlyList<TreeRow>> build, Func<SdkProjectState, string?> describe)
     {
         if (projects.Count == 1) return build(projects[0]);
         return projects.Select(state =>

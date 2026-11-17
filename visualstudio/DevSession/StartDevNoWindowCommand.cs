@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio.Shell;
 using RunicArtifex.DevKit.VisualStudio.Commands;
 using RunicArtifex.DevKit.VisualStudio.Core;
 
@@ -12,6 +13,13 @@ namespace RunicArtifex.DevKit.VisualStudio.DevSession;
 internal sealed class StartDevNoWindowCommand : RunicCommandHandler
 {
     public override int Id => RunicCommandIds.StartDevNoWindow;
+
+    public override void BeforeQueryStatus(OleMenuCommand command)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        command.Visible = true;
+        command.Enabled = DevSessionService.Instance.CommandState().CanStart;
+    }
 
     public override Task ExecuteAsync(RunicPackage package, CancellationToken cancellationToken)
         => StartDevCommand.StartAsync(package, noWindow: true, cancellationToken);

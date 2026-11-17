@@ -13,6 +13,13 @@ internal sealed class OpenSessionFileCommand : RunicCommandHandler
 {
     public override int Id => RunicCommandIds.OpenSessionFile;
 
+    public override void BeforeQueryStatus(OleMenuCommand command)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        command.Visible = true;
+        command.Enabled = DevSessionService.Instance.CommandState().CanOpenSessionFile;
+    }
+
     public override async Task ExecuteAsync(RunicPackage package, CancellationToken cancellationToken)
     {
         var service = DevSessionService.Instance;
