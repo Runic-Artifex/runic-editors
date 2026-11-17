@@ -251,6 +251,11 @@ async function runicSdk(api, fs) {
   process.kill(pid, 'SIGKILL');
   await waitFor(() => sdk.devState(project).state === 'stopped' && sdk.devState(project).exited === true, 'A dead dotnet runic dev must read as stopped', 15000);
   assert.equal(JSON.parse(fs.readFileSync(sessionFile, 'utf8')).state, 'ready');
+  // ... and its dev-stopped is touched, as dev does on a clean stop, so the next build restores www/ (#29).
+  const stoppedStamp = path.join(path.dirname(sessionFile), 'dev-stopped');
+  await waitFor(() => fs.existsSync(stoppedStamp), 'A dead dotnet runic dev must touch obj/runic/dev-stopped');
+  assert.equal(fs.statSync(stoppedStamp).size, 0);
+  assert.ok(fs.statSync(stoppedStamp).mtimeMs >= fs.statSync(sessionFile).mtimeMs, 'dev-stopped must be newer than the session file');
   write({ ...session, state: 'stopped' });
   await waitFor(() => sdk.devState(project).state === 'stopped' && !sdk.devState(project).exited, 'The stopped session file was not followed');
   stage = 'ViewModels tree from the development source map';

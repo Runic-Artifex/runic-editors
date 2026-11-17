@@ -3,7 +3,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { detectToolVersion, devArguments, forceStop, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, type DevStop } from "./dev-process.js";
-import { DevSessionFollower, devStateLabel, isActive, type DevSnapshot } from "./dev-session.js";
+import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type DoctorCheck, type DoctorReport } from "./doctor.js";
 import { locationText, newestSourceMap, parseSourceMap, sourceMapTree, type SourceLocation, type SourceTreeNode } from "./source-map.js";
@@ -156,7 +156,7 @@ export class RunicSdk implements vscode.Disposable {
       for (const project of kind.sdkProjects) {
         seen.add(project);
         if (!this.projects.has(project)) {
-          const state: ProjectState = { project, folder, follower: new DevSessionFollower(project) };
+          const state: ProjectState = { project, folder, follower: new DevSessionFollower(project, fileSystemSource, devSessionPath(project), message => this.log.info(message)) };
           state.follower.onDidChange(snapshot => this.sessionChanged(state, snapshot));
           this.projects.set(project, state);
         }

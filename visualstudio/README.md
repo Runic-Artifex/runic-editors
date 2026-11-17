@@ -95,7 +95,9 @@ The **Dev Session** section follows `obj/runic/dev-session.json`, wherever
 `dev` was started: the state, the development server, the Window's process or
 "started by the IDE", the pages, the debug endpoints and the generated clients.
 It reads the file on each change and every 2 seconds, and shows a `dev` whose
-process has exited as stopped. **Open the Development Server** opens the page in
+process has exited as stopped. For such a killed `dev` it touches
+`obj/runic/dev-stopped` once, as `dev` does when it stops, so the next F5 builds
+and puts the production frontend back in `www/`. **Open the Development Server** opens the page in
 the browser; **Open the dev Session File** opens the file. `dev`'s failures
 (`RAPPDEV` codes) and the build's errors appear in the Error List; F1 on one
 opens its entry in the Runic diagnostics catalog.
@@ -334,7 +336,7 @@ work when the settings are empty; set them before starting Visual Studio.
 | Doctor findings as problems with help links | Error List on the project file; F1 opens the doctor documentation | Problems with a code link |
 | Start, start `--no-window` and stop `dotnet runic dev` | Tools → Runic, tool window toolbar; output in the "Runic SDK" Output pane. Stop works for the `dev` Visual Studio started (on its input with `dotnet-runic` 0.22, else by ending it); one started in a terminal stops there with Ctrl+C | Commands and tasks; outside `dev` stopped with SIGINT (not on Windows) |
 | `dev` diagnostics as problems | Error List, read as the `$runic-dev` matcher reads them; F1 opens the Runic diagnostics catalog | Problems through the `$runic-dev` problem matchers |
-| Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time | Watcher and 2 s poll; process command line or image |
+| Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time; a killed `dev` gets `obj/runic/dev-stopped` | Watcher and 2 s poll; process command line or image; the same `dev-stopped` touch |
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
 | Dev Session view: state, server, Window owner or process, pages, debug endpoints, generated clients | Runic tool window, Dev Session section; toolbar buttons enabled per state; state changes in the status bar text | Dev Session view; "Runic dev" status bar item |
 | F5 with `dev --no-window` | Pre-F5 question: start `dev --no-window` (then launch once it is ready) or continue without it | `runic` debug type starts it |

@@ -125,6 +125,9 @@ stopped (`stopped (process 41250 exited)`). On Linux and macOS it checks the
 process's command line, so a process ID that another program reuses also reads
 as stopped; on Windows it checks that the process is `dotnet.exe` or
 `dotnet-runic.exe`. The file is read again on each change and every 2 seconds.
+For such a killed `dev`, the extension touches `obj/runic/dev-stopped` beside the
+session file once, as `dev` does when it stops, so the next build puts the
+production frontend back in `www/`.
 **Stop dotnet runic dev** ends the task; a `dev` started in a terminal gets the
 signal of Ctrl+C after you confirm (on Windows, stop it in its terminal).
 

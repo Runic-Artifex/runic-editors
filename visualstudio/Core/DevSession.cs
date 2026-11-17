@@ -220,8 +220,20 @@ public interface IDevSessionSource
     DevProcessInfo? FindProcess(int processId);
 }
 
+/// <summary>
+/// The file times and the touch of <c>obj/runic/dev-stopped</c> (<see cref="DevSessions.StoppedStampName"/>) that the
+/// follower needs to mark a killed <c>dev</c> as stopped; tests replace it.
+/// </summary>
+public interface IDevStoppedStamp
+{
+    /// <summary>The file's last write time (UTC), or null when it does not exist.</summary>
+    DateTime? LastWriteTimeUtc(string path);
+    /// <summary>Writes the file empty with the current time, as <c>dev</c> does when it stops; throws <see cref="IOException"/> or <see cref="UnauthorizedAccessException"/>.</summary>
+    void Touch(string path);
+}
+
 /// <summary>The file system and <see cref="Process"/>.</summary>
-public sealed class FileSystemDevSessionSource : IDevSessionSource
+public sealed class FileSystemDevSessionSource : IDevSessionSource, IDevStoppedStamp
 {
     public static FileSystemDevSessionSource Instance { get; } = new();
 
@@ -236,6 +248,20 @@ public sealed class FileSystemDevSessionSource : IDevSessionSource
         }
         catch (FileNotFoundException) { return null; }
         catch (DirectoryNotFoundException) { return null; }
+    }
+
+    public DateTime? LastWriteTimeUtc(string path)
+    {
+        try { return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    public void Touch(string path)
+    {
+        // As runic-sdk's DevSession.Stop: an empty file, and its time set, since rewriting an empty file need not change
+        // it. The directory is not created: without obj/runic (a clean), the next build runs anyway.
+        File.WriteAllBytes(path, Array.Empty<byte>());
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
     }
 
     public DevProcessInfo? FindProcess(int processId)
@@ -280,6 +306,29 @@ public static class DevSessions
 
     /// <summary>The session file of a project: <c>obj/runic/dev-session.json</c> beside the project file (the default <c>BaseIntermediateOutputPath</c>).</summary>
     public static string PathFor(string project) => Path.Combine(Path.GetDirectoryName(project) ?? "", "obj", "runic", "dev-session.json");
+
+    /// <summary>
+    /// The stamp that <c>dotnet runic dev</c> touches when it stops (runic-sdk <c>DevSession.StoppedStampName</c>).
+    /// Visual Studio's fast up-to-date check compares it with the build's <c>runic-www.stamp</c>, so the next F5 builds
+    /// and copies the frontend over the development pages that <c>dev</c> left in <c>www/</c>.
+    /// </summary>
+    public const string StoppedStampName = "dev-stopped";
+
+    /// <summary>The <c>dev-stopped</c> stamp beside a session file (<c>obj/runic/dev-stopped</c>).</summary>
+    public static string StoppedStampPathFor(string sessionPath) => Path.Combine(Path.GetDirectoryName(sessionPath) ?? "", StoppedStampName);
+
+    /// <summary>
+    /// Whether the follower touches <c>dev-stopped</c> for this snapshot (VS Code: <c>needsStoppedStamp</c>): only when
+    /// the file still says starting or ready and its <c>dev</c> no longer runs (<see cref="DevSnapshot.Exited"/>; not for
+    /// a live process, a reused process ID that runs, or a file that says stopped, whose <c>dev</c> touched it), and not
+    /// when the stamp is already at least as new as the session file (an earlier touch for this session, also from
+    /// another IDE or before a restart). The follower adds: at most once per process ID.
+    /// </summary>
+    public static bool NeedsStoppedStamp(DevSnapshot snapshot, DateTime? stampWrittenUtc, DateTime? sessionWrittenUtc)
+    {
+        if (!snapshot.Exited || snapshot.Session is not { State: DevSessionState.Starting or DevSessionState.Ready }) return false;
+        return !(stampWrittenUtc is { } stamp && sessionWrittenUtc is { } session && stamp >= session);
+    }
 
     /// <summary>Parses a session file; null for another schema or a file that is not a session.</summary>
     public static DevSessionFile? Parse(string text) => DevSessionFile.Parse(text);
@@ -334,24 +383,36 @@ public static class DevSessions
 /// Follows one project's session file (VS Code: <c>DevSessionFollower</c>). <see cref="Refresh"/> rereads it after a
 /// file watcher event and on a timer, because a killed <c>dev</c> leaves <c>"ready"</c> behind without another write, and
 /// applies the liveness rule. A file that does not parse (another schema, a writer that is not <c>dev</c>) keeps the last
-/// snapshot. Thread-safe: a refresh that a later one overtook does not overwrite it.
+/// snapshot. Thread-safe: a refresh that a later one overtook does not overwrite it. When the file says starting or
+/// ready but its <c>dev</c> has exited (killed, crashed), it touches <c>obj/runic/dev-stopped</c> beside the file once
+/// per process ID, as <c>dev</c> does on a clean stop (<see cref="DevSessions.NeedsStoppedStamp"/>), so the next F5
+/// builds and puts the production frontend back in <c>www/</c> (runic-editors#29).
 /// </summary>
 public sealed class DevSessionFollower
 {
     private readonly IDevSessionSource source;
+    private readonly IDevStoppedStamp? stamp;
+    private readonly IRunicOutput? output;
     private readonly object gate = new();
+    private readonly HashSet<int> marked = new();
     private DevSnapshot current = DevSnapshot.None;
     private long revision;
 
-    public DevSessionFollower(string project, IDevSessionSource? source = null, string? path = null)
+    /// <param name="stamp">Touches <c>dev-stopped</c>; by default the file system, or <paramref name="source"/> when it is one; null with another source: no stamp.</param>
+    /// <param name="output">Where the touch, or why it failed, is logged (the Runic SDK Output pane).</param>
+    public DevSessionFollower(string project, IDevSessionSource? source = null, string? path = null, IDevStoppedStamp? stamp = null, IRunicOutput? output = null)
     {
         Project = project;
         this.source = source ?? FileSystemDevSessionSource.Instance;
+        this.stamp = stamp ?? this.source as IDevStoppedStamp;
+        this.output = output;
         Path = path ?? DevSessions.PathFor(project);
     }
 
     public string Project { get; }
     public string Path { get; }
+    /// <summary><c>obj/runic/dev-stopped</c> beside the session file.</summary>
+    public string StoppedStampPath => DevSessions.StoppedStampPathFor(Path);
 
     public DevSnapshot Snapshot { get { lock (gate) return current; } }
 
@@ -366,6 +427,7 @@ public sealed class DevSessionFollower
         DevSnapshot? next;
         try { next = DevSessions.Snapshot(source.Read(Path), source); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { next = null; }
+        if (next is { Exited: true }) MarkStopped(next);
         lock (gate)
         {
             if (next == null || mine != revision || next.SameAs(current)) return current;
@@ -373,5 +435,32 @@ public sealed class DevSessionFollower
         }
         Changed?.Invoke(this, next);
         return next;
+    }
+
+    /// <summary>Touches <c>dev-stopped</c> for a killed <c>dev</c>, at most once per process ID; logs a failure instead of throwing.</summary>
+    private void MarkStopped(DevSnapshot snapshot)
+    {
+        if (stamp == null || snapshot.Session is not { } session) return;
+        lock (gate) if (marked.Contains(session.ProcessId)) return;
+        string target = StoppedStampPath;
+        DateTime? stampWritten, sessionWritten;
+        try { stampWritten = stamp.LastWriteTimeUtc(target); sessionWritten = stamp.LastWriteTimeUtc(Path); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { stampWritten = sessionWritten = null; }
+        // Decided and recorded under the lock, so two refreshes that both see the dead process touch once.
+        lock (gate)
+        {
+            if (!marked.Add(session.ProcessId)) return;
+            if (!DevSessions.NeedsStoppedStamp(snapshot, stampWritten, sessionWritten)) return;
+        }
+        string name = System.IO.Path.GetFileName(Project);
+        try
+        {
+            stamp.Touch(target);
+            output?.WriteLine($"{name}: dotnet runic dev (process {session.ProcessId}) exited without stopping; touched {target} so that the next build restores www/.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            output?.WriteLine($"{name}: dotnet runic dev (process {session.ProcessId}) exited without stopping, and {target} could not be touched ({error.Message}); rebuild before the next F5 if www/ still has the development pages.");
+        }
     }
 }
