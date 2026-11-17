@@ -43,7 +43,9 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
     public IEnumerable<string> FilesToWatch => new[] { "**/*.mf2", "**/*.rmf2", "**/runic.json" };
     // The extension shows its own start-failure InfoBar, once per solution, with install help (ServerStartInfoBar).
     public bool ShowNotificationOnInitializeFailed => false;
-    public object? MiddleLayer => null;
+    // Go to Definition into a library catalog opens a read-only copy of its runic-library: source (Translations/LibraryDocuments.cs).
+    public object? MiddleLayer => libraryDocuments ??= new Translations.LibraryDocuments(RequestAsync);
+    private Translations.LibraryDocuments? libraryDocuments;
     public object? CustomMessageTarget => null;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StartAsync;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StopAsync;
@@ -131,6 +133,8 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
         return new InitializationFailureContext { FailureMessage = ServerStartFailure.Message(attempt) };
     }
     public Task AttachForCustomMessageAsync(JsonRpc jsonRpc) { rpc = jsonRpc; if (initialized) Configuration.Attach(rpc); return Task.CompletedTask; }
+    /// <summary>True while the server is connected for custom requests.</summary>
+    internal bool IsRunning => rpc != null;
     internal Task<JObject> RequestAsync(string method, object parameters, CancellationToken cancellationToken)
         => (rpc ?? throw new InvalidOperationException("The Runic language server is not ready.")).InvokeWithParameterObjectAsync<JObject>(method, parameters, cancellationToken);
     internal async Task RestartAsync()

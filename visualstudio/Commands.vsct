@@ -65,7 +65,6 @@
         <Icon guid="ImageCatalogGuid" id="ExportData" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Export XLIFF...</ButtonText><CanonicalName>.Runic.ExportXliff</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="ImportXliffDryRun" priority="0x0104" type="Button">
@@ -73,7 +72,6 @@
         <Icon guid="ImageCatalogGuid" id="Import" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Import XLIFF (Dry Run)...</ButtonText><CanonicalName>.Runic.ImportXliffDryRun</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="ImportCatalog" priority="0x0105" type="Button">
@@ -81,7 +79,6 @@
         <Icon guid="ImageCatalogGuid" id="Import" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Import .resx or i18next Catalog...</ButtonText><CanonicalName>.Runic.ImportCatalog</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="OverrideLibraryMessage" priority="0x0106" type="Button">
@@ -89,7 +86,6 @@
         <Icon guid="ImageCatalogGuid" id="Library" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Override Library Message...</ButtonText><CanonicalName>.Runic.OverrideLibraryMessage</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="ShowTranslationStatus" priority="0x0107" type="Button">
@@ -97,7 +93,6 @@
         <Icon guid="ImageCatalogGuid" id="StatusInformation" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Show Translation Status</ButtonText><CanonicalName>.Runic.ShowTranslationStatus</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="RefreshTranslationStatus" priority="0x0108" type="Button">
@@ -105,7 +100,6 @@
         <Icon guid="ImageCatalogGuid" id="Refresh" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Refresh Translation Status</ButtonText><CanonicalName>.Runic.RefreshTranslationStatus</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="StartDev" priority="0x0109" type="Button">

@@ -117,6 +117,11 @@ than traversed.
 | Rename Input, Rename Slot, Rename Resource in Resource Sources | No (2.0) | Commands |
 | Extract Group to Directory, Inline Resource into Ancestor | No (2.0) | Commands |
 | Restart Language Server | Tools → Runic menu | Command |
+| Export XLIFF, Import XLIFF (dry run) | Tools → Runic menu; folder or file picker, tool output in the "Runic Translations" Output pane | Commands |
+| Import .resx or i18next Catalog | Tools → Runic menu; dry run, then import after confirmation | Command |
+| Override Library Message… | Tools → Runic menu, editor context menu | Command |
+| Library sources from Go to Definition in an override source | Read-only copy of the source | Read-only `runic-library:` document |
+| Translation status per locale | Runic tool window, Translations section; Show Translation Status (read-only report), Refresh Translation Status | Translations view, Show Translation Status panel |
 | Server output | "Runic Translations" Output pane (Tools → Runic → Show Translations Output); trace in Tools → Options → Runic DevKit | Show Output command and status bar |
 | Server state, catalog and locale | No | Status bar |
 | Start failure | One InfoBar per solution, with the reason, Show output and install help | One notification per folder, with install help |

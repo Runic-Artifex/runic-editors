@@ -1,0 +1,103 @@
+{
+  "project": "file:///work/shop/translations/runic.json",
+  "warnings": [],
+  "catalogs": [
+    {
+      "catalog": "acme.chart",
+      "package": "Acme.Chart",
+      "version": "2.0.0",
+      "origin": "nuget",
+      "overridden": false,
+      "problem": null,
+      "directory": null,
+      "baseLocale": "en",
+      "locales": [
+        {
+          "tag": "en",
+          "origin": "library",
+          "fallback": null,
+          "messages": 1,
+          "libraryTranslated": 1,
+          "overridden": 0,
+          "covered": 1,
+          "pending": false
+        }
+      ],
+      "messages": [
+        {
+          "key": "legend",
+          "path": "legend",
+          "baseText": "Legend",
+          "inputs": [],
+          "overridden": [],
+          "changed": []
+        }
+      ]
+    },
+    {
+      "catalog": "acme.missing",
+      "package": null,
+      "version": null,
+      "origin": null,
+      "overridden": true,
+      "problem": "not installed",
+      "directory": null
+    },
+    {
+      "catalog": "acme.table",
+      "package": "Acme.Table",
+      "version": "1.0.0",
+      "origin": "nuget",
+      "overridden": true,
+      "problem": null,
+      "directory": null,
+      "baseLocale": "en",
+      "locales": [
+        {
+          "tag": "en",
+          "origin": "library",
+          "fallback": null,
+          "messages": 2,
+          "libraryTranslated": 2,
+          "overridden": 0,
+          "covered": 2,
+          "pending": false
+        },
+        {
+          "tag": "de-CH",
+          "origin": "application",
+          "fallback": "de",
+          "messages": 2,
+          "libraryTranslated": 0,
+          "overridden": 1,
+          "covered": 1,
+          "pending": false
+        }
+      ],
+      "messages": [
+        {
+          "key": "header_sort",
+          "path": "header.sort",
+          "baseText": "Sort by {$column}",
+          "inputs": [
+            "$column: string"
+          ],
+          "overridden": [
+            "de-CH"
+          ],
+          "changed": [
+            "de-CH"
+          ]
+        },
+        {
+          "key": "rows",
+          "path": "rows",
+          "baseText": ".input {$count :integer}\n.match $count",
+          "inputs": [],
+          "overridden": [],
+          "changed": []
+        }
+      ]
+    }
+  ]
+}
