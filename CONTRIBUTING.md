@@ -32,5 +32,7 @@ are exempt.
 
 ## Releases
 
-See [Releasing the editor extensions](eng/release/README.md). Nothing is
-published to an extension marketplace.
+See [Releasing the editor extensions](eng/release/README.md). The release
+workflow publishes to the VS Code Marketplace and the Visual Studio Marketplace
+through trusted publishing ([Stores](eng/release/README.md#stores)); it is a dry
+run by default. Do not dispatch it without the maintainer's approval.

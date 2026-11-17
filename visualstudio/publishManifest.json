@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/vsix-publish",
+  "categories": ["coding", "programming languages"],
+  "identity": {
+    "internalName": "runic-devkit-vs"
+  },
+  "overview": "overview.md",
+  "priceCategory": "free",
+  "publisher": "runic-artifex",
+  "private": false,
+  "qna": false,
+  "repo": "https://github.com/Runic-Artifex/runic-editors"
+}
