@@ -25,9 +25,9 @@ namespace RunicArtifex.DevKit.VisualStudio.DevSession;
 /// <remarks>
 /// The guard is a priority command target (<see cref="IVsRegisterPriorityCommandTarget"/>) for Debug.Start and
 /// Debug.StartWithoutDebugging, so it sees every launch by key, toolbar, menu or <c>DTE.ExecuteCommand</c> before Visual
-/// Studio builds. Until 0.22 it listened to the solution build's <c>UpdateProjectCfg_Begin</c> launch flags, which
-/// Visual Studio 18.12 never raised for these launches (runic-editors#26), and a launch whose fast up-to-date check
-/// skips the build raises no build event at all.
+/// Studio builds. Its first version listened to the solution build's <c>UpdateProjectCfg_Begin</c> for the launch flags,
+/// which Visual Studio 18.12 does not pass for these launches (only the build flag arrives), and a launch whose fast
+/// up-to-date check skips the build raises no project build event at all (runic-editors#26).
 /// </remarks>
 internal sealed class DevLaunchGuard : IOleCommandTarget
 {

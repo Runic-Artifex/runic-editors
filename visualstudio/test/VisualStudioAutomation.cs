@@ -8,6 +8,14 @@ public static class VisualStudioAutomation
     [DllImport("ole32.dll")] private static extern int GetRunningObjectTable(int reserved, out IRunningObjectTable table);
     [DllImport("ole32.dll")] private static extern int CreateBindCtx(int reserved, out IBindCtx context);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    // Posts a key press to a window's queue, as the keyboard would deliver it, without an unlocked desktop. Visual Studio
+    // then runs the command bound to the key in its own message loop, not inside an automation call.
+    public static void PostKey(IntPtr window, int virtualKey)
+    {
+        PostMessage(window, 0x0100, (IntPtr)virtualKey, (IntPtr)1); // WM_KEYDOWN
+        PostMessage(window, 0x0101, (IntPtr)virtualKey, unchecked((IntPtr)(int)0xC0000001)); // WM_KEYUP
+    }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindow(string className, string title);
     public static IntPtr FindTitle(string title) { return FindWindow(null, title); }
     // PowerShell's COM adapter shows no members on some DTE objects (Window, OutputWindowPane); IDispatch reaches them.
