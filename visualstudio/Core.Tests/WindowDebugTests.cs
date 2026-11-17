@@ -31,7 +31,7 @@ public class WindowDebugTests
         var shared = WindowDebug.Program("/a/App.csproj", new RunProperties("dotnet", "exec \"/a/bin/App.dll\" --flag", "", "/a/bin/App.dll"));
         Check.Equal("/a/bin/App.dll", shared.Program);
         Check.Same(new[] { "--flag" }, shared.Arguments);
-        Check.Equal("/a", shared.WorkingDirectory);
+        Check.Equal(Path.GetDirectoryName("/a/App.csproj"), shared.WorkingDirectory);
 
         Check.True(Throws(() => WindowDebug.Program("/a/Lib.csproj", new RunProperties("", null, null, "/a/Lib.dll"))).Contains("Lib.csproj"), "no RunCommand");
         Check.True(Throws(() => WindowDebug.ParseRunProperties("Debug")).Contains("run properties"), "not JSON");
