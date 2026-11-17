@@ -8,6 +8,7 @@ import { PreviewSession, exampleSamples, sampleChoices, type Samples } from "./p
 import { ForwardedWatchers } from "./watchers.js";
 import { OneTimeNotice, errorSummary, localeStatus, parseStatus, statusHtml, statusPresentation, type DocumentInfo, type ServerState, type StatusResult } from "./status.js";
 import { RunicSdk } from "./sdk.js";
+import { ServerCommands, advertisedCommands, commandSource, refactoringRoute, renameOffset, requestedProtocol, runicProtocol, type Refactoring } from "./protocol.js";
 import { commandId, extensionId, formerCommandId, formerExtensionsNotice, formerSettingsInUse, settingValue } from "./identity.js";
 import { canonicalLocale, isOverriddenIn, libraryCatalogChoices, libraryInstallPattern, libraryDocumentProject, libraryLocaleChoices, libraryMessageChoices, libraryScheme, messageLine, overrideSourcePath, overridesAddArguments, unsavedDocuments, type LibraryCatalogs } from "./libraries.js";
 
@@ -21,10 +22,21 @@ class RunicLanguageClient extends LanguageClient {
   public override error(message: string, data?: unknown, showNotification?: boolean | "force"): void {
     super.error(message, data, this.starting ? false : showNotification);
   }
+  /**
+   * The server's advertised commands are registered once for all folders (ServerCommands, protocol.ts), not per
+   * client: a second folder's client would fail to start on the duplicate registration.
+   */
+  public override registerFeature(feature: Parameters<LanguageClient["registerFeature"]>[0]): void {
+    if ((feature as { registrationType?: { method?: string } }).registrationType?.method === "workspace/executeCommand") return;
+    super.registerFeature(feature);
+  }
 }
 
 interface MessageInfo { key: string; localKey: string; isGroup: boolean; path: string[]; logicalPath: string[]; locale: string; locales: string[]; pseudoLocales?: string[]; inputs: string[]; slots: string[] }
 const clients = new Map<string, Promise<LanguageClient>>();
+/** The Runic protocol each started client's server speaks (protocol.ts). */
+const protocols = new WeakMap<LanguageClient, number>();
+let serverCommands: ServerCommands | undefined;
 const watchers = new Map<string, ForwardedWatchers<vscode.Uri>>();
 const reviewWatchers = new Map<string, vscode.Disposable>();
 let output: vscode.LogOutputChannel;
@@ -215,7 +227,8 @@ async function clientFor(uri: vscode.Uri): Promise<LanguageClient> {
         const options: LanguageClientOptions = {
           documentSelector: [{ scheme: "file", language: "rmf2", pattern: `${folder.uri.fsPath.replaceAll("\\", "/")}/**/*.{mf2,rmf2}` }, { scheme: "file", language: "json", pattern: `${folder.uri.fsPath.replaceAll("\\", "/")}/**/runic.json` }],
           workspaceFolder: folder, outputChannel: output,
-          initializationOptions: { runicConfigurationSync: true },
+          // Protocol 2 (Translations 0.14) when the server speaks it; Translations 0.13 ignores the option.
+          initializationOptions: { runicConfigurationSync: true, runicProtocol: requestedProtocol },
           // Watchers are forwarded explicitly so a manifest refresh can replace
           // external mount subscriptions after the client has started.
           synchronize: {},
@@ -233,6 +246,10 @@ async function clientFor(uri: vscode.Uri): Promise<LanguageClient> {
           else if (event.newState === State.Stopped && !runic.starting) setServerState(key, "stopped");
         });
         try { await runic.start(); } finally { runic.starting = false; }
+        const protocol = runicProtocol(runic.initializeResult);
+        protocols.set(runic, protocol);
+        for (const failure of serverCommands?.add(advertisedCommands(runic.initializeResult)) ?? []) output.warn(`Runic server command not registered: ${failure}`);
+        output.info(`${folder.name}: Runic protocol ${protocol}${protocol < 2 ? " (refactorings ask for their arguments and apply the returned edit)" : ""}.`);
         // The client reads runic.translations.trace.server itself; the former runicTranslations.trace.server still applies when only it is set.
         const trace = setting<string>("runic.translations.trace.server", "off", uri);
         if (trace !== "off") await runic.setTrace(Trace.fromString(trace));
@@ -266,8 +283,7 @@ async function apply(client: LanguageClient, command: string, args: unknown[]) {
   const edit = await client.sendRequest<ProtocolEdit>("workspace/executeCommand", { command, arguments: args });
   if (!await vscode.workspace.applyEdit(await client.protocol2CodeConverter.asWorkspaceEdit(edit))) throw new Error("The workspace changed or the edit could not be applied. Retry from the current resource.");
 }
-async function renamePart(part: "Input" | "Slot") {
-  const { editor, client, info } = await active();
+async function renamePart(part: "Input" | "Slot", { editor, client, info }: Awaited<ReturnType<typeof active>>) {
   if (info.isGroup) throw new Error("Choose a message rather than a group.");
   const names = part === "Input" ? info.inputs : info.slots;
   const oldName = await vscode.window.showQuickPick(names, { placeHolder: `Choose the ${part.toLowerCase()} to rename in resource sources` });
@@ -275,6 +291,73 @@ async function renamePart(part: "Input" | "Slot") {
   const name = await vscode.window.showInputBox({ value: oldName, prompt: "Resource sources only. Application bindings and generated API call sites need their language's refactoring support.", validateInput: value => /^[A-Za-z_][A-Za-z0-9_]*$/.test(value) ? undefined : "Use an identifier." });
   if (!name || name === oldName) return;
   await apply(client, `runic.rename${part}`, [editor.document.uri.toString(), info.localKey, oldName, name]);
+}
+/** The protocol of a client's server: 1 until it has started (Translations 0.13 and earlier). */
+const protocolOf = (client: LanguageClient) => protocols.get(client) ?? 1;
+/** The document symbol of a resource or group: the server's outline names each by its dotted path in the file. */
+async function symbolOf(document: vscode.TextDocument, path: string[]): Promise<vscode.DocumentSymbol> {
+  const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[] | undefined>("vscode.executeDocumentSymbolProvider", document.uri) ?? [];
+  const symbol = symbols.find(item => item.detail === path.join("."));
+  if (!symbol) throw new Error(`The outline has no ${path.join(".")}. Retry once the language server has read the file.`);
+  return symbol;
+}
+/** Protocol 2: the editor's rename (F2) at the symbol; the server's prepareRename and rename do the rest. */
+async function renameAt(editor: vscode.TextEditor, position: vscode.Position) {
+  const shown = await vscode.window.showTextDocument(editor.document, editor.viewColumn);
+  shown.selection = new vscode.Selection(position, position);
+  shown.revealRange(new vscode.Range(position, position));
+  await vscode.commands.executeCommand("editor.action.rename");
+  return { uri: shown.document.uri.toString(), line: position.line, character: position.character };
+}
+/** Protocol 2: the code action of the refactoring's kind (the light bulb); the server builds the edit on resolve. */
+async function codeActionAt(editor: vscode.TextEditor, selection: vscode.Selection, kind: string, apply: "first" | "ifSingle") {
+  const shown = await vscode.window.showTextDocument(editor.document, editor.viewColumn);
+  shown.selection = selection;
+  await vscode.commands.executeCommand("editor.action.codeAction", { kind, apply });
+  return { uri: shown.document.uri.toString(), kind };
+}
+/** Arguments the palette refactorings accept from other commands and the host test instead of asking. */
+interface RefactoringOptions { name?: string }
+async function refactor(refactoring: Refactoring, options?: RefactoringOptions): Promise<unknown> {
+  const current = await active();
+  const { editor, client, info } = current;
+  const route = refactoringRoute(protocolOf(client), refactoring);
+  if (route.kind === "command") {
+    if (refactoring === "renameInput") return renamePart("Input", current);
+    if (refactoring === "renameSlot") return renamePart("Slot", current);
+    if (refactoring === "renameResource") {
+      const name = await vscode.window.showInputBox({ value: info.path.at(-1), prompt: "Rename in resource sources and runic.json only. Update application call sites separately." });
+      if (name && name !== info.path.at(-1)) await apply(client, route.command, [editor.document.uri.toString(), info.logicalPath, name]);
+      return;
+    }
+    if (refactoring === "extractGroup") {
+      if (!info.isGroup) throw new Error("Place the cursor on the group declaration to extract.");
+      return apply(client, route.command, [editor.document.uri.toString(), info.path]);
+    }
+    const destination = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { "RMF2 resource": ["rmf2"] }, openLabel: "Choose ancestor resource" });
+    if (destination?.[0]) await apply(client, route.command, [editor.document.uri.toString(), destination[0].toString()]);
+    return;
+  }
+  if (route.kind === "codeAction") {
+    if (refactoring === "extractGroup") {
+      if (!info.isGroup) throw new Error("Place the cursor on the group declaration to extract.");
+      const name = (await symbolOf(editor.document, info.path)).selectionRange;
+      return codeActionAt(editor, new vscode.Selection(name.start, name.end), route.codeActionKind, route.apply);
+    }
+    return codeActionAt(editor, editor.selection, route.codeActionKind, route.apply);
+  }
+  const symbol = await symbolOf(editor.document, info.path);
+  if (refactoring === "renameResource") return renameAt(editor, symbol.selectionRange.start);
+  const part = refactoring === "renameInput" ? "Input" : "Slot";
+  if (info.isGroup) throw new Error("Choose a message rather than a group.");
+  const names = part === "Input" ? info.inputs : info.slots;
+  const name = options?.name ?? await vscode.window.showQuickPick(names, { placeHolder: `Choose the ${part.toLowerCase()} to rename in resource sources` });
+  if (!name) return;
+  // The message source follows the name; the outline range also covers the doc comments (`@param $count`) above it.
+  const message = new vscode.Range(symbol.selectionRange.end, symbol.range.end);
+  const offset = renameOffset(editor.document.getText(message), part, name);
+  if (offset === undefined) throw new Error(`${info.key} does not mention the ${part.toLowerCase()} ${name} in this file.`);
+  return renameAt(editor, editor.document.positionAt(editor.document.offsetAt(message.start) + offset));
 }
 export function activate(context: vscode.ExtensionContext) {
   // First: with a former identity active, registering the shared runic.* commands below throws.
@@ -286,6 +369,10 @@ export function activate(context: vscode.ExtensionContext) {
   const runicSdk = sdk = new RunicSdk({ dotnetPath: folder => dotnetPath(folder.uri), translationsStatus: (folder, project) => projectStatusFor(folder, project) });
   context.subscriptions.push(runicSdk, { dispose: () => { if (sdk === runicSdk) sdk = undefined; } });
   noticeMovedSettings();
+  // The server's runic.* commands (code actions such as "Mark reviewed" run them), routed to the source's folder.
+  const commands = serverCommands = new ServerCommands((command, run) => vscode.commands.registerCommand(command, run), async (command, args) =>
+    (await clientFor(vscode.Uri.parse(commandSource(args)))).sendRequest("workspace/executeCommand", { command, arguments: args }));
+  context.subscriptions.push(commands, { dispose: () => { if (serverCommands === commands) serverCommands = undefined; } });
   context.subscriptions.push(item, { dispose: () => { if (statusTimer) clearTimeout(statusTimer); statusItem = undefined; } },
     vscode.commands.registerCommand(commandId("showOutput"), () => output.show(true)),
     vscode.commands.registerCommand(formerCommandId("showOutput"), () => output.show(true)),
@@ -294,8 +381,8 @@ export function activate(context: vscode.ExtensionContext) {
     // status reads the files on disk, so coverage follows saves (watched changes from other tools also invalidate it).
     vscode.workspace.onDidSaveTextDocument(document => { if (isRunicDocument(document) || document.uri.path.endsWith(".review.json")) invalidateProjectStatus(); }));
   // Each command runs under its runic.translations.* ID and, for keybindings of the Translations extension, its former runicTranslations.* ID.
-  const register = (name: string, action: (options?: PreviewOptions) => Promise<unknown>) => {
-    const run = async (options?: PreviewOptions) => { try { return await action(options); } catch (error) { output.appendLine(String(error)); await vscode.window.showErrorMessage(String(error)); } };
+  const register = <Options = PreviewOptions>(name: string, action: (options?: Options) => Promise<unknown>) => {
+    const run = async (options?: Options) => { try { return await action(options); } catch (error) { output.appendLine(String(error)); await vscode.window.showErrorMessage(String(error)); } };
     context.subscriptions.push(vscode.commands.registerCommand(commandId(name), run), vscode.commands.registerCommand(formerCommandId(name), run));
   };
   const session = previewSession = new PreviewSession({
@@ -334,22 +421,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(start), vscode.workspace.onDidGrantWorkspaceTrust(() => vscode.workspace.textDocuments.forEach(start)));
   vscode.workspace.textDocuments.forEach(start);
   register("restart", async () => { await deactivate(); startupNotice.reset(); vscode.workspace.textDocuments.forEach(start); });
-  register("renameResource", async () => {
-    const { editor, client, info } = await active();
-    const name = await vscode.window.showInputBox({ value: info.path.at(-1), prompt: "Rename in resource sources and runic.json only. Update application call sites separately." });
-    if (name && name !== info.path.at(-1)) await apply(client, "runic.renameResource", [editor.document.uri.toString(), info.logicalPath, name]);
-  });
-  register("renameInput", () => renamePart("Input")); register("renameSlot", () => renamePart("Slot"));
-  register("extractGroup", async () => {
-    const { editor, client, info } = await active();
-    if (!info.isGroup) throw new Error("Place the cursor on the group declaration to extract.");
-    await apply(client, "runic.extractGroup", [editor.document.uri.toString(), info.path]);
-  });
-  register("inlineResource", async () => {
-    const { editor, client } = await active();
-    const destination = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { "RMF2 resource": ["rmf2"] }, openLabel: "Choose ancestor resource" });
-    if (destination?.[0]) await apply(client, "runic.inlineResource", [editor.document.uri.toString(), destination[0].toString()]);
-  });
+  // Under protocol 2 the refactorings are F2 and the light bulb; these palette commands invoke the same paths.
+  for (const refactoring of ["renameResource", "renameInput", "renameSlot", "extractGroup", "inlineResource"] as const)
+    register<RefactoringOptions>(refactoring, options => refactor(refactoring, options));
   const openPreview = async (options?: PreviewOptions, changeSamples = false, changeLocale = false, changeFormatting?: "requestedLocale" | "timeZone") => {
     const selection = ++previewSelection;
     session.beginSelection();
@@ -559,7 +633,7 @@ export function activate(context: vscode.ExtensionContext) {
   register("previewTimeZone", options => openPreview(options, false, false, "timeZone"));
   refreshStatus();
   return { sdk: runicSdk.api(), ready: (uri: vscode.Uri) => clientFor(uri), previewState: () => session.state, statusHtml: () => statusPanel?.webview.html,
-    status: () => statusItem?.text, serverState: (uri: vscode.Uri) => { const folder = vscode.workspace.getWorkspaceFolder(uri); return folder && serverStates.get(folder.uri.toString())?.state; } };
+    status: () => statusItem?.text, protocol: async (uri: vscode.Uri) => protocolOf(await clientFor(uri)), serverCommands: () => serverCommands?.commands ?? [], serverState: (uri: vscode.Uri) => { const folder = vscode.workspace.getWorkspaceFolder(uri); return folder && serverStates.get(folder.uri.toString())?.state; } };
 }
 /**
  * Runic (runic-artifex.runic, 0.20–0.21) and Runic MF2 Translations (runic-artifex.runic-translations, up to 0.11) are
