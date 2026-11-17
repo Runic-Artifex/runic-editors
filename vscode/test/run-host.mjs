@@ -6,11 +6,14 @@ import { execFileSync, spawn } from 'node:child_process';
 // Runs test/host.cjs in a real VS Code against the language server of the supported Translations release: the
 // fixture workspace gets this repository's .config/dotnet-tools.json (dotnet-runic-translations at a pinned version)
 // and `dotnet tool restore` installs it from NuGet, so the extension starts `dotnet tool run runic-translations -- lsp`
-// as it does for users. RUNIC_TRANSLATIONS_SERVER_ASSEMBLY=<dotnet-runic-translations.dll> tests a locally built
-// server instead (runic.translations.serverAssembly).
+// as it does for users. RUNIC_TRANSLATIONS_SERVER_ASSEMBLY (or RUNIC_TRANSLATIONS_SERVER) =<dotnet-runic-translations.dll>
+// tests a locally built server instead (runic.translations.serverAssembly). The host test takes the protocol 2 path
+// when the server advertises it (Translations 0.14); RUNIC_TRANSLATIONS_PROTOCOL=2 (`bun run test:host:protocol2`)
+// fails the run when it does not.
 // The workspace has a second folder, a copy of fixtures/sdk-app (a Runic SDK project), for the Runic SDK features: a
 // stand-in for `dotnet runic dev` (a process whose command line names dotnet-runic.dll with dev) gives the session file
 // a live process ID, and a stand-in `dotnet` (runic.dotnetPath of that folder) answers `dotnet runic doctor`.
+// A third folder, another copy of fixtures/rmf2, gives the test a second language server (multi-root).
 const extension = fileURLToPath(new URL('../', import.meta.url));
 const repository = resolve(extension, '..');
 const temporary = await mkdtemp(join(tmpdir(), 'runic-vscode-host-'));
@@ -23,20 +26,26 @@ if (process.env.WAYLAND_DISPLAY && !process.env.WAYLAND_DISPLAY.startsWith('/') 
 await mkdir(environment.XDG_RUNTIME_DIR, { mode: 0o700 });
 for (const name of ['VSCODE_IPC_HOOK_CLI', 'VSCODE_CLI', 'ELECTRON_RUN_AS_NODE']) delete environment[name];
 try {
+  const serverAssembly = process.env.RUNIC_TRANSLATIONS_SERVER_ASSEMBLY || process.env.RUNIC_TRANSLATIONS_SERVER;
+  if (process.env.RUNIC_TRANSLATIONS_PROTOCOL && !serverAssembly) throw new Error('RUNIC_TRANSLATIONS_PROTOCOL needs a server build (RUNIC_TRANSLATIONS_SERVER_ASSEMBLY or RUNIC_TRANSLATIONS_SERVER); `bun run test:host` tests the NuGet tool of .config/dotnet-tools.json.');
+  const translations = async folder => {
+    await cp(join(repository, 'fixtures/rmf2'), folder, { recursive: true });
+    if (serverAssembly) {
+      await mkdir(join(folder, '.vscode'));
+      await writeFile(join(folder, '.vscode/settings.json'), JSON.stringify({ 'runicTranslations.serverAssembly': resolve(serverAssembly) }));
+    } else {
+      // The repository's NuGet.config keeps packages in .cache/nuget; the temporary workspace has no NuGet.config.
+      environment.NUGET_PACKAGES ??= join(repository, '.cache/nuget');
+      await mkdir(join(folder, '.config'));
+      await cp(join(repository, '.config/dotnet-tools.json'), join(folder, '.config/dotnet-tools.json'));
+      await cp(join(repository, 'NuGet.config'), join(folder, 'NuGet.config'));
+      execFileSync('dotnet', ['tool', 'restore'], { cwd: folder, env: environment, stdio: 'inherit' });
+    }
+  };
   const workspace = join(temporary, 'workspace');
-  await cp(join(repository, 'fixtures/rmf2'), workspace, { recursive: true });
-  const serverAssembly = process.env.RUNIC_TRANSLATIONS_SERVER_ASSEMBLY;
-  if (serverAssembly) {
-    await mkdir(join(workspace, '.vscode'));
-    await writeFile(join(workspace, '.vscode/settings.json'), JSON.stringify({ 'runicTranslations.serverAssembly': resolve(serverAssembly) }));
-  } else {
-    // The repository's NuGet.config keeps packages in .cache/nuget; the temporary workspace has no NuGet.config.
-    environment.NUGET_PACKAGES ??= join(repository, '.cache/nuget');
-    await mkdir(join(workspace, '.config'));
-    await cp(join(repository, '.config/dotnet-tools.json'), join(workspace, '.config/dotnet-tools.json'));
-    await cp(join(repository, 'NuGet.config'), join(workspace, 'NuGet.config'));
-    execFileSync('dotnet', ['tool', 'restore'], { cwd: workspace, env: environment, stdio: 'inherit' });
-  }
+  await translations(workspace);
+  const second = join(temporary, 'second');
+  await translations(second);
   const app = join(temporary, 'app');
   await cp(join(repository, 'fixtures/sdk-app'), app, { recursive: true });
   const doctorEnvelope = { protocol: 'runic.commandline/1', command: 'doctor', success: true, exitCode: 0, payloadType: 'runic.application.tool.doctor/1', fault: null, diagnostics: [], payload: {
@@ -49,13 +58,17 @@ try {
   await chmod(join(app, 'fake-dotnet.sh'), 0o755);
   await mkdir(join(app, '.vscode'));
   await writeFile(join(app, '.vscode/settings.json'), JSON.stringify({ 'runic.dotnetPath': join(app, 'fake-dotnet.sh') }));
+  // Inline Resource deletes a file; the test profile has no trash to move it to.
+  await mkdir(join(temporary, 'profile', 'User'), { recursive: true });
+  await writeFile(join(temporary, 'profile', 'User', 'settings.json'), JSON.stringify({ 'files.enableTrash': false }));
   const workspaceFile = join(temporary, 'runic.code-workspace');
-  await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: workspace }, { path: app }] }));
+  await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: workspace }, { path: app }, { path: second }] }));
   const child = spawn(process.env.VSCODE_EXECUTABLE_PATH || 'code', ['--new-window', '--wait', '--no-sandbox', '--disable-gpu', '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--user-data-dir', join(temporary, 'profile'), '--extensions-dir', join(temporary, 'extensions'), `--extensionDevelopmentPath=${extension}`, `--extensionTestsPath=${join(extension, 'test/host.cjs')}`, workspaceFile], { stdio: 'inherit', env: environment });
   const timeout = setTimeout(() => child.kill('SIGTERM'), 120000);
   const result = await new Promise((accept, reject) => { child.once('error', reject); child.once('exit', accept); });
   clearTimeout(timeout);
-  const report = JSON.parse(await readFile(join(temporary, "result.json"), "utf8"));
+  const stage = await readFile(join(temporary, 'result.json.stage'), 'utf8').catch(() => 'activation');
+  const report = await readFile(join(temporary, 'result.json'), 'utf8').then(JSON.parse, () => ({ passed: false, message: `${stage}: VS Code exited (${result}) without an assertion report` }));
   if (!report.passed) throw new Error(report.message || "Extension-host assertions did not finish.");
   console.log(report.message);
   if (result !== 0) throw new Error(`VS Code host tests exited with ${result}`);
