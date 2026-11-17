@@ -33,8 +33,8 @@ public static class ToolWindowSections
     public static IReadOnlyList<RunicSectionInfo> All { get; } = new[]
     {
         new RunicSectionInfo(RunicSection.DevSession, "Dev Session", sdkOnly: true, RunicSlice.Vs4),
-        new RunicSectionInfo(RunicSection.ViewModels, "ViewModels", sdkOnly: true, RunicSlice.Vs4),
-        new RunicSectionInfo(RunicSection.Doctor, "Doctor", sdkOnly: true, RunicSlice.Vs4),
+        new RunicSectionInfo(RunicSection.ViewModels, "ViewModels", sdkOnly: true, RunicSlice.Implemented),
+        new RunicSectionInfo(RunicSection.Doctor, "Doctor", sdkOnly: true, RunicSlice.Implemented),
         new RunicSectionInfo(RunicSection.Translations, "Translations", sdkOnly: false, RunicSlice.Vs6),
     };
 
