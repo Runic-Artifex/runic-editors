@@ -301,7 +301,7 @@ test("the VSIX validates runic.json against the schema of the supported Translat
   expect(assets).toContain("'eng', 'translations', 'project-v1.schema.json'");
   const schema = JSON.parse(readFileSync(join(here, "..", "eng", "translations", "project-v1.schema.json"), "utf8"));
   expect(schema.$id).toBe("https://runic-artifex.eu/schemas/translations/project-v1.schema.json");
-  // Every command the extension contributes is listed in the README's parity table.
+  // Every command the extension contributes is listed in the README's command tables.
   const readme = readFileSync(join(here, "README.md"), "utf8");
   for (const command of manifest.contributes.commands as { title: string }[])
     expect(readme).toContain(command.title.replace(/^Runic: /, ""));

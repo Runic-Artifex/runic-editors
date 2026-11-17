@@ -1,50 +1,46 @@
 # Runic DevKit for Visual Studio
 
-**Preview** for Visual Studio 2026 (18.x), Windows x64. The extension is a preview
-product until the production language server (2.0): its commands, environment
-variables and the `lsp` protocol it uses are outside the 1.0 compatibility rules and
-may change in a minor release. The manifest
-declares `[18.0,19.0)`. Visual Studio 2022 (17.x) is not supported. The
-in-process API is pinned to 17.14, which 18.x hosts provide. Native evidence
-covers Visual Studio Community 2026 18.8.2; the complete native journey passed
-on 2026-10-07 (see
-[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07)). The range declaration is not
-evidence that every 18.x release has been run. The MEF client
-registers direct `.mf2` and grouped `.rmf2` with Visual Studio's remote-code content type and uses the same
-stdio language server as VS Code. TextMate highlighting, diagnostics, completion,
-hover, symbols, definition/references, formatting and bounded F2 resource/local
-rename use the shared compiler and language service.
+**Preview** for Visual Studio 2026 (18.x) on Windows x64. Its commands, settings
+and the `lsp` protocol it uses are outside the 1.0 compatibility rules and may
+change in a minor release. Visual Studio 2022 (17.x) and ARM64 are not
+supported.
 
-Restore the solution's local `runic-translations` .NET tool before opening an
-MF2 document. Activation finds the nearest `.config/dotnet-tools.json` from the
-active document (or solution), respecting `isRoot`, and starts
-`dotnet tool run runic-translations -- lsp`. The installed tool requires its
-matching .NET runtime; it runs outside Visual Studio's .NET Framework process.
-No tool download or restore occurs during activation. Use trusted projects.
+One extension for the Runic SDK and Runic Translations, as
+[Runic DevKit for VS Code](../vscode/README.md):
 
-For development, set `RUNIC_TRANSLATIONS_SERVER` to an absolute built tool DLL
-before starting Visual Studio. `RUNIC_DOTNET` optionally selects the installed
-.NET executable. Initialization failures appear in an IDE notification; server
-stderr is drained to diagnostic trace output. One server serves the current IDE
-session. Restart it after switching solutions or changing the selected tool.
+- **Runic SDK** (in a solution with a Runic SDK project): start and stop
+  `dotnet runic dev` and follow its session, debug the Window's C# code and its
+  page in one session, `dotnet runic doctor` results in the Error List, and a
+  ViewModels tree that opens the C# members.
+- **Translations** (in every solution with Runic Translations): direct `.mf2`
+  and grouped `.rmf2` resources through the project's Runic language server:
+  highlighting, diagnostics, completion, hover, symbols, definition and
+  references, formatting, F2 rename of resources and MF2 locals, the message
+  preview, XLIFF, catalog import, library overrides and translation status.
 
 ## Install
 
-- **Visual Studio Marketplace** (final versions; from 0.22.0 once the parity
-  work lands, D070.11): in **Extensions > Manage Extensions**, search for **Runic
-  DevKit**, or open
+- **Visual Studio Marketplace** (final versions, from 0.22.0 once it is
+  published, D070.11): in **Extensions > Manage Extensions**, search for
+  **Runic DevKit**, or open
   [runic-artifex.runic-devkit-vs](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit-vs).
   The Marketplace has no pre-release channel, so release candidates are not
   published there.
 - **VSIX file:** download `runic-devkit-vs.vsix` from the
   [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
-  (release candidates included) and open it to install.
+  (release candidates included) and open it to install. Until the Marketplace
+  listing exists, this is the way to install it.
 
-The Marketplace listing comes from `publishManifest.json` (publisher
-`runic-artifex`, internal name `runic-devkit-vs`, permanent once published),
-`overview.md` and the listing fields of `source.extension.vsixmanifest`; the
-images in `media/` are rendered by `eng/brand/render-icons.sh`. `package.py`
-checks them (`--check-source`, and the built VSIX).
+Restart Visual Studio after installing. The extension loads only in a solution
+with a Runic project: one with the `RunicApplication` project capability (Runic
+Views projects since runic-sdk 0.22), one that uses the Runic Translations
+build, or a Runic SDK project, a `runic.json` or a tool manifest with
+`dotnet-runic-translations` up to four levels below the solution directory. Opening an `.mf2` or `.rmf2` file loads it too.
+
+Debugging the page needs Visual Studio's **JavaScript diagnostics** component
+(`Microsoft.VisualStudio.Component.JavaScript.Diagnostics`). Projects from
+`dotnet new runic-app` have a `.vsconfig` that names it, and Visual Studio
+offers to install it when it opens the project.
 
 ## Moving from Runic MF2 Translations
 
@@ -68,93 +64,135 @@ Keyboard shortcuts assigned to the former **Tools → Runic: …** commands belo
 the former command set; assign them again. Their command names
 (`Tools.RunicPreviewMessage`, `Tools.RunicRestartLanguageServer`) are unchanged.
 
-## Commands
+## Where to find it
 
-Commands appear in the **Tools → Runic** menu. **View → Other Windows → Runic**
-(also **Tools → Runic → Runic**) opens the Runic tool window, with sections for
-the Dev Session, ViewModels, Doctor and Translations and a toolbar. The
-ViewModels and Doctor sections work in this build; the Dev Session and
-Translations sections are placeholders, and the Runic SDK commands that are not
-implemented yet stay hidden (the 0.22 parity work, see [Layout](#layout)). Assign preferred shortcuts in Visual Studio’s
-keyboard options; the extension does not override existing IDE bindings.
+- **Tools → Runic** has every command.
+- **View → Other Windows → Runic** (also **Tools → Runic → Runic**) opens the
+  Runic tool window. It has a toolbar and four sections: **Dev Session**,
+  **ViewModels** and **Doctor** in a solution with a Runic SDK project, and
+  **Translations**. A solution with only Runic Translations sees the
+  Translations section alone, and the Runic SDK commands stay hidden.
+- **Tools → Options → Runic DevKit** has the settings ([Settings](#settings)).
+- The **Runic SDK** and **Runic Translations** Output panes show the tools'
+  output.
 
-Within an MF2 editor:
+Assign your own shortcuts in Visual Studio's keyboard options; the extension
+does not override existing bindings.
 
-- **Tools → Runic → Preview Message** (also in the editor context menu) opens the native message preview. The
-  **Preview locale** selector switches the language and **Sample values** offers
-  each `@example` set of the message; either change renders at once. Edit a value
-  (the selector then shows **Custom values**) and choose **Render preview**. The locale selector also lists the
-  pseudo-locales that `runic.json` configures (`pseudoLocales`), generated from the base locale as a
-  `--pseudo-locales` build does. **Preview regional locale** formats numbers and dates for the locale a user requests
-  (`de-CH` for `de` text) and **Preview time zone** sets the zone `timeZone=local` formats in (`utc` or an IANA
-  zone; empty is this computer's); press Enter to render. A line below the text names the requested locale, the
-  locale it formatted in and the time zone. The server executes its verified runtime
-  plan. Links and actions are inert, icons use slot labels, and custom components
-  use labeled spans. The extension never loads application renderers.
-- **Tools → Runic → Restart Language Server** stops and restarts the server.
-- Standard IDE navigation, Find All References, Format Document and Rename use
-  Visual Studio's LSP support. F2 refuses a resource rename when application or
-  other non-resource files make whole-workspace correctness unsupported. MF2 local rename
-  stays within its lexical scope. Explicit resource-only input/slot/structural
-  transactions are available in the CLI, Editor and VS Code; this client does
-  not implement a second workspace-edit engine for those commands.
+## Runic SDK features
 
-`runic.json` retains Visual Studio's JSON language service, which validates it
-against the `$schema` the templates write. The extension also opens every
-`runic.json` editor buffer on the Runic server (full-text `didOpen`/`didChange`/`didClose`
-over the client's connection), so diagnostics, preview and configuration-changing
-refactors such as F2 resource rename use unsaved configuration edits, as in VS
-Code. Resource buffers are synchronized through LSP.
-Diagnostics cover every file of a project with an open file, including closed
-translations and `runic.json`. Hover over a message in a translation shows the
-base-locale text with its comments and `@param` descriptions. C#, TypeScript and Svelte retain their existing language services.
-Runic does not silently rename their application call sites.
-The client watches direct `.mf2`, grouped `.rmf2`, and manifests under the containing solution;
-when `sourceRoots` points outside the config directory, open the common
-containing workspace so those declared files remain inside the host watch
-boundary. Symlink/reparse-point mounts are rejected by the shared server rather
-than traversed.
+### Dev Session: `dotnet runic dev`
+
+**Start dotnet runic dev** runs the development server and the Window, which
+`dotnet watch` restarts after each C# edit. **Start dotnet runic dev
+--no-window** runs only the frontend, for a Window that the debugger starts.
+**Stop dotnet runic dev** stops a `dev` that Visual Studio started; stop one
+that runs in a terminal there with Ctrl+C. The output goes to the **Runic SDK**
+Output pane. With several Runic SDK projects, the commands act on the project of
+the active document, else on the startup project.
+
+The **Dev Session** section follows `obj/runic/dev-session.json`, wherever
+`dev` was started: the state, the development server, the Window's process or
+"started by the IDE", the pages, the debug endpoints and the generated clients.
+It reads the file on each change and every 2 seconds, and shows a `dev` whose
+process has exited as stopped. **Open the Development Server** opens the page in
+the browser; **Open the dev Session File** opens the file. `dev`'s failures
+(`RAPPDEV` codes) and the build's errors appear in the Error List; F1 on one
+opens its entry in the Runic diagnostics catalog.
+
+With `dotnet-runic` 0.22 and later:
+
+- when Visual Studio starts `dev` with its Window, it passes `--debug-endpoint`,
+  so a CS-WebUI Window opens its DevTools Protocol port (D070.17). A `dev` you
+  start in a terminal opens none;
+- **Stop dotnet runic dev** writes `stop` to `dev`'s standard input
+  (`RUNIC_DEV_STOP_ON_INPUT=1`), so `dev` stops as on Ctrl+C: the session file
+  says `"stopped"` and the development pages leave `www/`. Only when `dev` has
+  not exited within 10 seconds, and with an older tool, Visual Studio ends the
+  process tree (WIN-06).
+
+### F5 asks to start `dotnet runic dev --no-window`
+
+When F5 or Ctrl+F5 starts a Runic SDK startup project and no `dotnet runic dev
+--no-window` runs for it, Runic DevKit asks first (D070.6):
+
+- **Yes** starts `dotnet runic dev --no-window`, waits until it is ready, and
+  then starts the Window. The Window loads the page from the development server,
+  and frontend edits reach it while you debug.
+- **No** starts the Window without it. The Window then shows the production
+  frontend.
+- **Cancel** starts nothing.
+
+If a `dev` that Visual Studio started runs its own Window, Yes restarts it with
+`--no-window`. If a `dev` started in a terminal runs its own Window, stop it
+there first, or continue and get two Windows. The question comes every time;
+there is no setting to remember the answer.
+
+F5 starts the launch profile under the .NET debugger only. For breakpoints in
+the page, use [Debug the Window](#debugging-the-window-and-its-page).
+
+### Doctor and ViewModels
+
+**Run dotnet runic doctor** (Tools → Runic, the tool window's toolbar or the
+Error List's context menu) runs `dotnet runic doctor` for the project. The
+**Doctor** section lists every check, failures first, with its remediation.
+Failing checks and warnings appear in the Error List on the project file; F1
+opens the check's documentation.
+
+The **ViewModels** section shows the ViewModels and their Bridge members from
+the development source map. Double-click a member, press Enter or use its
+context menu to open the C# member. **Refresh ViewModels** reads the map again.
 
 ## Debugging the Window and its page
 
-**Tools → Runic → Debug the Window** debugs the .NET code and the page in one
-session. It starts `dotnet runic dev --no-window` (or offers to restart a `dev`
-that runs its own Window), waits until it is ready, builds the project, and
-starts the program `dotnet run` would start under the .NET debugger with the
-session file's `window.environment` and a DevTools Protocol port:
+**Tools → Runic → Debug the Window** (also on the tool window's toolbar) debugs
+the .NET code and the page in one session:
 
-- **WebView2** (Runic Desktop on Windows): a free loopback port, added to
-  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (a value that already names a port
-  keeps it).
-- **CS-WebUI**: the port `dev --no-window` names in the session
-  (`RUNIC_WEBUI_REMOTE_DEBUGGING_PORT`, 9225, since runic-sdk 0.22).
+1. It starts `dotnet runic dev --no-window` if it does not run yet, and waits
+   until it is ready. If a `dev` that Visual Studio started runs its own Window,
+   it asks before it restarts it with `--no-window`.
+2. It builds the project as F5 does.
+3. It starts the program `dotnet run` would start under the .NET debugger, with
+   the session file's `window.environment` and a DevTools Protocol port:
+   - **WebView2** (Runic Desktop on Windows): a free loopback port, added to
+     `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (a value that already names a port
+     keeps it).
+   - **CS-WebUI**: the port `dev --no-window` names in the session
+     (`RUNIC_WEBUI_REMOTE_DEBUGGING_PORT`, 9225, since runic-sdk 0.22).
+4. Once `http://127.0.0.1:<port>/json/version` answers and the page is listed,
+   it attaches Visual Studio's JavaScript debugger over the "JavaScript and
+   TypeScript (Chrome DevTools/V8 Inspector)" transport.
 
-Once `http://127.0.0.1:<port>/json/version` answers and the page is listed, it
-attaches the JavaScript debugger over the "JavaScript and TypeScript (Chrome
-DevTools/V8 Inspector)" transport. It waits up to three minutes of the Window
-running (time stopped at a .NET breakpoint does not count), then says so and
-keeps the .NET debugger attached. **Attach to the Page (JavaScript)** does the
-same attach to a running page: the session file's `debugEndpoints` and the
-Windows Debug the Window started. When this extension starts `dev` with its
-Window and the project's `dotnet-runic` is 0.22 or later, it passes
-`--debug-endpoint`, so a CS-WebUI Window opens its port (D070.17).
+Breakpoints in C# and in `Frontend/src` then stop in the same session. The
+status bar shows each step. Debug the Window waits for the page up to three
+minutes of the Window running (time stopped at a .NET breakpoint does not
+count). If the page does not appear, it says so in the **Runic SDK** Output pane
+and the .NET debugger stays attached.
 
-Needs Visual Studio's **JavaScript diagnostics** component
-(`Microsoft.VisualStudio.Component.JavaScript.Diagnostics`) and a Visual Studio
-that does not run as administrator (WebView2 ignores the port in an elevated
-process). Breakpoints in `Frontend/src/*.tsx` bind through the development
-server's source maps only when they carry absolute `sources`, which runic-sdk
-0.22's `vite-plugin-runic` writes; with an older plugin, the page's
-JavaScript breakpoints bind but TSX ones stay unbound. The template's
-`(WebView2 script debugging)` launch profile does not work in Visual Studio
-(SPIKE-VS-0, D070.18); use Debug the Window instead.
+**Tools → Runic → Attach to the Page (JavaScript)** attaches the JavaScript
+debugger alone to a page that already runs with an endpoint: the session file's
+`debugEndpoints` (WebView2's, and since runic-sdk 0.22 a CS-WebUI Window's) and
+the Windows that Debug the Window started. With several, it asks which one.
 
-**Stopping `dev`.** With `dotnet-runic` 0.22 and later, Visual Studio starts
-`dev` with `RUNIC_DEV_STOP_ON_INPUT=1` and **Stop dotnet runic dev** writes
-`stop` to its standard input and closes it, so `dev` stops as on Ctrl+C: the
-session file says `"stopped"` and the development pages leave `www/`. Only when
-`dev` has not exited within 10 seconds, and with an older tool, Visual Studio
-ends the process tree as before (WIN-06).
+Page debugging needs:
+
+- Visual Studio's **JavaScript diagnostics** component
+  (`Microsoft.VisualStudio.Component.JavaScript.Diagnostics`), which the
+  template's `.vsconfig` names;
+- a Visual Studio that does not run as administrator: WebView2 ignores the port
+  in an elevated process, and the Runic SDK Output pane says so;
+- runic-sdk 0.22's `vite-plugin-runic` for breakpoints in `.tsx`, `.vue` and
+  `.svelte` files: it writes development source maps with absolute `sources`.
+  With an older plugin, the page's JavaScript breakpoints bind but those in
+  `Frontend/src` stay unbound.
+
+The template's `(WebView2 script debugging)` launch profile of runic-sdk 0.20
+and 0.21 does not work in Visual Studio: its JavaScript adapter starts the
+Window without the profile's environment variables. runic-sdk 0.22 removes it
+(D070.18). Delete it from an existing project's `launchSettings.json` and use
+Debug the Window instead. See
+[Debugging a Runic application](https://github.com/Runic-Artifex/runic-sdk/blob/main/docs/debugging.md#visual-studio)
+in runic-sdk.
 
 ### Troubleshooting
 
@@ -166,6 +204,97 @@ ends the process tree as before (WIN-06).
   60 seconds, says so in the **Runic SDK** Output pane and enables **Debug the
   Window** again; closing and reopening the solution also ends a run that is
   still waiting (runic-editors#23).
+- **Breakpoints in `.tsx` files stay hollow.** Update
+  `@runic-artifex/vite-plugin-runic` to 0.22 or later, or check that the Window
+  loads the page from the development server and not the production build
+  (start `dev --no-window` first).
+
+## Translations
+
+Restore the solution's local `runic-translations` .NET tool before opening an
+MF2 document:
+
+```sh
+dotnet tool restore
+```
+
+The extension finds the nearest `.config/dotnet-tools.json` from the active
+document (or solution), respecting `isRoot`, and starts
+`dotnet tool run runic-translations -- lsp`. The tool runs on its own .NET
+runtime, outside Visual Studio's process. The extension never downloads or
+restores a tool; use trusted projects. If the server cannot start, an InfoBar
+says why once per solution, with **Show output** and install help. One server
+serves the Visual Studio session; **Tools → Runic → Restart Language Server**
+restarts it, for example after switching solutions or changing the tool.
+
+### In the editor
+
+Visual Studio's LSP support gives highlighting, diagnostics, completion, hover,
+symbols, Go to Definition, Find All References, quick fixes, Format Document and
+F2 rename of resources and MF2 locals. F2 refuses a resource rename when
+application or other non-resource files make a whole-workspace rename unsafe.
+MF2 local rename stays within its lexical scope. Runic does not rename C#,
+TypeScript or Svelte call sites.
+
+Diagnostics cover every file of a project with an open file, including closed
+translations and `runic.json`. Hover over a message in a translation shows the
+base-locale text with its comments and `@param` descriptions. `runic.json` keeps
+Visual Studio's JSON language service, which validates it against the
+`$schema` the templates write. The extension also sends every open `runic.json`
+buffer to the Runic server, so diagnostics, the preview and refactors such as
+F2 resource rename use unsaved configuration edits.
+
+The client watches direct `.mf2`, grouped `.rmf2` and manifests under the
+solution. When `sourceRoots` points outside the config directory, open a
+solution that contains those files. The server rejects symlink and
+reparse-point mounts rather than following them.
+
+### Translations tools
+
+All in **Tools → Runic**; the tools' output goes to the **Runic Translations**
+Output pane.
+
+- **Preview Message** (also in the editor's context menu) opens the message
+  preview. **Preview locale** switches the language, including the
+  pseudo-locales that `runic.json` configures (`pseudoLocales`). **Sample
+  values** offers each `@example` set; edit a value (the selector then shows
+  **Custom values**) and choose **Render preview**. **Preview regional locale**
+  formats numbers and dates for the locale a user requests (`de-CH` for `de`
+  text), and **Preview time zone** sets the zone `timeZone=local` formats in
+  (`utc` or an IANA zone; empty is this computer's); press Enter to render. A
+  line below the text names the requested locale, the locale it formatted in
+  and the time zone. Links and actions are inert, icons show slot labels, and
+  custom components show as labeled spans; the extension never loads
+  application renderers.
+- **Export XLIFF…** asks for a folder and writes one XLIFF 2.1 document per
+  translated locale into it.
+- **Import XLIFF (Dry Run)…** asks for an XLIFF 2.1 file and reports each
+  unit's outcome, without writing.
+- **Import .resx or i18next Catalog…** runs a dry run first, then imports after
+  you confirm.
+- **Override Library Message…** (also in the editor's context menu) asks for a
+  library catalog, a message and a locale, writes
+  `overrides/<catalog>/<locale>.rmf2` seeded with the library's text, and opens
+  it at the message. Go to Definition from an override
+  source opens a read-only copy of the library source.
+- **Show Translation Status** opens the `runic-translations status` report per
+  locale as a read-only document; the **Translations** section of the Runic tool
+  window shows the same numbers.
+  **Refresh Translation Status** reads it again.
+- **Show Translations Output** opens the Output pane.
+
+## Settings
+
+**Tools → Options → Runic DevKit → General**:
+
+| Setting | What it does | VS Code |
+| --- | --- | --- |
+| .NET executable | The `dotnet` that runs the project-local tools (`dotnet runic`, `runic-translations`). Empty uses `RUNIC_DOTNET`, else `dotnet` on the PATH. Applies when the language server next starts. | `runic.dotnetPath` |
+| Language server assembly | A built `dotnet-runic-translations.dll`, absolute or relative to the solution directory, for Translations SDK development. Empty uses `RUNIC_TRANSLATIONS_SERVER`, else `dotnet tool run runic-translations`. Applies when the language server next starts. | `runic.translations.serverAssembly` |
+| Trace | The language server's messages in the Runic Translations Output pane: Off, Messages or Verbose (with each message's JSON). Applies at once. | `runic.translations.trace.server` |
+
+The environment variables `RUNIC_DOTNET` and `RUNIC_TRANSLATIONS_SERVER` still
+work when the settings are empty; set them before starting Visual Studio.
 
 ## Visual Studio and VS Code
 
@@ -184,17 +313,21 @@ ends the process tree as before (WIN-06).
 | Change Preview Locale | Locale selector in the preview window | Command |
 | Pseudo-locales (`pseudoLocales`) in the preview | Locale selector in the preview window | Change Preview Locale |
 | Regional locale and time zone of the preview | Fields in the preview window | Commands |
-| Rename Input, Rename Slot, Rename Resource in Resource Sources | No (2.0) | Commands |
-| Extract Group to Directory, Inline Resource into Ancestor | No (2.0) | Commands |
+| Rename Input, Rename Slot, Rename Resource in Resource Sources | Not yet ([Known limits](#known-limits)) | F2 with Translations 0.14, commands |
+| Extract Group to Directory, Inline Resource into Ancestor | Not yet ([Known limits](#known-limits)) | Light bulb with Translations 0.14, commands |
 | Restart Language Server | Tools → Runic menu | Command |
 | Export XLIFF, Import XLIFF (dry run) | Tools → Runic menu; folder or file picker, tool output in the "Runic Translations" Output pane | Commands |
 | Import .resx or i18next Catalog | Tools → Runic menu; dry run, then import after confirmation | Command |
 | Override Library Message… | Tools → Runic menu, editor context menu | Command |
 | Library sources from Go to Definition in an override source | Read-only copy of the source | Read-only `runic-library:` document |
+| Override sources of library catalogs: diagnostics, completion, hover | Yes | Yes |
+| Review state in hover | Yes | Yes |
+| Mark reviewed quick fix (`RTR0090`) | Where the IDE runs code-action commands | Yes |
 | Translation status per locale | Runic tool window, Translations section; Show Translation Status (read-only report), Refresh Translation Status | Translations view, Show Translation Status panel |
 | Server output | "Runic Translations" Output pane (Tools → Runic → Show Translations Output); trace in Tools → Options → Runic DevKit | Show Output command and status bar |
 | Server state, catalog and locale | No | Status bar |
 | Start failure | One InfoBar per solution, with the reason, Show output and install help | One notification per folder, with install help |
+| Settings | Tools → Options → Runic DevKit | `runic.*` settings |
 | ViewModels tree of the development source map | Runic tool window, ViewModels section; Refresh ViewModels | ViewModels view |
 | Open C# Member | Double-click, Enter or context menu in the ViewModels section | ViewModels view |
 | Run dotnet runic doctor, doctor results | Tools → Runic, tool window toolbar, Error List context menu; Doctor section | Command, Doctor view |
@@ -204,11 +337,27 @@ ends the process tree as before (WIN-06).
 | Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time | Watcher and 2 s poll; process command line or image |
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
 | Dev Session view: state, server, Window owner or process, pages, debug endpoints, generated clients | Runic tool window, Dev Session section; toolbar buttons enabled per state; state changes in the status bar text | Dev Session view; "Runic dev" status bar item |
-| F5 with `dev --no-window` | Pre-F5 guard: asks to start `dev --no-window` (then launches once it is ready) or continue without it | `runic` debug type starts it |
+| F5 with `dev --no-window` | Pre-F5 question: start `dev --no-window` (then launch once it is ready) or continue without it | `runic` debug type starts it |
 | Debug the Window: .NET and page breakpoints in one session | Tools → Runic, tool window toolbar: starts `dev --no-window`, builds, launches the Window under the .NET debugger with the session file's Window environment and a DevTools Protocol port, then attaches the JavaScript debugger over CDP (no 30-second limit) | `runic` debug type (`coreclr`) and the template's compound with the `msedge` attach |
 | Attach to the Page (JavaScript) | Tools → Runic, tool window toolbar: the session file's WebView2 and CS-WebUI (0.22) `debugEndpoints` and the Windows Debug the Window started; a picker when there are several | Attach configuration |
+| Install | Visual Studio Marketplace (final versions), VSIX | VS Code Marketplace (release candidates as pre-releases), VSIX |
 
-Full command parity waits for the production language server (2.0).
+## Known limits
+
+- **Windows x64 and Visual Studio 2026 only.** The manifest declares
+  `[18.0,19.0)` and the `amd64` architecture. There is no ARM64 build, because
+  there is no ARM64 test machine. The native integration check last passed on
+  Visual Studio Community 2026 18.8.2; the range is not evidence that every
+  18.x release has been run.
+- **No Rename Input, Rename Slot, Extract Group or Inline Resource yet.** These
+  refactorings come from the language server through standard LSP (F2 and the
+  light bulb), with no refactoring code in this extension (D070.1). They arrive
+  with the language server of Translations 0.14, which is not released yet. With
+  Translations 0.13, F2 renames resources and MF2 locals only, and the CLI and
+  VS Code run the other resource transactions.
+- **No status bar item** for the language server's state, catalog and locale.
+- **F5 debugs .NET only.** Page breakpoints need Debug the Window or Attach to
+  the Page; there is no Runic launch type for both (D070.19).
 
 ## Layout
 
@@ -218,23 +367,26 @@ Windows → Runic** and the tool window's toolbar groups. `RunicPackage.cs`
 registers every command with its handler (`Commands/CommandRegistrar.cs`) and
 the tool window. Each command has one handler file, `<Command>Command.cs`, in
 the folder of the work that implements it, and each tool-window section one
-`ToolWindow/Sections/<Section>Section.cs`; until then a handler derives from
-`NotAvailableYetHandler` (hidden, `DefaultInvisible`) and a section shows a
-placeholder. Implementing a command means changing its handler file, not the
-`.vsct` or the package class.
+`ToolWindow/Sections/<Section>Section.cs`. Every command and section is
+implemented; a future command starts with a handler that derives from
+`NotAvailableYetHandler` (hidden, `DefaultInvisible`), and a future section
+shows a placeholder. Implementing a command means changing its handler file,
+not the `.vsct` or the package class.
 
 | Folder | Commands |
 | --- | --- |
-| `Translations/` | Preview Message, Restart Language Server (implemented); Export XLIFF, Import XLIFF (dry run), Import Catalog, Override Library Message, Show/Refresh Translation Status |
+| `Translations/` | Preview Message, Restart Language Server, Export XLIFF, Import XLIFF (dry run), Import Catalog, Override Library Message, Show/Refresh Translation Status |
 | `Output/`, `Settings/` | Show Translations Output, Show Runic SDK Output, Options |
 | `DevSession/` | Start `dotnet runic dev`, Start `--no-window`, Stop, Open the Development Server, Open the dev Session File |
-| `ToolWindow/` | Runic tool window, Run `dotnet runic doctor`, Refresh ViewModels (implemented) |
-| `Debugging/` | Debug the Window, Attach to the Page (JavaScript) (implemented) |
+| `ToolWindow/` | Runic tool window, Run `dotnet runic doctor`, Refresh ViewModels |
+| `Debugging/` | Debug the Window, Attach to the Page (JavaScript) |
 
 `Core/` (`RunicArtifex.DevKit.VisualStudio.Core`, netstandard2.0, no
 dependencies) holds the logic that needs no Visual Studio: the command and
 section catalogs, the doctor and source-map readers and the trees of the
-ViewModels and Doctor sections, and the dev session reader later. The VSIX ships it next to the extension's assembly. `Core.Tests/` (TUnit)
+ViewModels and Doctor sections, the dev session reader, the Debug the Window
+plan and the Translations tool calls. The VSIX ships it next to the extension's
+assembly. `Core.Tests/` (TUnit)
 checks `Commands.vsct`, the catalog and the handler files against each other and
 runs on Linux and Windows: `dotnet run --project visualstudio/Core.Tests`.
 
