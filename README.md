@@ -7,10 +7,10 @@ Translations resources through the Runic language server.
 
 | Directory | Extension | Package |
 | --- | --- | --- |
-| [`vscode/`](vscode/README.md) | Runic DevKit for VS Code: Runic SDK and Translations (`runic-artifex.runic-devkit`) | `runic-devkit.vsix` |
-| [`visualstudio/`](visualstudio/README.md) | Runic DevKit for Visual Studio 2026 (`RunicArtifex.DevKit.VisualStudio`) | `runic-devkit-vs.vsix` |
+| [`vscode/`](vscode/README.md) | **Runic DevKit** for VS Code: Runic SDK and Translations. Store ID `runic-artifex.runic-devkit` | `runic-devkit.vsix` |
+| [`visualstudio/`](visualstudio/README.md) | **Runic DevKit** for Visual Studio 2026 (Windows x64): Runic SDK and Translations. Store ID `runic-artifex.runic-devkit-vs`, VSIX identity `RunicArtifex.DevKit.VisualStudio` | `runic-devkit-vs.vsix` |
 
-Install them from the stores or from a VSIX file:
+Install them from the stores (from 0.22.0, once published) or from a VSIX file:
 
 | Editor | Store | VSIX |
 | --- | --- | --- |
@@ -21,14 +21,17 @@ Install them from the stores or from a VSIX file:
 Both moved here from
 [runic-translations-sdk](https://github.com/Runic-Artifex/runic-translations-sdk)
 with their history (`tools/vscode-runic-translations`,
-`tools/visualstudio-runic-translations`). Both are **previews** until the
-production language server (2.0). Each release attaches both VSIX files to
+`tools/visualstudio-runic-translations`). Both are **previews**. Each release
+attaches both VSIX files to
 the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
 of this repository and, from 0.22.0, publishes them to the Marketplaces above
 ([Stores](eng/release/README.md#stores)). Since 0.20 the VS Code
 extension is the one Runic extension for the Runic SDK and Translations; its Runic
-SDK views stay hidden in workspaces without a Runic SDK project. The Visual Studio
-extension gets the Runic SDK features in 0.22.
+SDK views stay hidden in workspaces without a Runic SDK project. Since 0.22 the
+Visual Studio extension has them too: `dotnet runic dev`, Debug the Window with
+.NET and page breakpoints in one session, doctor and the ViewModels tree. The
+[Visual Studio README](visualstudio/README.md#visual-studio-and-vs-code)
+compares the two extensions feature by feature.
 
 Since 0.22 both extensions are named **Runic DevKit** and have new identities. The
 editors install them next to the former ones, so uninstall those: **Runic**
