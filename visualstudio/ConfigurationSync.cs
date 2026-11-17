@@ -8,7 +8,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
 using StreamJsonRpc;
 
-namespace Runic.Translations.VisualStudio;
+namespace RunicArtifex.DevKit.VisualStudio;
 
 /// <summary>
 /// Opens every <c>runic.json</c> editor buffer on the Runic language server, as VS Code does, so

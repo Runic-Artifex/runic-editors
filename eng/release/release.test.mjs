@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, REPOSITORY, VSIX, assertNewVersion, createRelease, findCiArtifacts, githubPrerelease, prepare,
+import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, REPOSITORY, VSIX, assertNewVersion, createRelease, findCiArtifacts, githubPrerelease, prepare,
   releaseCheck, releaseNotes, scanVsix, selectArtifact, selectCiRun, sha256Sums, verify } from "./release.mjs";
 import { writeVsixFixtures } from "./vsix-fixtures.mjs";
 
@@ -50,8 +50,8 @@ test("each VSIX must carry its identity and the version CI stamps for the releas
   const check = (version, overrides) => { rmSync(vsix, { recursive: true, force: true }); writeVsixFixtures(vsix, version, overrides); return () => scanVsix(vsix, version); };
   try {
     expect(check("0.12.0")().map(p => p.identity)).toEqual([
-      { id: "runic", version: "0.12.1000", publisher: "runic-artifex" },
-      { id: "Runic.Artifex.Translations.Rmf2", version: "0.12.0.1000", publisher: "Runic Artifex" }]);
+      { id: "runic-devkit", version: "0.12.1000", publisher: "runic-artifex" },
+      { id: "RunicArtifex.DevKit.VisualStudio", version: "0.12.0.1000", publisher: "Runic Artifex" }]);
     expect(check("1.0.0-rc.2")().map(p => p.identity.version)).toEqual(["1.0.502", "1.0.0.502"]);
     // The unstamped placeholder of the committed manifests is never released.
     expect(check("0.12.0", { vscode: { version: "0.0.1", packageVersion: "0.0.1" } })).toThrow("declares version 0.0.1, not 0.12.1000");
@@ -65,6 +65,26 @@ test("each VSIX must carry its identity and the version CI stamps for the releas
     expect(check("0.12.0", { vscode: { publisher: "someone" } })).toThrow("declares publisher someone");
     expect(() => scanVsix(vsix, "0.12.0-beta.1")).toThrow("cannot express");
   } finally { rmSync(vsix, { recursive: true, force: true }); }
+});
+
+test("both extensions are Runic DevKit, with the store identities D070.5 fixed", () => {
+  // Store identities are permanent once published: change them only with a new decision record.
+  expect(VSIX.map(({ file, id, publisher }) => [file, id, publisher])).toEqual([
+    ["runic-devkit.vsix", "runic-devkit", "runic-artifex"],
+    ["runic-devkit-vs.vsix", "RunicArtifex.DevKit.VisualStudio", "Runic Artifex"]]);
+  expect(MARKETPLACE).toEqual({ publisher: "runic-artifex", vscode: { itemName: "runic-artifex.runic-devkit" },
+    visualStudio: { internalName: "runic-devkit-vs", itemName: "runic-artifex.runic-devkit-vs" } });
+  expect(`${MARKETPLACE.publisher}.${VSIX[0].id}`).toBe(MARKETPLACE.vscode.itemName);
+  expect(`${MARKETPLACE.publisher}.${MARKETPLACE.visualStudio.internalName}`).toBe(MARKETPLACE.visualStudio.itemName);
+  const vscode = JSON.parse(readFileSync(new URL("../../vscode/package.json", import.meta.url), "utf8"));
+  expect(`${vscode.publisher}.${vscode.name}`).toBe(MARKETPLACE.vscode.itemName);
+  expect(vscode.displayName).toBe("Runic DevKit");
+  const manifest = readFileSync(new URL("../../visualstudio/source.extension.vsixmanifest", import.meta.url), "utf8");
+  expect(manifest).toContain(`<Identity Id="${VSIX[1].id}"`);
+  expect(manifest).toContain("<DisplayName>Runic DevKit</DisplayName>");
+  const ci = workflow("ci.yml").jobs;
+  expect(ci.vscode.steps.find(step => step.with?.name === "vscode-vsix").with.path).toBe(`vscode/artifacts/${VSIX[0].file}`);
+  expect(ci.visualstudio.steps.find(step => step.with?.name === "visualstudio-vsix").with.path).toBe(`visualstudio/artifacts/${VSIX[1].file}`);
 });
 
 test("the candidate inventory and SHA256SUMS cover exactly the two VSIX files of the version, commit and CI run", () => {
@@ -111,7 +131,7 @@ const fakeGh = ({ release = false, tag, draft = false, assets = [], target = sha
   return { spawn, calls };
 };
 const writes = calls => calls.some(c => c[1] === "release" && ["create", "upload", "edit"].includes(c[2]));
-const files = ["a/vscode-vsix/runic.vsix", "a/visualstudio-vsix/runic-translations-visualstudio.vsix", "r/SHA256SUMS"];
+const files = ["a/vscode-vsix/runic-devkit.vsix", "a/visualstudio-vsix/runic-devkit-vs.vsix", "r/SHA256SUMS"];
 
 test("the release check only reads and accepts only a release of this exact commit", () => {
   const { spawn, calls } = fakeGh();
@@ -140,10 +160,10 @@ test("a rerun keeps a release of this commit, never modifies a published one and
   expect(create.slice(4, 7)).toEqual(files);
   expect(create[create.indexOf("--target") + 1]).toBe(sha);
   expect(create).toContain("--generate-notes");
-  ({ spawn, calls } = fakeGh({ release: true, tag: sha, assets: ["runic.vsix"] }));
-  expect(createRelease("1.2.3", sha, files, spawn)).toContain("kept unchanged without runic-translations-visualstudio.vsix, SHA256SUMS");
+  ({ spawn, calls } = fakeGh({ release: true, tag: sha, assets: ["runic-devkit.vsix"] }));
+  expect(createRelease("1.2.3", sha, files, spawn)).toContain("kept unchanged without runic-devkit-vs.vsix, SHA256SUMS");
   expect(writes(calls)).toBe(false);
-  ({ spawn, calls } = fakeGh({ release: true, draft: true, assets: ["runic.vsix"] }));
+  ({ spawn, calls } = fakeGh({ release: true, draft: true, assets: ["runic-devkit.vsix"] }));
   expect(createRelease("1.2.3", sha, files, spawn)).toContain("Completed");
   expect(calls.slice(-2).map(c => c.slice(0, 3))).toEqual([["gh", "release", "upload"], ["gh", "release", "edit"]]);
   expect(calls.at(-1)).toContain("--draft=false");

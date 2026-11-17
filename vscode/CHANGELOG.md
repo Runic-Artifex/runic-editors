@@ -4,6 +4,16 @@ The VS Code extension's changes per runic-editors release. Releases are GitHub
 releases of [runic-editors](https://github.com/Runic-Artifex/runic-editors/releases);
 nothing is published to an extension marketplace.
 
+## 0.22.0
+
+**Runic DevKit.** The extension is renamed **Runic DevKit**
+(`runic-artifex.runic-devkit`, `runic-devkit.vsix`), the name it will have on the
+extension marketplaces. Command IDs, settings, views and Command Palette titles are
+unchanged. VS Code installs it next to **Runic** (`runic-artifex.runic`); on
+activation it offers once to uninstall Runic or Runic MF2 Translations when either
+is still installed. See [Moving from Runic or Runic MF2
+Translations](README.md#moving-from-runic-or-runic-mf2-translations).
+
 ## 0.21.0
 
 - The **ViewModels** view reads the development source map of Runic SDK 0.21

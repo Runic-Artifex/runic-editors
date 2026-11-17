@@ -5,8 +5,8 @@ from the released commit and a `SHA256SUMS` file:
 
 | Asset | Extension |
 | --- | --- |
-| `runic.vsix` | VS Code, `runic-artifex.runic` (Runic SDK and Translations; until 0.11 `runic-translations.vsix`, `runic-artifex.runic-translations`) |
-| `runic-translations-visualstudio.vsix` | Visual Studio 2026, `Runic.Artifex.Translations.Rmf2` |
+| `runic-devkit.vsix` | VS Code, **Runic DevKit**, `runic-artifex.runic-devkit` (Runic SDK and Translations; 0.20–0.21 `runic.vsix`, `runic-artifex.runic`; until 0.11 `runic-translations.vsix`, `runic-artifex.runic-translations`) |
+| `runic-devkit-vs.vsix` | Visual Studio 2026, **Runic DevKit**, `RunicArtifex.DevKit.VisualStudio` (until 0.21 `runic-translations-visualstudio.vsix`, `Runic.Artifex.Translations.Rmf2`) |
 | `SHA256SUMS` | `sha256sum` lines of both VSIX files |
 
 Nothing is published to the VS Code Marketplace, Open VSX or the Visual Studio
@@ -16,9 +16,16 @@ Up to 0.11.0 both extensions were released with Runic Translations
 (runic-translations-sdk), as `0.11.1000` (VS Code) and `0.11.0.1000` (Visual
 Studio). A release from this repository must map above that:
 `eng/release/release.mjs` refuses `0.11.0` and older versions. Since 0.20 the
-VS Code extension is the one Runic extension, `runic-artifex.runic`; VS Code
-installs it next to the former `runic-artifex.runic-translations`, which users
-uninstall ([Moving from Runic MF2 Translations](../../vscode/README.md#moving-from-runic-mf2-translations)).
+VS Code extension is the one Runic extension. Since 0.22 both extensions are
+**Runic DevKit** with new identities (D070.5); the editors install them next to the
+former ones, which users uninstall ([VS Code](../../vscode/README.md#moving-from-runic-or-runic-mf2-translations),
+[Visual Studio](../../visualstudio/README.md#moving-from-runic-mf2-translations)).
+
+The store identities are fixed before the first marketplace listing and are
+permanent once published: VS Code Marketplace and Open VSX
+`runic-artifex.runic-devkit`, Visual Studio Marketplace `runic-artifex.runic-devkit-vs`
+(`publishManifest.json` `internalName` `runic-devkit-vs`). `MARKETPLACE` in
+[`release.mjs`](release.mjs) holds them and `release.test.mjs` pins them.
 
 ## Versioning
 
@@ -118,7 +125,7 @@ never modifies a published release. `release.test.mjs` pins this contract.
 
 ```sh
 sha256sum --check SHA256SUMS
-gh attestation verify runic.vsix -R Runic-Artifex/runic-editors \
+gh attestation verify runic-devkit.vsix -R Runic-Artifex/runic-editors \
   --signer-workflow Runic-Artifex/runic-editors/.github/workflows/release.yml
 ```
 

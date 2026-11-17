@@ -8,7 +8,7 @@ import { PreviewSession, exampleSamples, sampleChoices, type Samples } from "./p
 import { ForwardedWatchers } from "./watchers.js";
 import { OneTimeNotice, errorSummary, localeStatus, parseStatus, statusHtml, statusPresentation, type DocumentInfo, type ServerState, type StatusResult } from "./status.js";
 import { RunicSdk } from "./sdk.js";
-import { commandId, extensionId, formerCommandId, formerExtensionId, formerSettingsInUse, settingValue } from "./identity.js";
+import { commandId, extensionId, formerCommandId, formerExtensionsNotice, formerSettingsInUse, settingValue } from "./identity.js";
 import { canonicalLocale, isOverriddenIn, libraryCatalogChoices, libraryInstallPattern, libraryDocumentProject, libraryLocaleChoices, libraryMessageChoices, libraryScheme, messageLine, overrideSourcePath, overridesAddArguments, unsavedDocuments, type LibraryCatalogs } from "./libraries.js";
 
 /**
@@ -277,13 +277,15 @@ async function renamePart(part: "Input" | "Slot") {
   await apply(client, `runic.rename${part}`, [editor.document.uri.toString(), info.localKey, oldName, name]);
 }
 export function activate(context: vscode.ExtensionContext) {
+  // First: with a former identity active, registering the shared runic.* commands below throws.
+  noticeFormerExtensions();
   output = vscode.window.createOutputChannel("Runic Translations", { log: true }); context.subscriptions.push(output);
   const item = statusItem = vscode.window.createStatusBarItem("runic.translations.status", vscode.StatusBarAlignment.Left, 100);
   item.name = "Runic Translations"; item.command = commandId("showOutput");
   // The Runic SDK features; their views stay hidden in a workspace without a Runic SDK project.
   const runicSdk = sdk = new RunicSdk({ dotnetPath: folder => dotnetPath(folder.uri), translationsStatus: (folder, project) => projectStatusFor(folder, project) });
   context.subscriptions.push(runicSdk, { dispose: () => { if (sdk === runicSdk) sdk = undefined; } });
-  noticeIdentityChange();
+  noticeMovedSettings();
   context.subscriptions.push(item, { dispose: () => { if (statusTimer) clearTimeout(statusTimer); statusItem = undefined; } },
     vscode.commands.registerCommand(commandId("showOutput"), () => output.show(true)),
     vscode.commands.registerCommand(formerCommandId("showOutput"), () => output.show(true)),
@@ -560,15 +562,22 @@ export function activate(context: vscode.ExtensionContext) {
     status: () => statusItem?.text, serverState: (uri: vscode.Uri) => { const folder = vscode.workspace.getWorkspaceFolder(uri); return folder && serverStates.get(folder.uri.toString())?.state; } };
 }
 /**
- * The Translations extension (runic-artifex.runic-translations) is this extension's former identity: installed side by
- * side, both would start a language server for the same files. Say so once per session, and where its settings went.
+ * Runic (runic-artifex.runic, 0.20–0.21) and Runic MF2 Translations (runic-artifex.runic-translations, up to 0.11) are
+ * this extension's former identities. Installed side by side, both register the same runic.* commands and start a
+ * language server for the same files. Say so once per window and offer to uninstall them.
  */
-function noticeIdentityChange() {
-  if (vscode.extensions.getExtension(formerExtensionId)) {
-    const uninstall = "Uninstall Runic MF2 Translations";
-    void vscode.window.showWarningMessage("The Runic extension replaces Runic MF2 Translations (runic-artifex.runic-translations), which is still installed. Uninstall it so only one Runic language server runs.", uninstall)
-      .then(choice => { if (choice === uninstall) void vscode.commands.executeCommand("workbench.extensions.uninstallExtension", formerExtensionId); });
-  }
+function noticeFormerExtensions() {
+  const notice = formerExtensionsNotice(id => vscode.extensions.getExtension(id) !== undefined);
+  if (!notice) return;
+  void vscode.window.showWarningMessage(notice.message, notice.action).then(async choice => {
+    if (choice !== notice.action) return;
+    for (const id of notice.ids) await vscode.commands.executeCommand("workbench.extensions.uninstallExtension", id);
+    const reload = "Reload Window";
+    if (await vscode.window.showInformationMessage("Uninstalled. Reload the window to finish.", reload) === reload) void vscode.commands.executeCommand("workbench.action.reloadWindow");
+  });
+}
+/** The former runicTranslations.* settings still apply; say where they moved. */
+function noticeMovedSettings() {
   const config = vscode.workspace.getConfiguration();
   const former = formerSettingsInUse(key => config.inspect(key));
   if (former.length) output.warn(`${former.join(", ")} still apply; they moved to runic.dotnetPath, runic.translations.serverAssembly and runic.translations.trace.server.`);

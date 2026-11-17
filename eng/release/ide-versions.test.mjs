@@ -6,7 +6,7 @@ import { ideVersions, releaseVersion } from "./ide-versions.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const python = process.platform === "win32" ? "python" : "python3";
-const project = "visualstudio/Runic.Translations.VisualStudio.csproj";
+const project = "visualstudio/RunicArtifex.DevKit.VisualStudio.csproj";
 const read = path => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 const table = [
   ["0.6.0-preview.1", "0.6.0.1", "0.6.1", true],
@@ -136,7 +136,7 @@ test.skipIf(!dotnet)("the Visual Studio project stamps the mapped version from e
 
 test("both manifests take their version from the build, never from a committed number", () => {
   expect(read("visualstudio/source.extension.vsixmanifest"))
-    .toContain('<Identity Id="Runic.Artifex.Translations.Rmf2" Version="|%CurrentProject%;GetRunicVsixVersion|"');
+    .toContain('<Identity Id="RunicArtifex.DevKit.VisualStudio" Version="|%CurrentProject%;GetRunicVsixVersion|"');
   const extension = JSON.parse(read("vscode/package.json"));
   expect(extension.scripts.package).toBe("bun run build && node package.mjs");
   // package.mjs stamps "preview" (always true until 2.0); CI also packages a final release to check it.

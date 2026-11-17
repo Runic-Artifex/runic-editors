@@ -6,8 +6,10 @@ exports.run = async function () {
   const en = vscode.Uri.joinPath(root, 'en.rmf2');
   const document = await vscode.workspace.openTextDocument(en);
   const editor = await vscode.window.showTextDocument(document);
-  const extension = vscode.extensions.getExtension('runic-artifex.runic');
+  const extension = vscode.extensions.getExtension('runic-artifex.runic-devkit');
   assert.ok(extension);
+  // The former identities (identity.ts) are not installed next to it.
+  assert.equal(vscode.extensions.getExtension('runic-artifex.runic'), undefined);
   assert.equal(vscode.extensions.getExtension('runic-artifex.runic-translations'), undefined);
   const api = await extension.activate(); const client = await api.ready(en);
   const position = document.positionAt(document.getText().indexOf('payment ='));

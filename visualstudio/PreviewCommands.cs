@@ -11,7 +11,7 @@ using System.Windows.Input;
 using Newtonsoft.Json.Linq;
 using Span = System.Windows.Documents.Span;
 
-namespace Runic.Translations.VisualStudio;
+namespace RunicArtifex.DevKit.VisualStudio;
 
 internal sealed class PreviewWindow : Window
 {
