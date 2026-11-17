@@ -37,6 +37,9 @@
     <Content Include="../vscode/syntaxes/rmf2.tmLanguage.json" Link="Grammars/rmf2.tmLanguage.json" IncludeInVSIX="true" />
     <Content Include="../LICENSE" Link="LICENSE.txt" TargetPath="LICENSE.txt" IncludeInVSIX="true" />
     <Content Include="README.md" IncludeInVSIX="true" />
+    <!-- Store listing images (<Icon>, <PreviewImage>), rendered by eng/brand/render-icons.sh. -->
+    <Content Include="media/icon.png" IncludeInVSIX="true" />
+    <Content Include="media/preview.png" IncludeInVSIX="true" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />

@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import shutil
+import struct
 import zipfile
 import xml.etree.ElementTree as ET
 
@@ -38,6 +39,56 @@ if args.print_version:
     print(expected_version)
     raise SystemExit(0)
 
+# The store identity is permanent once published (D070.5); eng/release/release.mjs MARKETPLACE holds it and
+# release.test.mjs checks that publishManifest.json agrees.
+STORE_PUBLISHER = 'runic-artifex'
+STORE_INTERNAL_NAME = 'runic-devkit-vs'
+# vsix-publish schema (https://json.schemastore.org/vsix-publish): 1-3 of its categories.
+STORE_CATEGORIES = {'build', 'coding', 'data', 'debugging', 'documentation', 'extension sdk', 'framework and libraries',
+                    'other', 'performance', 'programming languages', 'security', 'source control', 'testing', 'web'}
+# Listing images: <Icon> 32x32 in lists, <PreviewImage> 200x200 (VSIX schema 2.0 reference).
+LISTING_IMAGES = {'Icon': 32, 'PreviewImage': 200}
+
+
+def png_size(data):
+    assert data[:8] == b'\x89PNG\r\n\x1a\n' and data[12:16] == b'IHDR', 'Listing image is not a PNG'
+    return struct.unpack('>II', data[16:24])
+
+
+def listing_contract(manifest):
+    """The store listing fields of the Metadata element, checked against the Marketplace limits."""
+    metadata = manifest.find('v:Metadata', ns)
+    text = lambda name: (metadata.findtext(f'v:{name}', namespaces=ns) or '').strip()
+    listing = {name: text(name) for name in ('DisplayName', 'MoreInfo', 'ReleaseNotes', 'Icon', 'PreviewImage', 'Tags', 'Preview')}
+    assert 0 < len(listing['DisplayName']) <= 50, 'DisplayName must have 1 to 50 characters'
+    assert 0 < len(text('Description')) <= 1000, 'Description must have 1 to 1000 characters'
+    assert 0 < len(listing['Tags']) <= 100, 'Tags must have 1 to 100 characters'
+    assert listing['Preview'] == 'true', 'The extension is a preview product: <Preview>true</Preview>'
+    for name in ('MoreInfo', 'ReleaseNotes'):
+        assert listing[name].startswith('https://'), f'{name} must be an https URL'
+    for name in LISTING_IMAGES:
+        listing[name] = listing[name].replace('\\', '/')
+        assert listing[name], f'<{name}> is missing'
+    return tuple(sorted(listing.items()))
+
+
+def check_publish_manifest():
+    publish = json.loads((root / 'publishManifest.json').read_text(encoding='utf-8'))
+    assert publish.get('publisher') == STORE_PUBLISHER, f'publishManifest.json publisher must be {STORE_PUBLISHER}'
+    assert publish.get('identity') == {'internalName': STORE_INTERNAL_NAME}, f'publishManifest.json internalName must be {STORE_INTERNAL_NAME}'
+    categories = publish.get('categories') or []
+    assert 1 <= len(categories) <= 3 and len(set(categories)) == len(categories) and set(categories) <= STORE_CATEGORIES, 'publishManifest.json needs 1-3 Marketplace categories'
+    overview = root / publish.get('overview', '')
+    assert publish.get('overview') and overview.is_file(), 'publishManifest.json overview must name an existing file'
+    text = overview.read_text(encoding='utf-8')
+    assert not re.search(r'\]\((?!https://|#)', text), 'overview.md links must be absolute https URLs'
+    assert 'http://' not in text and '.svg' not in text.lower(), 'overview.md must not use http or SVG images'
+    assert publish.get('qna') is False, 'Marketplace Q&A stays off (D070.14)'
+    assert publish.get('priceCategory') == 'free' and publish.get('private') is False, 'The extension is free and public'
+    assert publish.get('repo', '').startswith('https://github.com/Runic-Artifex/runic-editors'), 'publishManifest.json repo must be this repository'
+    assert not publish.get('assetFiles'), 'overview.md uses no images, so publishManifest.json has no assetFiles'
+
+
 def manifest_contract(manifest):
     identity = manifest.find('v:Metadata/v:Identity', ns)
     target = manifest.find('v:Installation/v:InstallationTarget', ns)
@@ -56,6 +107,7 @@ def manifest_contract(manifest):
         'target': (tuple(sorted(target.attrib.items())), target.findtext('v:ProductArchitecture', namespaces=ns)),
         'prerequisite': tuple(sorted(prerequisite.attrib.items())),
         'assets': assets,
+        'listing': listing_contract(manifest),
     }
 
 source_contract = manifest_contract(ET.parse(source_manifest).getroot())
@@ -75,7 +127,13 @@ if args.check_source:
         ('Microsoft.VisualStudio.VsPackage', 'Runic.pkgdef'),
         ('Microsoft.VisualStudio.VsPackage', 'RunicArtifex.DevKit.VisualStudio.pkgdef'),
     }, 'Unexpected source VSIX asset contract'
-    print(f'PASS source VSIX manifest, host range and prerequisite contract; {release_version} stamps version {expected_version}')
+    listing = dict(source_contract['listing'])
+    for name, size in LISTING_IMAGES.items():
+        image = root / listing[name]
+        assert image.is_file(), f'<{name}> {listing[name]} does not exist'
+        assert png_size(image.read_bytes()) == (size, size), f'<{name}> must be a {size}x{size} PNG'
+    check_publish_manifest()
+    print(f'PASS source VSIX manifest, host range, prerequisite, store listing and publishManifest.json contract; {release_version} stamps version {expected_version}')
     raise SystemExit(0)
 
 source = args.input or root / 'bin' / args.configuration / 'net472/RunicArtifex.DevKit.VisualStudio.vsix'
@@ -95,6 +153,10 @@ with zipfile.ZipFile(source) as archive:
     dlls = [name for name in names if name.lower().endswith('.dll')]
     assert sorted(dlls) == ['RunicArtifex.DevKit.VisualStudio.Core.dll', 'RunicArtifex.DevKit.VisualStudio.dll'], 'Ship only the extension and its Core library; do not redistribute VS-owned assemblies'
     assert all(archive.read(dll)[:2] == b'MZ' for dll in dlls), 'Missing managed extension'
+    for name, size in LISTING_IMAGES.items():
+        path = dict(embedded['listing'])[name]
+        assert path in names, f'The VSIX does not contain its <{name}> {path}'
+        assert png_size(archive.read(path)) == (size, size), f'<{name}> must be a {size}x{size} PNG'
     assert 'rmf2' in json.loads(archive.read('Grammars/rmf2.tmLanguage.json'))['fileTypes']
 output = root / 'artifacts/runic-devkit-vs.vsix'
 output.parent.mkdir(exist_ok=True)
