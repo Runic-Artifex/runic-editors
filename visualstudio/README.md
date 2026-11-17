@@ -431,7 +431,8 @@ The VS host dependency set is pinned separately from the SDK's modern runtime
 packages: in-process dependencies target the Visual Studio 17.14 API surface.
 The declared host range is `[18.0,19.0)`, Visual Studio 2026 only. Native
 evidence covers Visual Studio Community 2026 18.8.2 (see
-[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07)).
+[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07))
+and 18.12.0 ([Windows integration check](#windows-integration-check)).
 `packages.lock.json` records the graph. The VSIX contains only the extension's
 own managed assembly; VS-owned DLLs resolve from the host.
 
