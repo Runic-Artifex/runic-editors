@@ -90,8 +90,9 @@ internal static class PageAttach
     /// or when <paramref name="stillRunning"/> turns false; <paramref name="status"/> reports progress.
     /// Returns the attached pages' names.
     /// </summary>
-    public static async Task<IReadOnlyList<string>> WaitForPageAsync(string url, Func<bool>? stillRunning, Func<string, Task> status, CancellationToken cancellationToken)
+    public static async Task<IReadOnlyList<string>> WaitForPageAsync(string url, int? debuggedProcess, Func<bool>? stillRunning, Func<string, Task> status, CancellationToken cancellationToken)
     {
+        var settled = System.Diagnostics.Stopwatch.StartNew();
         // Wall-clock time of the Window running; an iteration that ends in break mode does not count.
         var waited = TimeSpan.Zero;
         var step = TimeSpan.FromMilliseconds(500);
@@ -107,7 +108,10 @@ internal static class PageAttach
                 answered = true;
                 await status($"Runic: attaching the JavaScript debugger to {url}…");
             }
-            if (answered)
+            // Attach2 while the debugger is still starting the launched process can hang (VS 18.12): wait until it
+            // runs that process, in run mode, for a moment.
+            if (debuggedProcess is { } id && !await RunsAsync(id)) settled.Restart();
+            if (answered && settled.Elapsed >= SettleTime)
             {
                 var attached = await TryAttachAsync(url, cancellationToken, listing =>
                 {
@@ -123,6 +127,22 @@ internal static class PageAttach
                     ? $"The DevTools endpoint {url} answered, but showed no page within {Math.Round(PageTimeout.TotalMinutes)} minutes. Use Attach to the Page once the Window shows its page."
                     : $"The page's DevTools endpoint {url} did not answer within {Math.Round(PageTimeout.TotalMinutes)} minutes of the Window running.{(IsElevated() ? " Visual Studio runs as administrator, so WebView2 ignores the port; run it without elevation." : "")} The .NET debugger stays attached; use Attach to the Page once the Window shows its page.");
         }
+    }
+
+    private static readonly TimeSpan SettleTime = TimeSpan.FromSeconds(2);
+
+    /// <summary>Whether the debugger is in run mode and debugs the process.</summary>
+    private static async Task<bool> RunsAsync(int processId)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        try
+        {
+            if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is not EnvDTE.DTE dte || dte.Debugger.CurrentMode != EnvDTE.dbgDebugMode.dbgRunMode) return false;
+            foreach (EnvDTE.Process process in dte.Debugger.DebuggedProcesses)
+                if (process.ProcessID == processId) return true;
+            return false;
+        }
+        catch (COMException) { return false; }
     }
 
     private static async Task<bool> InBreakModeAsync()
@@ -163,6 +183,7 @@ internal static class PageAttach
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
                 string name = page.Name;
+                SdkOutput.WriteLine($"Attaching the JavaScript debugger to {name} ({qualifier}).");
                 await RetryAsync(() => { ThreadHelper.ThrowIfNotOnUIThread(); page.Attach2(DebugEngines.JavaScriptOverCdp); return true; }, cancellationToken);
                 attached.Add(name);
             }

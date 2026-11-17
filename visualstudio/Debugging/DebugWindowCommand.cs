@@ -90,7 +90,7 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         await PageAttach.SetStatusAsync($"Runic: waiting for the page's DevTools endpoint {plan.EndpointUrl}…");
         try
         {
-            var pages = await PageAttach.WaitForPageAsync(plan.EndpointUrl, () => PageAttach.IsRunning(processId), PageAttach.SetStatusAsync, cancellationToken);
+            var pages = await PageAttach.WaitForPageAsync(plan.EndpointUrl, processId, () => PageAttach.IsRunning(processId), PageAttach.SetStatusAsync, cancellationToken);
             SdkOutput.WriteLine($"Attached the JavaScript debugger to {string.Join(", ", pages)} ({plan.EndpointUrl}).");
             if (session.Frontend?.DevelopmentServer != null)
                 SdkOutput.WriteLine("TSX and TS breakpoints bind through the development server's source maps with absolute sources, which runic-sdk 0.22's vite-plugin-runic writes.");
