@@ -347,7 +347,7 @@ work when the settings are empty; set them before starting Visual Studio.
 - **Windows x64 and Visual Studio 2026 only.** The manifest declares
   `[18.0,19.0)` and the `amd64` architecture. There is no ARM64 build, because
   there is no ARM64 test machine. The native integration check last passed on
-  Visual Studio Community 2026 18.8.2; the range is not evidence that every
+  Visual Studio Community 2026 18.12.0; the range is not evidence that every
   18.x release has been run.
 - **No Rename Input, Rename Slot, Extract Group or Inline Resource yet.** These
   refactorings come from the language server through standard LSP (F2 and the
@@ -431,48 +431,52 @@ The VS host dependency set is pinned separately from the SDK's modern runtime
 packages: in-process dependencies target the Visual Studio 17.14 API surface.
 The declared host range is `[18.0,19.0)`, Visual Studio 2026 only. Native
 evidence covers Visual Studio Community 2026 18.8.2 (see
-[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07)).
+[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07))
+and 18.12.0 ([Windows integration check](#windows-integration-check)).
 `packages.lock.json` records the graph. The VSIX contains only the extension's
 own managed assembly; VS-owned DLLs resolve from the host.
 
 ## Windows integration check
 
-Use a dedicated experimental instance; the maintained test expects
-`/RootSuffix RunicRmf2` and a signed-in interactive Windows desktop. The script
-copies the maintained payment fixture and explicitly activates
-`rmf2-execution-v2`. Every step passed on Visual Studio 2026 18.8.2 on
-2026-10-07. See
-[RMF2 validation](https://github.com/Runic-Artifex/runic-translations-sdk/blob/main/docs/guides/translations/rmf2-validation.md#visual-studio-2026-journey-after-the-server-fix-2026-10-07).
-To run the check:
+The native check runs the installed VSIX in Visual Studio 2026 on a signed-in
+Windows desktop; hosted CI runners have none, so it runs by hand before each
+release. It passed on Visual Studio Community 2026 18.12.0 on 2026-11-17.
+[`test/README.md`](test/README.md) describes it in full, with the manual
+checklist for what needs human eyes.
 
-1. Build the VSIX, or use the CI `visualstudio-vsix` artifact. Install with
-   `VSIXInstaller.exe /rootSuffix:RunicRmf2 /quiet <native-built.vsix>`.
-   After a reinstall into an existing profile, run
-   `devenv.exe /RootSuffix RunicRmf2 /updateconfiguration` once. Otherwise
-   the MEF catalog can omit the new client.
-2. Run `dotnet tool restore` in this repository (it installs the
-   `dotnet-runic-translations` release of `.config/dotnet-tools.json` from
-   NuGet), or set `RUNIC_TRANSLATIONS_SERVER` to the absolute DLL of a local
-   server build, before starting
-   `devenv.exe <document.rmf2> /RootSuffix RunicRmf2 /Log`. Opening an MF2
-   document activates LSP. Put the document before `/Log`, because `/Log`
-   treats its next argument as the log file path.
-3. Run the native interaction check. The runner script lives in a
-   `runic-sdk` checkout. Pass this repository's test script by absolute path:
+1. Use the CI `visualstudio-vsix` artifact of the commit under test, or build
+   the VSIX. Close every Visual Studio instance of `/RootSuffix RunicRmf2`: the
+   check starts and quits its own. The first start of a new experimental
+   instance shows Visual Studio's first-run dialogs; start
+   `devenv.exe /RootSuffix RunicRmf2` once by hand and close them.
+2. Run, as the signed-in user (over SSH or from a console, no elevation):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:/src/runic-sdk/tests/native/Runic.Desktop.WebViewSmoke/run-windows-ui-automation.ps1 `
-  -Executable "C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/devenv.exe" `
-  -AutomationScript C:/src/runic-editors/visualstudio/test/native-host.ps1 `
-  -ReceiptPath C:/src/runic-editors/artifacts/rmf2-vs-host.json
+powershell -NoProfile -ExecutionPolicy Bypass -File visualstudio/test/run-native-checks.ps1 -Vsix <runic-devkit-vs.vsix>
 ```
 
-The runner schedules the test in the signed-in desktop session and removes its
-scheduled task afterward. The test creates and removes its own temporary payment
-fixture, exercises registered commands and native preview controls, and checks
-invalid-number recovery, locale switching and unsaved text after server restart.
-The shared LSP integration suite separately covers diagnostics, navigation,
-versioned rename, cancellation and refusal of partial application renames.
+`run-native-checks.ps1` uninstalls Runic MF2 Translations from the instance,
+installs the VSIX with `VSIXInstaller.exe /quiet /rootSuffix:RunicRmf2`, runs
+`devenv.exe /RootSuffix RunicRmf2 /updateconfiguration` (otherwise the MEF
+catalog can omit the new client after a reinstall), and starts
+`test/native-host.ps1` in the desktop session through a temporary Interactive
+scheduled task, which it removes afterwards. It prints `PASS Runic DevKit
+<version> native check` or the first failed check; the receipt, its log and
+Visual Studio's activity log stay in `visualstudio/artifacts/`. `-SkipInstall`
+checks the VSIX already installed, `-RootSuffix` names another instance.
+
+`native-host.ps1` copies `fixtures/rmf2` and `fixtures/sdk-app` into a
+temporary solution, restores the language server and `dotnet-runic` from a tool
+manifest, and checks: the installed VSIX version; every `Commands.vsct` command;
+the package and the Runic tool window; the dev session follower (ready, Open the
+dev Session File, stopped once `dev` ends); the real `dotnet runic doctor`; the
+language server; Preview Message with invalid-number recovery, locale switching
+and samples; and an unsaved buffer after Restart Language Server. It removes the
+temporary folder afterwards. runic-sdk's
+`tests/native/Runic.Desktop.WebViewSmoke/run-windows-ui-automation.ps1` can also
+start it (`-AutomationScript`) once the VSIX is installed. The shared LSP
+integration suite separately covers diagnostics, navigation, versioned rename,
+cancellation and refusal of partial application renames.
 
 When repeatedly reinstalling the same development version, Visual Studio can
 retain stale extension/component metadata. Close the experimental instance and

@@ -95,6 +95,9 @@ def manifest_contract(manifest):
     prerequisite = manifest.find('v:Prerequisites/v:Prerequisite', ns)
     assert identity is not None, 'VSIX identity is missing'
     assert target is not None, 'VSIX installation target is missing'
+    # Visual Studio x64 only (D070.14): one target with one architecture, so no ARM64 target is published untested.
+    architectures = [element.text for element in manifest.findall('v:Installation/v:InstallationTarget/v:ProductArchitecture', ns)]
+    assert len(manifest.findall('v:Installation/v:InstallationTarget', ns)) == 1 and architectures == ['amd64'], 'The VSIX targets Visual Studio x64 (amd64) only (D070.14)'
     assert prerequisite is not None, 'VSIX core-editor prerequisite is missing'
     assets = tuple(sorted(
         tuple(sorted((name, value.replace('\\', '/') if name == 'Path' else value) for name, value in asset.attrib.items()))
