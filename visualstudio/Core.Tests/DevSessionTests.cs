@@ -41,6 +41,27 @@ public class DevSessionTests
         public DevProcessInfo? FindProcess(int processId) => Processes.TryGetValue(processId, out var info) ? info : null;
     }
 
+    /// <summary>An in-memory dev-stopped stamp: file times the test sets, touches it counts, and a read-only directory.</summary>
+    private sealed class MemoryStamp : IDevStoppedStamp
+    {
+        public Dictionary<string, DateTime> Times { get; } = new();
+        public List<string> Touches { get; } = new();
+        public bool ReadOnly { get; set; }
+        public DateTime? LastWriteTimeUtc(string path) => Times.TryGetValue(path, out var time) ? time : null;
+        public void Touch(string path)
+        {
+            if (ReadOnly) throw new UnauthorizedAccessException("Access to the path is denied.");
+            Touches.Add(path);
+            Times[path] = DateTime.UtcNow;
+        }
+    }
+
+    private sealed class Lines : IRunicOutput
+    {
+        public List<string> All { get; } = new();
+        public void WriteLine(string line) => All.Add(line);
+    }
+
     private static string WithState(string text, string state) => text.Replace("\"state\": \"ready\"", $"\"state\": \"{state}\"");
 
     // ---- Session file -----------------------------------------------------------------------------------------------
@@ -148,6 +169,79 @@ public class DevSessionTests
     }
 
     [Test]
+    public void The_stopped_stamp_is_needed_only_for_a_starting_or_ready_session_whose_dev_exited_and_not_stamped_since()
+    {
+        var session = DevSessions.Parse(Fixture("dev-session-ready.json"))!;
+        var stopped = DevSessions.Parse(WithState(Fixture("dev-session-ready.json"), "stopped"))!;
+        var written = new DateTime(2026, 11, 17, 12, 0, 0, DateTimeKind.Utc);
+        var exited = new DevSnapshot(DevState.Stopped, session, exited: true);
+        Check.True(DevSessions.NeedsStoppedStamp(exited, null, written), "no stamp yet");
+        Check.True(DevSessions.NeedsStoppedStamp(exited, written.AddHours(-1), written), "the last clean stop's stamp");
+        Check.True(DevSessions.NeedsStoppedStamp(exited, written, null), "session time unknown");
+        Check.True(!DevSessions.NeedsStoppedStamp(exited, written.AddSeconds(1), written), "stamped since the session was written");
+        Check.True(!DevSessions.NeedsStoppedStamp(exited, written, written), "stamped as the session was written");
+        Check.True(!DevSessions.NeedsStoppedStamp(new DevSnapshot(DevState.Ready, session, exited: false), null, written), "a live dev");
+        Check.True(!DevSessions.NeedsStoppedStamp(new DevSnapshot(DevState.Stopped, stopped, exited: false), null, written), "a file that says stopped");
+        Check.True(!DevSessions.NeedsStoppedStamp(DevSnapshot.None, null, null), "no session");
+        Check.Equal(Path.Combine(Path.GetDirectoryName(DevSessions.PathFor("/app/App.csproj"))!, "dev-stopped"), DevSessions.StoppedStampPathFor(DevSessions.PathFor("/app/App.csproj")));
+    }
+
+    [Test]
+    public void The_follower_touches_dev_stopped_once_per_dead_dev_and_never_for_a_live_or_stopped_one()
+    {
+        var source = new MemorySource();
+        var stamp = new MemoryStamp();
+        var lines = new Lines();
+        var follower = new DevSessionFollower("/app/App.csproj", source, stamp: stamp, output: lines);
+        string ready = Fixture("dev-session-ready.json");
+        source.Processes[41250] = new DevProcessInfo(DevStarted, "dotnet");
+        source.Files[follower.Path] = WithState(ready, "starting");
+        follower.Refresh();
+        source.Files[follower.Path] = ready;
+        follower.Refresh();
+        // A live dev, and one whose start time cannot be read, are never stamped.
+        source.Processes[41250] = new DevProcessInfo(null, null);
+        follower.Refresh();
+        Check.Equal(0, stamp.Touches.Count);
+        // Killed: the stamp beside this session file, once, however often the follower polls.
+        source.Processes.Remove(41250);
+        Check.True(follower.Refresh().Exited, "exited");
+        follower.Refresh();
+        follower.Refresh();
+        Check.Same(new[] { follower.StoppedStampPath }, stamp.Touches);
+        Check.Equal(Path.Combine(Path.GetDirectoryName(follower.Path)!, "dev-stopped"), follower.StoppedStampPath);
+        Check.True(lines.All.Single().Contains("process 41250") && lines.All.Single().Contains("dev-stopped"), string.Join("\n", lines.All));
+        // A file that says stopped: dev touched the stamp itself.
+        source.Files[follower.Path] = WithState(ready, "stopped");
+        follower.Refresh();
+        Check.Equal(1, stamp.Touches.Count);
+        // A new dev with another process ID that is killed is stamped again.
+        source.Files[follower.Path] = ready.Replace("\"processId\": 41250,", "\"processId\": 41300,");
+        follower.Refresh();
+        Check.Equal(2, stamp.Touches.Count);
+
+        // A stamp already newer than the session file (touched before a restart, or by another IDE) is left alone.
+        var again = new MemoryStamp();
+        var restarted = new DevSessionFollower("/app/App.csproj", source, stamp: again);
+        again.Times[restarted.Path] = DateTime.UtcNow.AddMinutes(-5);
+        again.Times[restarted.StoppedStampPath] = DateTime.UtcNow.AddMinutes(-1);
+        Check.True(restarted.Refresh().Exited, "exited");
+        Check.Equal(0, again.Touches.Count);
+
+        // A read-only obj/runic is logged, not thrown, and not retried on each poll.
+        var denied = new MemoryStamp { ReadOnly = true };
+        var deniedLines = new Lines();
+        var readOnly = new DevSessionFollower("/app/App.csproj", source, stamp: denied, output: deniedLines);
+        Check.True(readOnly.Refresh().Exited, "exited");
+        readOnly.Refresh();
+        Check.Equal(1, deniedLines.All.Count);
+        Check.True(deniedLines.All[0].Contains("could not be touched"), deniedLines.All[0]);
+
+        // Without a stamp (another source), the follower only reads.
+        Check.True(new DevSessionFollower("/app/App.csproj", source).Refresh().Exited, "exited");
+    }
+
+    [Test]
     public void The_follower_reads_a_session_file_replaced_atomically_and_a_real_process_by_its_start_time()
     {
         string root = Path.Combine(Path.GetTempPath(), $"runic-vs-dev-{Guid.NewGuid():N}");
@@ -157,7 +251,8 @@ public class DevSessionTests
         {
             string project = Path.Combine(root, "App.csproj");
             File.WriteAllText(project, "<Project />");
-            var follower = new DevSessionFollower(project);
+            var lines = new Lines();
+            var follower = new DevSessionFollower(project, output: lines);
             void Replace(int processId, DateTimeOffset started, string owner = "ide")
             {
                 string text = Fixture("dev-session-no-window.json")
@@ -177,13 +272,30 @@ public class DevSessionTests
             // The same process ID with another start time is a reused ID.
             Replace(sleeper.Id, started.AddHours(-1));
             Check.True(follower.Refresh().Exited, "reused ID");
+            // A reused ID means that dev is gone: dev-stopped is touched. Take it away, and follow anew (once per
+            // process ID) to see a killed dev's own touch.
+            Check.True(File.Exists(follower.StoppedStampPath), "the reused ID's dev-stopped");
+            File.Delete(follower.StoppedStampPath);
             Replace(sleeper.Id, started, owner: "dev");
+            follower = new DevSessionFollower(project, output: lines);
             Check.Equal("ready", follower.Refresh().Label);
+            Check.True(!File.Exists(follower.StoppedStampPath), "no stamp while dev runs");
             sleeper.Kill();
             sleeper.WaitForExit();
+            var before = DateTime.UtcNow.AddSeconds(-2);
             var stopped = follower.Refresh();
             Check.Equal(DevState.Stopped, stopped.State);
             Check.True(stopped.Exited, "a dead dev exited");
+            Check.True(File.Exists(follower.StoppedStampPath), "the killed dev's dev-stopped");
+            Check.Equal(0L, new FileInfo(follower.StoppedStampPath).Length);
+            Check.True(File.GetLastWriteTimeUtc(follower.StoppedStampPath) >= before, "touched now");
+            Check.True(File.GetLastWriteTimeUtc(follower.StoppedStampPath) >= File.GetLastWriteTimeUtc(follower.Path), "newer than the session file");
+
+            // A missing obj/runic is logged, not thrown.
+            string other = Path.Combine(root, "Other", "Other.csproj");
+            var missing = new DevSessionFollower(other, new MemorySource { Files = { [DevSessions.PathFor(other)] = File.ReadAllText(follower.Path) } }, stamp: FileSystemDevSessionSource.Instance, output: lines);
+            Check.True(missing.Refresh().Exited, "exited");
+            Check.True(lines.All.Last().Contains("could not be touched"), lines.All.Last());
         }
         finally
         {

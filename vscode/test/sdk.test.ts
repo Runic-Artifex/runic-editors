@@ -1,12 +1,13 @@
 import { test, expect } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, mkdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { detectToolVersion, devArguments, forceStop, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
-import { DevSessionFollower, devSessionPath, devSessionSchema, devStateLabel, isDevCommandLine, isRunningDevProcess, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
+import { DevSessionFollower, devSessionPath, devSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
 import { detectWorkspace, isRunicSdkProject, projectRunicToolVersion, runicToolVersion } from "../src/workspace.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor } from "../src/doctor.js";
@@ -125,6 +126,82 @@ test("a ready session whose dotnet runic dev process is dead reads as stopped", 
   expect(follower.snapshot.exited).toBeUndefined();
 });
 
+test("the dev-stopped stamp is needed only for a starting or ready session whose dev exited and not stamped since", () => {
+  const written = Date.parse("2026-11-17T12:00:00Z");
+  const exited: DevSnapshot = { state: "stopped", session: session(), exited: true };
+  expect(needsStoppedStamp(exited, undefined, written)).toBe(true);
+  expect(needsStoppedStamp(exited, written - 3_600_000, written)).toBe(true);
+  expect(needsStoppedStamp(exited, written, undefined)).toBe(true);
+  expect(needsStoppedStamp({ ...exited, session: session({ state: "starting" }) }, undefined, written)).toBe(true);
+  expect(needsStoppedStamp(exited, written + 1000, written)).toBe(false);
+  expect(needsStoppedStamp(exited, written, written)).toBe(false);
+  expect(needsStoppedStamp({ state: "ready", session: session() }, undefined, written)).toBe(false);
+  expect(needsStoppedStamp({ state: "stopped", session: session({ state: "stopped" }) }, undefined, written)).toBe(false);
+  expect(needsStoppedStamp({ state: "none" })).toBe(false);
+  expect(devStoppedStampPath(devSessionPath("/app/App.csproj"))).toBe(join("/app", "obj", "runic", "dev-stopped"));
+});
+
+/** A follower whose file times, touches and liveness the test controls. */
+function stampFollower(options: { readOnly?: boolean; times?: Map<string, number> } = {}) {
+  const files = new Map<string, string>();
+  const alive = new Set<number>();
+  const times = options.times ?? new Map<string, number>();
+  const touches: string[] = [];
+  const logs: string[] = [];
+  const follower = new DevSessionFollower("/app/App.csproj", {
+    read: async path => files.get(path), isRunning: async pid => alive.has(pid), modified: async path => times.get(path),
+    touch: async path => { if (options.readOnly) throw new Error("EACCES: permission denied"); touches.push(path); times.set(path, Date.now()); },
+  }, undefined, message => logs.push(message));
+  return { files, alive, times, touches, logs, follower, write: (value: DevSession) => files.set(follower.path, JSON.stringify(value)) };
+}
+
+test("the follower touches dev-stopped once per dead dev, and never for a live or stopped one", async () => {
+  const { alive, touches, logs, follower, write } = stampFollower();
+  alive.add(41250);
+  write(session({ state: "starting" }));
+  await follower.refresh();
+  write(session());
+  await follower.refresh();
+  expect(touches).toEqual([]);
+  // Killed: the stamp beside this session file, once, however often the follower polls (also concurrently).
+  alive.delete(41250);
+  await Promise.all([follower.refresh(), follower.refresh()]);
+  await follower.refresh();
+  expect(touches).toEqual([follower.stoppedStampPath]);
+  expect(follower.stoppedStampPath).toBe(join("/app", "obj", "runic", "dev-stopped"));
+  expect(logs).toHaveLength(1);
+  expect(logs[0]).toContain("process 41250");
+  // A file that says stopped: dev touched the stamp itself.
+  write(session({ state: "stopped" }));
+  await follower.refresh();
+  expect(touches).toHaveLength(1);
+  // Another dev that is killed is stamped again.
+  write(session({ processId: 41300 }));
+  await follower.refresh();
+  expect(touches).toHaveLength(2);
+});
+
+test("the follower leaves a stamp newer than the session file alone and logs a read-only obj/runic", async () => {
+  const times = new Map<string, number>();
+  const restarted = stampFollower({ times });
+  times.set(restarted.follower.path, Date.now() - 300_000);
+  times.set(restarted.follower.stoppedStampPath, Date.now() - 60_000);
+  restarted.write(session());
+  expect(await restarted.follower.refresh()).toMatchObject({ state: "stopped", exited: true });
+  expect(restarted.touches).toEqual([]);
+
+  const denied = stampFollower({ readOnly: true });
+  denied.write(session());
+  expect(await denied.follower.refresh()).toMatchObject({ state: "stopped", exited: true });
+  await denied.follower.refresh();
+  expect(denied.logs).toHaveLength(1);
+  expect(denied.logs[0]).toContain("could not be touched");
+
+  // A source without file times (memoryFollower) only reads.
+  const { follower } = memoryFollower(JSON.stringify(session()));
+  expect(await follower.refresh()).toMatchObject({ state: "stopped", exited: true });
+});
+
 test("an unreadable or foreign session file keeps the last snapshot; a deleted one is none", async () => {
   const { files, alive, follower, write } = memoryFollower();
   alive.add(41250);
@@ -144,7 +221,8 @@ test("the follower reads a session file that dev replaces atomically, and a real
     await new Promise(resolveSpawn => fake.once("spawn", resolveSpawn));
     const project = join(root, "App.csproj");
     writeFileSync(project, "<Project />");
-    const follower = new DevSessionFollower(project);
+    const logs: string[] = [];
+    let follower = new DevSessionFollower(project, undefined, undefined, message => logs.push(message));
     mkdirSync(join(root, "obj", "runic"), { recursive: true });
     const replace = (value: DevSession) => {
       // dev writes a temporary file and renames it over the session file, so a reader never sees half of one.
@@ -162,12 +240,29 @@ test("the follower reads a session file that dev replaces atomically, and a real
     // A process ID that is not dotnet runic dev (this test runner) does not count, as after a reused ID.
     replace(session({ processId: process.pid, project }));
     expect(await follower.refresh()).toMatchObject({ state: "stopped", exited: true });
+    // That dev is gone too: dev-stopped is touched. Take it away to see a killed dev's own touch.
+    expect(existsSync(follower.stoppedStampPath)).toBe(true);
+    rmSync(follower.stoppedStampPath);
     replace(session({ processId: fake.pid!, project }));
+    follower = new DevSessionFollower(project, undefined, undefined, message => logs.push(message));
     expect((await follower.refresh()).state).toBe("ready");
+    expect(existsSync(follower.stoppedStampPath)).toBe(false);
     fake.kill("SIGKILL");
     await new Promise(resolveExit => fake.once("exit", resolveExit));
     expect(await isRunningDevProcess(fake.pid!)).toBe(false);
+    const before = Date.now() - 2000;
     expect(await follower.refresh()).toMatchObject({ state: "stopped", exited: true });
+    const stamp = statSync(follower.stoppedStampPath);
+    expect(stamp.size).toBe(0);
+    expect(stamp.mtimeMs).toBeGreaterThanOrEqual(before);
+    expect(stamp.mtimeMs).toBeGreaterThanOrEqual(statSync(follower.path).mtimeMs);
+    expect(logs.at(-1)).toContain("touched");
+    // A missing obj/runic is logged, not thrown.
+    const other = join(root, "Other", "Other.csproj");
+    const missing = new DevSessionFollower(other, { read: async () => JSON.stringify(session({ processId: fake.pid!, project: other })), isRunning: async () => false,
+      modified: async () => undefined, touch: path => writeFile(path, "") }, undefined, message => logs.push(message));
+    expect(await missing.refresh()).toMatchObject({ state: "stopped", exited: true });
+    expect(logs.at(-1)).toContain("could not be touched");
   } finally { fake.kill("SIGKILL"); rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 /** The session file schema this extension reads; later versions of the schema only add properties. */
@@ -33,6 +33,30 @@ export interface DevSnapshot { state: DevState; session?: DevSession; exited?: b
 /** The session file of a project: `obj/runic/dev-session.json` beside the project file (the default `BaseIntermediateOutputPath`). */
 export function devSessionPath(project: string): string {
   return join(dirname(project), "obj", "runic", "dev-session.json");
+}
+
+/**
+ * The stamp that `dotnet runic dev` touches when it stops (runic-sdk `DevSession.StoppedStampName`). Visual Studio's
+ * fast up-to-date check compares it with the build's `runic-www.stamp`, so the next build copies the frontend over the
+ * development pages that `dev` left in `www/`.
+ */
+export const devStoppedStampName = "dev-stopped";
+
+/** The `dev-stopped` stamp beside a session file (`obj/runic/dev-stopped`). */
+export function devStoppedStampPath(sessionPath: string): string {
+  return join(dirname(sessionPath), devStoppedStampName);
+}
+
+/**
+ * Whether the follower touches `dev-stopped` for this snapshot (Visual Studio: `DevSessions.NeedsStoppedStamp`): only
+ * when the file still says starting or ready and its `dev` no longer runs (`exited`; not for a live process or a file
+ * that says stopped, whose `dev` touched it), and not when the stamp is already at least as new as the session file
+ * (milliseconds since the epoch; an earlier touch for this session, also from another editor or before a reload). The
+ * follower adds: at most once per process ID.
+ */
+export function needsStoppedStamp(snapshot: DevSnapshot, stampWritten?: number, sessionWritten?: number): boolean {
+  if (!snapshot.exited || (snapshot.session?.state !== "starting" && snapshot.session?.state !== "ready")) return false;
+  return !(stampWritten !== undefined && sessionWritten !== undefined && stampWritten >= sessionWritten);
 }
 
 /** Parses a session file; undefined for another schema or a file that is not a session. */
@@ -87,23 +111,39 @@ export interface DevSessionSource {
   read(path: string): Promise<string | undefined>;
   /** Whether a process ID is a running `dotnet runic dev`. */
   isRunning(pid: number): Promise<boolean>;
+  /** A file's last write time in milliseconds, or undefined when it does not exist; without it, the follower touches no stamp. */
+  modified?(path: string): Promise<number | undefined>;
+  /** Writes the file empty with the current time, as `dev` does when it stops; rejects when it cannot. */
+  touch?(path: string): Promise<void>;
 }
 export const fileSystemSource: DevSessionSource = {
   read: async path => { try { return await readFile(path, "utf8"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; } },
   isRunning: pid => isRunningDevProcess(pid),
+  modified: async path => { try { return (await stat(path)).mtimeMs; } catch { return undefined; } },
+  // As runic-sdk's DevSession.Stop: an empty file, and its time set, since rewriting an empty file need not change it.
+  // The directory is not created: without obj/runic (a clean), the next build runs anyway.
+  touch: async path => { await writeFile(path, ""); const now = new Date(); await utimes(path, now, now); },
 };
 
 /**
  * Follows one project's session file. `refresh()` rereads it (after a file watcher event, and on a timer, because a
  * killed `dev` leaves `"ready"` behind without another write) and applies the liveness rule: `"starting"` or `"ready"`
  * counts only while the top-level `processId` is a running `dotnet runic dev`. `dev` replaces the whole file on each
- * write; a file that does not parse (another schema, or a writer that is not `dev`) keeps the last snapshot.
+ * write; a file that does not parse (another schema, or a writer that is not `dev`) keeps the last snapshot. When the
+ * file says starting or ready but its `dev` has exited (killed, crashed), it touches `obj/runic/dev-stopped` beside the
+ * file once per process ID, as `dev` does on a clean stop ({@link needsStoppedStamp}), so the next build puts the
+ * production frontend back in `www/` (runic-editors#29); `log` gets the touch or why it failed.
  */
 export class DevSessionFollower {
   private current: DevSnapshot = { state: "none" };
   private revision = 0;
+  private readonly marked = new Set<number>();
   private readonly listeners = new Set<(snapshot: DevSnapshot) => void>();
-  constructor(readonly project: string, private readonly source: DevSessionSource = fileSystemSource, readonly path = devSessionPath(project)) {}
+  constructor(readonly project: string, private readonly source: DevSessionSource = fileSystemSource, readonly path = devSessionPath(project),
+    private readonly log?: (message: string) => void) {}
+
+  /** `obj/runic/dev-stopped` beside the session file. */
+  get stoppedStampPath(): string { return devStoppedStampPath(this.path); }
 
   get snapshot(): DevSnapshot { return this.current; }
 
@@ -125,6 +165,7 @@ export class DevSessionFollower {
       if (session.state === "stopped") next = { state: "stopped", session };
       else next = await this.source.isRunning(session.processId) ? { state: session.state, session } : { state: "stopped", session, exited: true };
     }
+    if (next.exited) await this.markStopped(next);
     // A later refresh started while this one waited; it wins.
     if (revision !== this.revision) return this.current;
     if (snapshotKey(next) !== snapshotKey(this.current)) {
@@ -132,6 +173,24 @@ export class DevSessionFollower {
       for (const listener of [...this.listeners]) listener(next);
     }
     return this.current;
+  }
+
+  /** Touches `dev-stopped` for a killed `dev`, at most once per process ID; logs a failure instead of throwing. */
+  private async markStopped(snapshot: DevSnapshot): Promise<void> {
+    const source = this.source;
+    const pid = snapshot.session?.processId;
+    if (!source.modified || !source.touch || pid === undefined || this.marked.has(pid)) return;
+    // Recorded before the first await, so two refreshes that both see the dead process touch once.
+    this.marked.add(pid);
+    const stamp = this.stoppedStampPath;
+    const name = basename(this.project);
+    try {
+      if (!needsStoppedStamp(snapshot, await source.modified(stamp), await source.modified(this.path))) return;
+      await source.touch(stamp);
+      this.log?.(`${name}: dotnet runic dev (process ${pid}) exited without stopping; touched ${stamp} so that the next build restores www/.`);
+    } catch (error) {
+      this.log?.(`${name}: dotnet runic dev (process ${pid}) exited without stopping, and ${stamp} could not be touched (${(error as Error).message}); rebuild before the next launch if www/ still has the development pages.`);
+    }
   }
 }
 

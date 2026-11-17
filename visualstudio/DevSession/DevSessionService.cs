@@ -16,7 +16,8 @@ namespace RunicArtifex.DevKit.VisualStudio.DevSession;
 /// <summary>
 /// The <c>dotnet runic dev</c> session of each Runic SDK project of the solution (VS Code: <c>sdk.ts</c>, the dev parts
 /// of <c>ProjectState</c>). It follows each project's session file (<see cref="DevSessionFollower"/>) after a file
-/// watcher event and every 2 seconds, because a killed <c>dev</c> leaves <c>"ready"</c> behind; starts <c>dev</c> and
+/// watcher event and every 2 seconds, because a killed <c>dev</c> leaves <c>"ready"</c> behind (the follower then
+/// touches <c>obj/runic/dev-stopped</c>, so the next F5 builds); starts <c>dev</c> and
 /// <c>dev --no-window</c> as child processes whose output goes to the "Runic SDK" Output pane and whose diagnostics go
 /// to the Error List (<see cref="DevErrorList"/>); and stops the ones it started. A <c>dev</c> started elsewhere (a
 /// terminal) is followed but cannot be stopped from here: Windows has no clean Ctrl+C for another console (PARITY §7.3).
@@ -35,6 +36,13 @@ internal sealed class DevSessionService
     private bool initialized;
 
     private DevSessionService() { }
+
+    /// <summary>The follower's lines (a touched <c>dev-stopped</c>) for the Runic SDK pane, wherever <see cref="SdkOutput"/> points.</summary>
+    private sealed class SdkLines : IRunicOutput
+    {
+        public static SdkLines Instance { get; } = new();
+        public void WriteLine(string line) => SdkOutput.WriteLine(line);
+    }
 
     private sealed class Entry
     {
@@ -99,7 +107,7 @@ internal sealed class DevSessionService
             }
             foreach (string project in projects.Where(project => !entries.ContainsKey(project)))
             {
-                var entry = new Entry(new DevSessionFollower(project));
+                var entry = new Entry(new DevSessionFollower(project, output: SdkLines.Instance));
                 entry.Follower.Changed += (_, snapshot) => OnSnapshot(entry, snapshot);
                 entry.Watcher = Watch(project);
                 entries[project] = entry;
