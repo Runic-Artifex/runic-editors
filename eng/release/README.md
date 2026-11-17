@@ -204,6 +204,69 @@ locked mode, so publishing does not move the build toolchain.
 Until then dispatch with **stores** `none`, or keep the dry run: without the
 policy the OIDC exchange fails and nothing is published.
 
+### Publishing to the Visual Studio Marketplace
+
+The Visual Studio extension, **Runic DevKit** `runic-artifex.runic-devkit-vs`, goes
+to the Visual Studio Marketplace from 0.22.0 if Visual Studio parity lands in it,
+otherwise from its first final release after (D070.11). The rules:
+
+- **Final versions only** (D070.11). The job runs only for a version without `-`:
+  `1.0.0-rc.N` and `-preview.N` versions reach Visual Studio users through the
+  GitHub release only, because the store has no pre-release channel and would offer
+  them to everyone.
+- **Publisher** `runic-artifex`, display name "Runic Artifex", shared with the
+  VS Code Marketplace (D070.12). The Microsoft account connected to the
+  maintainer's GitHub account owns it; there is no second owner for now (D070.16).
+- **Trusted publishing only** (D070.14). The `marketplace` environment has
+  required reviewers, deployment branch `main` only and no secrets; the job
+  exchanges its GitHub OIDC token for a short-lived credential
+  (`VsixPublisher.exe publish -oidc`). Never add a personal access token.
+- **Visual Studio 2026 x64 only** (D070.14): the manifest's single installation
+  target is `[18.0,19.0)` with product architecture `amd64`, which `package.py`
+  enforces. There is no ARM64 test machine, so no ARM64 target.
+- **Listing**: icons from the brand mark, `overview.md`, categories and tags as in
+  [Stores](#stores) (Listing); Q&A off, questions go to GitHub issues (D070.14).
+- **Open VSX is deferred indefinitely** (D070.15): the Eclipse Foundation account
+  it needs asks for too much information. VSCodium, Cursor, Windsurf and other
+  Open VSX editors install `runic-devkit.vsix` from the GitHub release. Not a
+  Visual Studio concern, but it means the store jobs are the two Microsoft ones.
+
+Steps for a final release (the maintainer approves each release first; agents never
+publish on their own):
+
+1. Before the release PR merges, run the
+   [native Visual Studio check](../../visualstudio/test/README.md) on Windows with
+   the `visualstudio-vsix` artifact of the candidate commit's CI run, and work
+   through its manual checklist. Record the result in the release PR.
+2. Dispatch **Release** from `main` with the version and **dry-run** checked. In the
+   candidate job's log, `store-publish visualstudio … --dry-run` must show the
+   `runic-artifex.runic-devkit-vs` identity from `publishManifest.json`, report the
+   version as not yet listed (a listed version with other bytes, or a newer listed
+   version, fails here), and print the `VsixPublisher.exe publish -payload … -publishManifest
+   visualstudio/publishManifest.json -oidc` command.
+3. Dispatch again without dry-run (**stores** `all`, or `visualstudio` to publish to
+   this store alone after the GitHub release exists). The `publish` job waits for
+   the `release` environment's reviewers, the store jobs for the `marketplace`
+   environment's reviewers.
+4. `marketplace-visualstudio` (windows-2025) checks the VSIX against the candidate
+   hashes and inventory, skips a version that the store already lists with the same
+   bytes (VsixPublisher would overwrite it), publishes, and `store-verify` waits up to
+   20 minutes for the Marketplace scan, then checks that the listing serves the
+   release's bytes.
+5. After the first publish, open
+   <https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit-vs>:
+   the page must show the Preview label (VsixPublisher has dropped it before:
+   microsoft/vsmarketplace#905), the icon, the overview and no Q&A tab. Then install
+   it in Visual Studio 2026 through Extensions > Manage Extensions and check that
+   Tools > Runic appears in a Runic solution.
+6. If the job failed after the GitHub release, fix the cause and dispatch with
+   **stores** `visualstudio`: the GitHub release and a VS Code listing stay as they
+   are.
+
+To withdraw a broken version, publish a fixed patch release (D026: patches only for
+security and severe regressions); unlisting on the publisher's manage page is the
+maintainer's decision.
+
 ## Verifying a release
 
 ```sh
