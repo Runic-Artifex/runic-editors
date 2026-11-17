@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.ComponentModel.Composition;
 using System.Diagnostics;
 using System.IO;
@@ -7,9 +8,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.LanguageServer.Client;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Utilities;
 using Microsoft.VisualStudio.Threading;
 using Newtonsoft.Json.Linq;
+using RunicArtifex.DevKit.VisualStudio.Core;
+using RunicArtifex.DevKit.VisualStudio.Output;
+using RunicArtifex.DevKit.VisualStudio.Settings;
 using StreamJsonRpc;
 
 namespace RunicArtifex.DevKit.VisualStudio;
@@ -36,37 +41,95 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
     public object? InitializationOptions => new { runicConfigurationSync = true };
     internal ConfigurationBuffers Configuration { get; } = new();
     public IEnumerable<string> FilesToWatch => new[] { "**/*.mf2", "**/*.rmf2", "**/runic.json" };
-    public bool ShowNotificationOnInitializeFailed => true;
+    // The extension shows its own start-failure InfoBar, once per solution, with install help (ServerStartInfoBar).
+    public bool ShowNotificationOnInitializeFailed => false;
     public object? MiddleLayer => null;
     public object? CustomMessageTarget => null;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StartAsync;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StopAsync;
+    private IVsOutputWindowPane? output;
+    private ServerStartAttempt attempt = new();
+    private string solutionKey = "";
+    // The server's last standard-error lines, which say why a start failed.
+    private readonly Queue<string> stderrTail = new();
+    private const int StderrTailLines = 20;
+
     public async Task<Connection?> ActivateAsync(CancellationToken token)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+        var options = await RunicOptionsPage.GetAsync(token);
+        var pane = output = await RunicOutput.TranslationsAsync(token);
         var dte = (EnvDTE.DTE)ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE));
+        string? solution = dte?.Solution?.FullName;
+        string? solutionDirectory = string.IsNullOrEmpty(solution) ? null : Path.GetDirectoryName(solution);
         string? file = dte?.ActiveDocument?.FullName;
-        if (string.IsNullOrEmpty(file)) file = dte?.Solution?.FullName;
-        if (string.IsNullOrEmpty(file)) throw new InvalidOperationException("Open an MF2 document in the solution or folder containing the local Runic tool manifest.");
-        var launch = ServerLaunch.Find(Path.GetDirectoryName(file)!, Environment.GetEnvironmentVariable("RUNIC_TRANSLATIONS_SERVER"));
+        if (string.IsNullOrEmpty(file)) file = solution;
+        solutionKey = solution ?? file ?? "";
+        attempt = new ServerStartAttempt { Dotnet = RunicSettings.Dotnet(options.DotnetPath, Environment.GetEnvironmentVariable(RunicSettings.DotnetVariable)) };
+        lock (stderrTail) stderrTail.Clear();
         DisposeProcess();
-        process = new Process { StartInfo = new ProcessStartInfo {
-            FileName = Environment.GetEnvironmentVariable("RUNIC_DOTNET") ?? "dotnet", Arguments = launch.Arguments,
-            WorkingDirectory = launch.Directory, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-        } };
-        process.ErrorDataReceived += (_, args) => { if (args.Data != null) Trace.WriteLine("Runic: " + args.Data); };
-        if (!process.Start()) throw new InvalidOperationException("Could not start the project-local Runic language server.");
-        process.BeginErrorReadLine();
-        return new Connection(process.StandardOutput.BaseStream, process.StandardInput.BaseStream);
+        try
+        {
+            if (string.IsNullOrEmpty(file)) throw new InvalidOperationException("Open an MF2 document in the solution or folder containing the local Runic tool manifest.");
+            var assembly = RunicSettings.ServerAssembly(options.ServerAssembly, Environment.GetEnvironmentVariable(RunicSettings.ServerAssemblyVariable), solutionDirectory);
+            var launch = ServerLaunch.Find(Path.GetDirectoryName(file)!, assembly);
+            attempt.Directory = launch.Directory;
+            pane.OutputStringThreadSafe($"Starting {attempt.Dotnet} {launch.Arguments} in {launch.Directory}{Environment.NewLine}");
+            var started = process = new Process { StartInfo = new ProcessStartInfo {
+                FileName = attempt.Dotnet, Arguments = launch.Arguments,
+                WorkingDirectory = launch.Directory, UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            } };
+            started.ErrorDataReceived += (_, args) =>
+            {
+                if (args.Data == null) return;
+                lock (stderrTail) { stderrTail.Enqueue(args.Data); while (stderrTail.Count > StderrTailLines) stderrTail.Dequeue(); }
+                pane.OutputStringThreadSafe(args.Data + Environment.NewLine);
+            };
+            try { if (!started.Start()) throw new InvalidOperationException("Could not start the project-local Runic language server."); }
+            catch (Win32Exception error) when (error.NativeErrorCode is 2 or 3) { attempt.ExecutableMissing = true; throw; }
+            started.BeginErrorReadLine();
+            var tracer = new LspTracer(() => options.Trace, line => pane.OutputStringThreadSafe(line + Environment.NewLine));
+            return new Connection(new TracingStream(started.StandardOutput.BaseStream, tracer, LspDirection.Received),
+                new TracingStream(started.StandardInput.BaseStream, tracer, LspDirection.Sending));
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            attempt.Error = error.Message;
+            if (error is ServerLaunchException launchError) attempt.Known = launchError.Problem;
+            ReportStartFailure();
+            throw;
+        }
     }
+
+    /// <summary>The server's failure, in the Output pane and once per solution in an InfoBar.</summary>
+    private void ReportStartFailure()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        lock (stderrTail) attempt.Stderr = stderrTail.ToArray();
+        string message = ServerStartFailure.Message(attempt);
+        output?.OutputStringThreadSafe(message + Environment.NewLine);
+        ServerStartInfoBar.Show(solutionKey, message, output);
+    }
+
     public async Task OnLoadedAsync() { if (StartAsync != null) await StartAsync.InvokeAsync(this, EventArgs.Empty); }
     // The configuration buffers open once both the custom-message connection and the
     // initialize handshake exist, in whichever order Visual Studio reports them.
     private bool initialized;
     public Task OnServerInitializedAsync() { initialized = true; if (rpc != null) Configuration.Attach(rpc); return Task.CompletedTask; }
-    public Task<InitializationFailureContext?> OnServerInitializeFailedAsync(ILanguageClientInitializationInfo initializationState)
-        => Task.FromResult<InitializationFailureContext?>(new InitializationFailureContext { FailureMessage = "Runic could not initialize. Restore the project's local runic-translations tool, or set RUNIC_TRANSLATIONS_SERVER to the built tool DLL before starting Visual Studio. See ActivityLog and Runic server output for details." });
+    public async Task<InitializationFailureContext?> OnServerInitializeFailedAsync(ILanguageClientInitializationInfo initializationState)
+    {
+        // A server that exited during initialize has written why to standard error; read it to the end.
+        var exited = process;
+        if (exited != null) await Task.Run(() => { try { if (exited.HasExited) exited.WaitForExit(); } catch (InvalidOperationException) { } });
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (attempt.Error == null && attempt.Known == null)
+        {
+            attempt.Error = initializationState.InitializationException?.Message ?? initializationState.StatusMessage;
+            ReportStartFailure();
+        }
+        return new InitializationFailureContext { FailureMessage = ServerStartFailure.Message(attempt) };
+    }
     public Task AttachForCustomMessageAsync(JsonRpc jsonRpc) { rpc = jsonRpc; if (initialized) Configuration.Attach(rpc); return Task.CompletedTask; }
     internal Task<JObject> RequestAsync(string method, object parameters, CancellationToken cancellationToken)
         => (rpc ?? throw new InvalidOperationException("The Runic language server is not ready.")).InvokeWithParameterObjectAsync<JObject>(method, parameters, cancellationToken);
@@ -92,12 +155,13 @@ internal sealed class ServerLaunch
     internal string Directory { get; }
     internal string Arguments { get; }
     private ServerLaunch(string directory, string arguments) { Directory = directory; Arguments = arguments; }
-    internal static ServerLaunch Find(string directory, string? assembly)
+    internal static ServerLaunch Find(string directory, ServerAssemblySetting? assembly)
     {
-        if (!string.IsNullOrEmpty(assembly))
+        if (assembly != null)
         {
-            if (!Path.IsPathRooted(assembly) || !File.Exists(assembly)) throw new InvalidOperationException("RUNIC_TRANSLATIONS_SERVER must identify an existing absolute tool DLL.");
-            return new ServerLaunch(directory, Quote(assembly!) + " lsp");
+            if (!Path.IsPathRooted(assembly.Path) || !File.Exists(assembly.Path))
+                throw new ServerLaunchException(ServerStartProblem.AssemblyMissing, $"{assembly.Source} must identify an existing absolute tool DLL; {assembly.Path} is not one.");
+            return new ServerLaunch(directory, Quote(assembly.Path) + " lsp");
         }
         for (string? current = directory; current != null; current = Path.GetDirectoryName(current))
         {
@@ -109,7 +173,7 @@ internal sealed class ServerLaunch
                     return new ServerLaunch(current, "tool run runic-translations -- lsp");
             if (json.Value<bool?>("isRoot") == true) break;
         }
-        throw new InvalidOperationException("No project-local runic-translations tool manifest found. Restore the local tool before opening MF2 resources.");
+        throw new ServerLaunchException(ServerStartProblem.ToolMissing, "No project-local runic-translations tool manifest found. Restore the local tool before opening MF2 resources.");
     }
     // Windows CommandLineToArgvW escaping; ProcessStartInfo on .NET Framework has no ArgumentList.
     internal static string Quote(string value)
@@ -122,4 +186,11 @@ internal sealed class ServerLaunch
         }
         return result.Append('\\', slashes * 2).Append('"').ToString();
     }
+}
+
+/// <summary>A start failure the extension finds before it starts a process.</summary>
+internal sealed class ServerLaunchException : InvalidOperationException
+{
+    internal ServerLaunchException(ServerStartProblem problem, string message) : base(message) { Problem = problem; }
+    internal ServerStartProblem Problem { get; }
 }

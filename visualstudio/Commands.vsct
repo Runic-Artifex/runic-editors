@@ -13,6 +13,8 @@
     <Menus>
       <Menu guid="guidRunicCommands" id="RunicToolsMenu" priority="0x0100" type="Menu">
         <Parent guid="guidRunicCommands" id="ToolsMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Runic</ButtonText><CommandName>Runic</CommandName></Strings>
       </Menu>
       <Menu guid="guidRunicCommands" id="ToolWindowToolbar" type="ToolWindowToolbar">
@@ -56,7 +58,6 @@
         <Icon guid="ImageCatalogGuid" id="Output" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Show Translations Output</ButtonText><CanonicalName>.Runic.ShowTranslationsOutput</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="ExportXliff" priority="0x0103" type="Button">
@@ -152,7 +153,6 @@
         <Icon guid="ImageCatalogGuid" id="Output" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Show Runic SDK Output</ButtonText><CanonicalName>.Runic.ShowSdkOutput</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="RunDoctor" priority="0x010F" type="Button">
@@ -160,7 +160,6 @@
         <Icon guid="ImageCatalogGuid" id="Checklist" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Run dotnet runic doctor</ButtonText><CanonicalName>.Runic.RunDoctor</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="RefreshViewModels" priority="0x0110" type="Button">
@@ -168,7 +167,6 @@
         <Icon guid="ImageCatalogGuid" id="Refresh" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Refresh ViewModels</ButtonText><CanonicalName>.Runic.RefreshViewModels</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="DebugWindow" priority="0x0111" type="Button">
@@ -199,7 +197,6 @@
         <Icon guid="ImageCatalogGuid" id="Settings" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Options...</ButtonText><CanonicalName>.Runic.OpenOptions</CanonicalName></Strings>
       </Button>
     </Buttons>
@@ -220,8 +217,16 @@
     <CommandPlacement guid="guidRunicCommands" id="AttachToPage" priority="0x010C"><Parent guid="guidRunicCommands" id="ToolbarDebugGroup" /></CommandPlacement>
     <CommandPlacement guid="guidRunicCommands" id="ShowToolWindow" priority="0x010D"><Parent guid="guidRunicCommands" id="OtherWindowsGroup" /></CommandPlacement>
   </CommandPlacements>
+  <!-- VS-2: Tools > Runic shows in a Runic solution or MF2 editor, the UI contexts that load the package
+       (Core/RunicActivation.cs). -->
+  <VisibilityConstraints>
+    <VisibilityItem guid="guidRunicCommands" id="RunicToolsMenu" context="guidRunicRuleContext" />
+    <VisibilityItem guid="guidRunicCommands" id="RunicToolsMenu" context="guidRunicWorkspaceContext" />
+  </VisibilityConstraints>
   <Symbols>
     <GuidSymbol name="guidRunicPackage" value="{be2a06be-886d-4e5b-ac97-5853699532bb}" />
+    <GuidSymbol name="guidRunicRuleContext" value="{a3c1e0d8-6f43-4c5e-9b1d-2e7f4a8c9d10}" />
+    <GuidSymbol name="guidRunicWorkspaceContext" value="{5d9e2b47-1c86-4f0a-a3e5-7b2c6d8f0e41}" />
     <GuidSymbol name="guidRunicCommands" value="{95a991f7-e4e2-4ce5-ad24-454213efa92f}">
       <IDSymbol name="PreviewMessage" value="0x0100" />
       <IDSymbol name="RestartLanguageServer" value="0x0101" />
