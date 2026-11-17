@@ -237,7 +237,10 @@ internal sealed class DevSessionService
 
         string dotnet = await RunicSdkState.DotnetAsync(cancellationToken);
         await TaskScheduler.Default;
-        var problems = new DevProblems(project, noWindow, RunicSdkProjects.ProjectToolVersion(project));
+        string? manifestVersion = RunicSdkProjects.ProjectToolVersion(project);
+        // D070.17: a CS-WebUI Window opens its DevTools Protocol port only when an IDE asks, with dev's 0.22 --debug-endpoint.
+        bool debugEndpoint = !noWindow && DevToolVersions.SupportsDebugEndpoint(await DevToolVersions.DetectAsync(dotnet, project, manifestVersion, cancellationToken));
+        var problems = new DevProblems(project, noWindow, manifestVersion);
         lock (gate) { entry.Problems = problems; entry.ProblemsVersion++; }
         PublishProblems(project, entry, Array.Empty<RunicErrorEntry>());
         _ = RunicSdkState.Background.RunAsync(async () => await RunicOutput.ShowAsync(await RunicOutput.SdkAsync()));
@@ -258,7 +261,7 @@ internal sealed class DevSessionService
                 if (changed) PublishProblems(project, entry, current);
                 // dev writes the session file before its contract lines; read it at once instead of at the next poll.
                 if (line.StartsWith("[dev] ", StringComparison.Ordinal)) entry.Follower.Refresh();
-            });
+            }, debugEndpoint);
         }
         catch (InvalidOperationException error)
         {

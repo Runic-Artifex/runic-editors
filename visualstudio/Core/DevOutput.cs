@@ -24,9 +24,14 @@ public static class DevOutput
     private static readonly Regex Ends = new(@"^\[dev\] Ready$", RegexOptions.CultureInvariant);
     private static readonly Regex Escape = new(@"\x1B\[[0-9;?]*[ -/]*[@-~]", RegexOptions.CultureInvariant);
 
-    /// <summary>The arguments of <c>dotnet runic dev</c> for a project, as VS Code's task runs it.</summary>
-    public static IReadOnlyList<string> Arguments(string project, bool noWindow)
-        => noWindow ? new[] { "runic", "dev", "--no-window", "--project", project } : new[] { "runic", "dev", "--project", project };
+    /// <summary>
+    /// The arguments of <c>dotnet runic dev</c> for a project, as VS Code's task runs it. <paramref name="debugEndpoint"/>
+    /// adds <c>--debug-endpoint</c> (0.22) to a <c>dev</c> with its Window, so a CS-WebUI Window opens its DevTools
+    /// Protocol port because an IDE asked (D070.17); <c>--no-window</c> needs nothing.
+    /// </summary>
+    public static IReadOnlyList<string> Arguments(string project, bool noWindow, bool debugEndpoint = false)
+        => noWindow ? new[] { "runic", "dev", "--no-window", "--project", project }
+            : debugEndpoint ? new[] { "runic", "dev", "--debug-endpoint", "--project", project } : new[] { "runic", "dev", "--project", project };
 
     /// <summary>The line without terminal colour codes.</summary>
     public static string Plain(string line) => Escape.Replace(line, "");

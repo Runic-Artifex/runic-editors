@@ -115,6 +115,40 @@ containing workspace so those declared files remain inside the host watch
 boundary. Symlink/reparse-point mounts are rejected by the shared server rather
 than traversed.
 
+## Debugging the Window and its page
+
+**Tools → Runic → Debug the Window** debugs the .NET code and the page in one
+session. It starts `dotnet runic dev --no-window` (or offers to restart a `dev`
+that runs its own Window), waits until it is ready, builds the project, and
+starts the program `dotnet run` would start under the .NET debugger with the
+session file's `window.environment` and a DevTools Protocol port:
+
+- **WebView2** (Runic Desktop on Windows): a free loopback port, added to
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (a value that already names a port
+  keeps it).
+- **CS-WebUI**: the port `dev --no-window` names in the session
+  (`RUNIC_WEBUI_REMOTE_DEBUGGING_PORT`, 9225, since runic-sdk 0.22).
+
+Once `http://127.0.0.1:<port>/json/version` answers and the page is listed, it
+attaches the JavaScript debugger over the "JavaScript and TypeScript (Chrome
+DevTools/V8 Inspector)" transport. It waits up to three minutes of the Window
+running (time stopped at a .NET breakpoint does not count), then says so and
+keeps the .NET debugger attached. **Attach to the Page (JavaScript)** does the
+same attach to a running page: the session file's `debugEndpoints` and the
+Windows Debug the Window started. When this extension starts `dev` with its
+Window and the project's `dotnet-runic` is 0.22 or later, it passes
+`--debug-endpoint`, so a CS-WebUI Window opens its port (D070.17).
+
+Needs Visual Studio's **JavaScript diagnostics** component
+(`Microsoft.VisualStudio.Component.JavaScript.Diagnostics`) and a Visual Studio
+that does not run as administrator (WebView2 ignores the port in an elevated
+process). Breakpoints in `Frontend/src/*.tsx` bind through the development
+server's source maps only when they carry absolute `sources`, which runic-sdk
+0.22's `vite-plugin-runic` writes; with an older plugin, the page's
+JavaScript breakpoints bind but TSX ones stay unbound. The template's
+`(WebView2 script debugging)` launch profile does not work in Visual Studio
+(SPIKE-VS-0, D070.18); use Debug the Window instead.
+
 ## Visual Studio and VS Code
 
 | Feature | Visual Studio | VS Code |
@@ -153,6 +187,8 @@ than traversed.
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
 | Dev Session view: state, server, Window owner or process, pages, debug endpoints, generated clients | Runic tool window, Dev Session section; toolbar buttons enabled per state; state changes in the status bar text | Dev Session view; "Runic dev" status bar item |
 | F5 with `dev --no-window` | Pre-F5 guard: asks to start `dev --no-window` (then launches once it is ready) or continue without it | `runic` debug type starts it |
+| Debug the Window: .NET and page breakpoints in one session | Tools → Runic, tool window toolbar: starts `dev --no-window`, builds, launches the Window under the .NET debugger with the session file's Window environment and a DevTools Protocol port, then attaches the JavaScript debugger over CDP (no 30-second limit) | `runic` debug type (`coreclr`) and the template's compound with the `msedge` attach |
+| Attach to the Page (JavaScript) | Tools → Runic, tool window toolbar: the session file's WebView2 and CS-WebUI (0.22) `debugEndpoints` and the Windows Debug the Window started; a picker when there are several | Attach configuration |
 
 Full command parity waits for the production language server (2.0).
 
@@ -175,7 +211,7 @@ placeholder. Implementing a command means changing its handler file, not the
 | `Output/`, `Settings/` | Show Translations Output, Show Runic SDK Output, Options |
 | `DevSession/` | Start `dotnet runic dev`, Start `--no-window`, Stop, Open the Development Server, Open the dev Session File |
 | `ToolWindow/` | Runic tool window, Run `dotnet runic doctor`, Refresh ViewModels (implemented) |
-| `Debugging/` | Debug the Window, Attach to the Page (JavaScript) |
+| `Debugging/` | Debug the Window, Attach to the Page (JavaScript) (implemented) |
 
 `Core/` (`RunicArtifex.DevKit.VisualStudio.Core`, netstandard2.0, no
 dependencies) holds the logic that needs no Visual Studio: the command and
