@@ -4,6 +4,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.OLE.Interop;
+using OleConstants = Microsoft.VisualStudio.OLE.Interop.Constants;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
@@ -13,23 +15,26 @@ using RunicArtifex.DevKit.VisualStudio.ToolWindow;
 namespace RunicArtifex.DevKit.VisualStudio.DevSession;
 
 /// <summary>
-/// The pre-F5 guard (PARITY §2.2, D070.6). Visual Studio has no <c>preLaunchTask</c>: when F5 or Ctrl+F5 builds a
+/// The pre-F5 guard (PARITY §2.2, D070.6). Visual Studio has no <c>preLaunchTask</c>: when F5 or Ctrl+F5 starts a
 /// startup project that is a Runic SDK project and no <c>dotnet runic dev --no-window</c> (owner <c>ide</c>) runs, the
 /// guard asks first: Yes starts <c>dev --no-window</c> (or restarts a <c>dev</c> this extension started with its own
 /// Window), cancels this launch, waits until <c>dev</c> is ready and starts the same launch again, as VS Code's
 /// <c>runic</c> debug type waits for <c>[dev] Ready</c> before it builds; No continues without it; Cancel cancels the
 /// launch. VS Code asks nothing and remembers nothing, so the guard asks each time (<see cref="DevGuard"/>).
 /// </summary>
-internal sealed class DevLaunchGuard : IVsUpdateSolutionEvents2, IVsUpdateSolutionEvents4
+/// <remarks>
+/// The guard is a priority command target (<see cref="IVsRegisterPriorityCommandTarget"/>) for Debug.Start and
+/// Debug.StartWithoutDebugging, so it sees every launch by key, toolbar, menu or <c>DTE.ExecuteCommand</c> before Visual
+/// Studio builds. Until 0.22 it listened to the solution build's <c>UpdateProjectCfg_Begin</c> launch flags, which
+/// Visual Studio 18.12 never raised for these launches (runic-editors#26), and a launch whose fast up-to-date check
+/// skips the build raises no build event at all.
+/// </remarks>
+internal sealed class DevLaunchGuard : IOleCommandTarget
 {
-    private const uint LaunchDebug = (uint)VSSOLNBUILDUPDATEFLAGS.SBF_OPERATION_LAUNCHDEBUG;
-    private const uint Launch = (uint)VSSOLNBUILDUPDATEFLAGS.SBF_OPERATION_LAUNCH;
     private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(10);
 
     private static DevLaunchGuard? instance;
     private readonly RunicPackage package;
-    private uint solutionAction;
-    private bool handled;
 
     private DevLaunchGuard(RunicPackage package) { this.package = package; }
 
@@ -37,51 +42,53 @@ internal sealed class DevLaunchGuard : IVsUpdateSolutionEvents2, IVsUpdateSoluti
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         if (instance != null) return;
-        if (await package.GetServiceAsync(typeof(SVsSolutionBuildManager)) is not IVsSolutionBuildManager2 builds)
+        if (await package.GetServiceAsync(typeof(SVsRegisterPriorityCommandTarget)) is not IVsRegisterPriorityCommandTarget targets)
         {
-            SdkOutput.WriteLine("The solution build manager is unavailable; F5 will not offer to start dotnet runic dev --no-window.");
+            SdkOutput.WriteLine("Visual Studio's command routing is unavailable; F5 will not offer to start dotnet runic dev --no-window.");
             return;
         }
         instance = new DevLaunchGuard(package);
-        ErrorHandler.ThrowOnFailure(builds.AdviseUpdateSolutionEvents(instance, out uint cookie));
+        ErrorHandler.ThrowOnFailure(targets.RegisterPriorityCommandTarget(0, instance, out uint cookie));
         package.DisposalToken.Register(() => _ = RunicSdkState.Background.RunAsync(async () =>
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            builds.UnadviseUpdateSolutionEvents(cookie);
+            targets.UnregisterPriorityCommandTarget(cookie);
         }));
     }
 
-    public int UpdateSolution_Begin(ref int pfCancelUpdate)
-    {
-        handled = false;
-        return VSConstants.S_OK;
-    }
+    /// <summary>The guard changes no command state.</summary>
+    public int QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText) => (int)OleConstants.OLECMDERR_E_NOTSUPPORTED;
 
-    /// <summary>The solution-level action of this update; it carries the launch flags of F5 and Ctrl+F5.</summary>
-    public void UpdateSolution_BeginUpdateAction(uint dwAction) => solutionAction = dwAction;
-
-    public void UpdateSolution_EndUpdateAction(uint dwAction) => solutionAction = 0;
-
-    public int UpdateProjectCfg_Begin(IVsHierarchy pHierProj, IVsCfg pCfgProj, IVsCfg pCfgSln, uint dwAction, ref int pfCancel)
+    /// <summary>
+    /// Runs before Visual Studio's own handler. Returning <see cref="OleConstants.OLECMDERR_E_NOTSUPPORTED"/> passes the
+    /// command on; <see cref="VSConstants.S_OK"/> means the guard handled it, which cancels this launch.
+    /// </summary>
+    public int Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        uint action = dwAction | solutionAction;
-        bool debug = (action & LaunchDebug) != 0;
-        if (handled || (!debug && (action & Launch) == 0)) return VSConstants.S_OK;
+        const int passOn = (int)OleConstants.OLECMDERR_E_NOTSUPPORTED;
+        if (DevGuard.LaunchKind(pguidCmdGroup, nCmdID) is not { } debug) return passOn;
         try
         {
-            if (pHierProj is not IVsProject project || ErrorHandler.Failed(project.GetMkDocument((uint)VSConstants.VSITEMID.Root, out string file)) || string.IsNullOrEmpty(file)) return VSConstants.S_OK;
-            if (!RunicSdkState.Instance.Projects.Any(state => string.Equals(state.Project, file, StringComparison.OrdinalIgnoreCase))) return VSConstants.S_OK;
             var dte = ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
-            if (!DevSessionService.StartupProjects(dte).Contains(file, StringComparer.OrdinalIgnoreCase)) return VSConstants.S_OK;
-            handled = true;
-            if (Ask(file, debug)) pfCancel = 1;
+            string? project = DevGuard.Target(DevSessionService.StartupProjects(dte).ToList(),
+                RunicSdkState.Instance.Projects.Select(state => state.Project).ToList(), InDesignMode());
+            if (project != null && Ask(project, debug)) return VSConstants.S_OK;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             SdkOutput.WriteLine("The F5 check for dotnet runic dev failed: " + error.Message);
         }
-        return VSConstants.S_OK;
+        return passOn;
+    }
+
+    /// <summary>F5 in break mode continues the session; the guard only checks a launch from design mode.</summary>
+    private static bool InDesignMode()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (ServiceProvider.GlobalProvider.GetService(typeof(SVsShellDebugger)) is not IVsDebugger debugger) return true;
+        var mode = new DBGMODE[1];
+        return ErrorHandler.Failed(debugger.GetMode(mode)) || (mode[0] & ~DBGMODE.DBGMODE_EncMask) == DBGMODE.DBGMODE_Design;
     }
 
     /// <summary>Asks, and returns true when this launch is cancelled (Cancel, or Yes, which relaunches once <c>dev</c> is ready).</summary>
@@ -138,15 +145,4 @@ internal sealed class DevLaunchGuard : IVsUpdateSolutionEvents2, IVsUpdateSoluti
             if (frozen == 0) bar.SetText(text);
         }
     }
-
-    public int UpdateSolution_Done(int fSucceeded, int fModified, int fCancelCommand) => VSConstants.S_OK;
-    public int UpdateSolution_StartUpdate(ref int pfCancelUpdate) => VSConstants.S_OK;
-    public int UpdateSolution_Cancel() => VSConstants.S_OK;
-    public int OnActiveProjectCfgChange(IVsHierarchy pIVsHierarchy) => VSConstants.S_OK;
-    public int UpdateProjectCfg_Done(IVsHierarchy pHierProj, IVsCfg pCfgProj, IVsCfg pCfgSln, uint dwAction, int fSuccess, int fCancel) => VSConstants.S_OK;
-    public void UpdateSolution_QueryDelayFirstUpdateAction(out int pfDelay) => pfDelay = 0;
-    public void UpdateSolution_BeginFirstUpdateAction() { }
-    public void UpdateSolution_EndLastUpdateAction() { }
-    public void OnActiveProjectCfgChangeBatchBegin() { }
-    public void OnActiveProjectCfgChangeBatchEnd() { }
 }

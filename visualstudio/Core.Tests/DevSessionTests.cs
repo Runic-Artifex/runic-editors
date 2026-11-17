@@ -398,6 +398,25 @@ public class DevSessionTests
     }
 
     [Test]
+    public void The_pre_F5_guard_checks_F5_and_Ctrl_F5_of_a_Runic_startup_project_from_design_mode()
+    {
+        // Visual Studio's guidVSStd97 cmdidStart (Debug.Start, F5) and cmdidStartNoDebug (Debug.StartWithoutDebugging, Ctrl+F5).
+        var std97 = new Guid("{5EFC7975-14BC-11CF-9B2B-00AA00573819}");
+        Check.Equal<bool?>(true, DevGuard.LaunchKind(std97, 295), "F5");
+        Check.Equal<bool?>(false, DevGuard.LaunchKind(std97, 368), "Ctrl+F5");
+        Check.Equal<bool?>(null, DevGuard.LaunchKind(std97, 296), "another Debug command");
+        Check.Equal<bool?>(null, DevGuard.LaunchKind(Guid.NewGuid(), 295), "another command set");
+
+        string app = Path.Combine("C:", "src", "App", "App.csproj"), tests = Path.Combine("C:", "src", "Tests", "Tests.csproj");
+        var sdk = new[] { app };
+        Check.Equal(app, DevGuard.Target(new[] { app }, sdk, debuggerInDesignMode: true));
+        Check.Equal(app, DevGuard.Target(new[] { tests, app.ToUpperInvariant() }, sdk, debuggerInDesignMode: true), "the first Runic startup project, any case");
+        Check.Equal<string?>(null, DevGuard.Target(new[] { app }, sdk, debuggerInDesignMode: false), "F5 continues a session");
+        Check.Equal<string?>(null, DevGuard.Target(new[] { tests }, sdk, debuggerInDesignMode: true), "not a Runic startup project");
+        Check.Equal<string?>(null, DevGuard.Target(Array.Empty<string>(), sdk, debuggerInDesignMode: true), "no startup project");
+    }
+
+    [Test]
     public void A_dev_command_acts_on_the_only_project_the_active_documents_or_the_startup_project()
     {
         string root = Path.GetTempPath();
