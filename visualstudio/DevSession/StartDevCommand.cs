@@ -17,6 +17,13 @@ internal sealed class StartDevCommand : RunicCommandHandler
 {
     public override int Id => RunicCommandIds.StartDev;
 
+    public override void BeforeQueryStatus(OleMenuCommand command)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        command.Visible = true;
+        command.Enabled = DevSessionService.Instance.CommandState().CanStart;
+    }
+
     public override Task ExecuteAsync(RunicPackage package, CancellationToken cancellationToken)
         => StartAsync(package, noWindow: false, cancellationToken);
 
@@ -25,14 +32,14 @@ internal sealed class StartDevCommand : RunicCommandHandler
     {
         var service = DevSessionService.Instance;
         string project = await service.PickAsync(null, cancellationToken);
-        await service.StartAsync(project, noWindow, message => ConfirmAsync(package, message), cancellationToken);
+        await service.StartAsync(project, noWindow, ConfirmAsync, cancellationToken);
         await package.ShowToolWindowAsync(typeof(RunicToolWindow), 0, create: true, cancellationToken);
     }
 
-    internal static async Task<bool> ConfirmAsync(RunicPackage package, string message)
+    internal static async Task<bool> ConfirmAsync(string message)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-        return VsShellUtilities.ShowMessageBox(package, message, RunicPackage.Title, OLEMSGICON.OLEMSGICON_WARNING,
+        return VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider, message, RunicPackage.Title, OLEMSGICON.OLEMSGICON_WARNING,
             OLEMSGBUTTON.OLEMSGBUTTON_OKCANCEL, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST) == (int)Microsoft.VisualStudio.VSConstants.MessageBoxResult.IDOK;
     }
 }

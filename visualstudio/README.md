@@ -128,6 +128,7 @@ than traversed.
 | `dev` diagnostics as problems | Error List, read as the `$runic-dev` matcher reads them; F1 opens the Runic diagnostics catalog | Problems through the `$runic-dev` problem matchers |
 | Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time | Watcher and 2 s poll; process command line or image |
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
+| Dev Session view: state, server, Window owner or process, pages, debug endpoints, generated clients | Runic tool window, Dev Session section; toolbar buttons enabled per state; state changes in the status bar text | Dev Session view; "Runic dev" status bar item |
 | F5 with `dev --no-window` | Pre-F5 guard: asks to start `dev --no-window` (then launches once it is ready) or continue without it | `runic` debug type starts it |
 
 Full command parity waits for the production language server (2.0).

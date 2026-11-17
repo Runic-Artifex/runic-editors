@@ -16,6 +16,13 @@ internal sealed class OpenDevServerCommand : RunicCommandHandler
 {
     public override int Id => RunicCommandIds.OpenDevServer;
 
+    public override void BeforeQueryStatus(OleMenuCommand command)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        command.Visible = true;
+        command.Enabled = DevSessionService.Instance.CommandState().CanOpenServer;
+    }
+
     public override async Task ExecuteAsync(RunicPackage package, CancellationToken cancellationToken)
     {
         var service = DevSessionService.Instance;
