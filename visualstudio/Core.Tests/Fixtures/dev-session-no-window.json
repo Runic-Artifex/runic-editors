@@ -1,0 +1,13 @@
+{
+  "schema": "runic.application.tool.dev-session/1",
+  "state": "ready",
+  "processId": 41250,
+  "startedAt": "2026-11-14T18:53:16.2642872+00:00",
+  "project": "/app/App.csproj",
+  "configuration": "Debug",
+  "frontend": { "developmentServer": null, "url": null, "port": null, "stateUrl": null, "directory": "/app/Frontend", "outputDirectory": "/app/Frontend/dist", "generatedDirectory": null },
+  "webRoot": "/app/bin/Debug/net10.0/www",
+  "pages": [ { "document": "index.html", "file": "/app/bin/Debug/net10.0/www/index.html", "url": null } ],
+  "window": { "owner": "ide", "program": "App", "processId": null, "starts": 0, "environment": { "DOTNET_ENVIRONMENT": "Development", "RUNIC_APPLICATION_DEVELOPMENT_ASSETS": "/app/obj/runic/dev-pages" } },
+  "debugEndpoints": []
+}

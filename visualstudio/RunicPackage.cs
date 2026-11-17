@@ -44,5 +44,7 @@ public sealed class RunicPackage : AsyncPackage
     {
         _ = JoinableTaskFactory.RunAsync(() => FormerExtensionNotice.ShowIfInstalledAsync(this, DisposalToken));
         await CommandRegistrar.RegisterAsync(this, cancellationToken);
+        // Follows the dev session files and advises the pre-F5 guard (DevSession/).
+        _ = JoinableTaskFactory.RunAsync(() => DevSession.DevSessionService.Instance.InitializeAsync(this, DisposalToken));
     }
 }

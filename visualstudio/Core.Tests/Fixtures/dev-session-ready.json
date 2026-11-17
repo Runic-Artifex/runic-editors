@@ -1,0 +1,36 @@
+{
+  "schema": "runic.application.tool.dev-session/1",
+  "state": "ready",
+  "processId": 41250,
+  "startedAt": "2026-11-14T18:53:16.2642872+00:00",
+  "processStartedAt": "2026-11-14T18:53:15.9010000+00:00",
+  "project": "/app/App.csproj",
+  "configuration": "Debug",
+  "frontend": {
+    "developmentServer": "vite",
+    "url": "http://127.0.0.1:5173/",
+    "port": 5173,
+    "stateUrl": null,
+    "directory": "/app/Frontend",
+    "outputDirectory": "/app/Frontend/dist",
+    "generatedDirectory": "/app/Frontend/src/generated"
+  },
+  "webRoot": "/app/bin/Debug/net10.0/www",
+  "sourceMap": "/app/obj/Debug/net10.0/runic-bridge/sources.json",
+  "pages": [
+    { "document": "index.html", "file": "/app/bin/Debug/net10.0/www/index.html", "url": "http://127.0.0.1:5173/index.html" }
+  ],
+  "window": {
+    "owner": "dev",
+    "program": "App",
+    "processId": 41377,
+    "starts": 1,
+    "environment": { "DOTNET_ENVIRONMENT": "Development" }
+  },
+  "browser": null,
+  "debugEndpoints": [
+    { "engine": "webview2", "protocol": "cdp", "url": "http://127.0.0.1:9222/" }
+  ],
+  "unavailableDebugEndpoints": [],
+  "added": { "anything": true }
+}

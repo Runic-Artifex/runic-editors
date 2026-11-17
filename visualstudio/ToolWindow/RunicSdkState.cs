@@ -31,10 +31,16 @@ internal sealed class RunicSdkState
     public static JoinableTaskFactory Background { get; } = ThreadHelper.JoinableTaskContext.CreateFactory(ThreadHelper.JoinableTaskContext.CreateCollection());
 
     /// <summary>
-    /// The <c>dotnet</c> executable: <c>RUNIC_DOTNET</c> or <c>dotnet</c> on PATH, as the language client uses. The
-    /// Options page (VS-2) can replace this.
+    /// The <c>dotnet</c> executable that runs <c>dotnet runic doctor</c> and <c>dotnet runic dev</c>: Tools → Options →
+    /// Runic DevKit → .NET executable, else <c>RUNIC_DOTNET</c>, else <c>dotnet</c> on PATH, as the language client uses
+    /// (VS Code: <c>runic.dotnetPath</c>). Read at each run, so a changed option applies to the next one.
     /// </summary>
-    public static Func<string> DotnetPath { get; set; } = () => Environment.GetEnvironmentVariable("RUNIC_DOTNET") is { Length: > 0 } path ? path : "dotnet";
+    public static async Task<string> DotnetAsync(CancellationToken cancellationToken)
+    {
+        var options = await Settings.RunicOptionsPage.GetAsync(cancellationToken);
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        return RunicSettings.Dotnet(options.DotnetPath, Environment.GetEnvironmentVariable(RunicSettings.DotnetVariable));
+    }
 
     private readonly Dictionary<string, FileSystemWatcher> watchers = new(StringComparer.OrdinalIgnoreCase);
     private readonly object gate = new();
@@ -130,7 +136,8 @@ internal sealed class RunicSdkState
     private async Task RunDoctorAsync(SdkProjectState state, CancellationToken cancellationToken)
     {
         state.DoctorRunning = true; Raise();
-        string dotnet = DotnetPath();
+        string dotnet = await DotnetAsync(cancellationToken);
+        await TaskScheduler.Default;
         try
         {
             SdkOutput.WriteLine("> " + dotnet + " " + string.Join(" ", Doctor.Arguments(state.Project).Select(CommandLine.Quote)));
@@ -217,16 +224,25 @@ internal sealed class RunicSdkState
         }
     }
 
+    /// <summary>The loaded project's hierarchy, for Error List entries.</summary>
+    public IVsHierarchy? Hierarchy(string project)
+    {
+        lock (gate) return hierarchies.TryGetValue(project, out var hierarchy) ? hierarchy : null;
+    }
+
+    /// <summary>Another source of section content changed (the dev session); the sections rebuild.</summary>
+    public void NotifyChanged() => Raise();
+
     private void Raise() => Changed?.Invoke(this, EventArgs.Empty);
 }
 
 /// <summary>
-/// The Runic SDK Output pane is VS-2's (<c>Output/</c>). Until it is wired here (<see cref="Target"/>), lines go to the
-/// diagnostic trace, as the language server's stderr does today.
+/// Lines for the "Runic SDK" Output pane (<see cref="Output.SdkPaneOutput"/>); without a target they go to the
+/// diagnostic trace.
 /// </summary>
 internal static class SdkOutput
 {
-    public static IRunicOutput? Target { get; set; }
+    public static IRunicOutput? Target { get; set; } = Output.SdkPaneOutput.Instance;
 
     public static void WriteLine(string line)
     {

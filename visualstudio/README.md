@@ -142,6 +142,11 @@ than traversed.
 | Open C# Member | Double-click, Enter or context menu in the ViewModels section | ViewModels view |
 | Run dotnet runic doctor, doctor results | Tools → Runic, tool window toolbar, Error List context menu; Doctor section | Command, Doctor view |
 | Doctor findings as problems with help links | Error List on the project file; F1 opens the doctor documentation | Problems with a code link |
+| Start, start `--no-window` and stop `dotnet runic dev` | Tools → Runic, tool window toolbar; output in the "Runic SDK" Output pane. Stop works for the `dev` Visual Studio started; one started in a terminal stops there with Ctrl+C | Commands and tasks; outside `dev` stopped with SIGINT (not on Windows) |
+| `dev` diagnostics as problems | Error List, read as the `$runic-dev` matcher reads them; F1 opens the Runic diagnostics catalog | Problems through the `$runic-dev` problem matchers |
+| Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time | Watcher and 2 s poll; process command line or image |
+| Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
+| F5 with `dev --no-window` | Pre-F5 guard: asks to start `dev --no-window` (then launches once it is ready) or continue without it | `runic` debug type starts it |
 
 Full command parity waits for the production language server (2.0).
 
