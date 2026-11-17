@@ -569,8 +569,9 @@
   "scripts": {
     "build": "bun build src/extension.ts --target=node --format=cjs --external=vscode --outfile=dist/extension.cjs && node package-assets.mjs",
     "check": "tsc --noEmit",
-    "test": "bun test test/unit.test.ts test/sdk.test.ts",
+    "test": "bun test test/unit.test.ts test/sdk.test.ts test/protocol.test.ts",
     "test:host": "node test/run-host.mjs",
+    "test:host:protocol2": "RUNIC_TRANSLATIONS_PROTOCOL=2 node test/run-host.mjs",
     "package": "bun run build && node package.mjs"
   },
   "dependencies": {

@@ -12,6 +12,11 @@ exports.run = async function () {
   assert.equal(vscode.extensions.getExtension('runic-artifex.runic'), undefined);
   assert.equal(vscode.extensions.getExtension('runic-artifex.runic-translations'), undefined);
   const api = await extension.activate(); const client = await api.ready(en);
+  // The Runic protocol the server speaks: 1 for Translations 0.13 (the NuGet tool CI restores), 2 for a server that
+  // advertises experimental.runic (Translations 0.14). RUNIC_TRANSLATIONS_PROTOCOL makes a local run insist on one.
+  const protocol = await api.protocol(en);
+  if (process.env.RUNIC_TRANSLATIONS_PROTOCOL) assert.equal(protocol, Number(process.env.RUNIC_TRANSLATIONS_PROTOCOL), 'The server does not speak the requested Runic protocol');
+  console.log(`Runic protocol ${protocol}`);
   const position = document.positionAt(document.getText().indexOf('payment ='));
   editor.selection = new vscode.Selection(position, position);
   const symbols = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', en);
@@ -53,7 +58,10 @@ exports.run = async function () {
   assert.equal(await vscode.workspace.applyEdit(exampleEdit), true);
   const samplePosition = document.positionAt(document.getText().indexOf('payment ='));
   editor.selection = new vscode.Selection(samplePosition, samplePosition);
-  const examples = await client.sendRequest('workspace/executeCommand', {command: 'runic.preview', arguments: [en.toString(), 'payment', 'en']});
+  // The previous stage's writes to de.rmf2 reach the server as workspace/didChangeWatchedFiles, and a write can arrive
+  // as more than one change event after its diagnostics already cleared. The server answers a request pending across
+  // any such revision with ContentModified (#9), so retry it as the client does for its own requests.
+  const examples = await retryModified(() => client.sendRequest('workspace/executeCommand', {command: 'runic.preview', arguments: [en.toString(), 'payment', 'en']}));
   assert.equal(examples.examples.length, 2);
   const selected = await vscode.commands.executeCommand('runic.translations.preview', {locale: 'en', exampleIndex: 1});
   assert.deepEqual(selected.samples, {count: '0', tone: 'neutral'});
@@ -103,15 +111,109 @@ exports.run = async function () {
   assert.equal(afterRestart.key, 'receipt', 'Restart lost an unsaved resource');
   const app = vscode.Uri.joinPath(root, 'app.cs');
   await vscode.workspace.fs.writeFile(app, Buffer.from('class App { }'));
-  await assert.rejects(restarted.sendRequest('textDocument/rename', { textDocument: {uri: en.toString()}, position: nextPosition, newName: 'unsafe' }), /Rename refused/);
-  const explicit = await restarted.sendRequest('workspace/executeCommand', {command: 'runic.renameResource', arguments: [en.toString(), ['receipt'], 'confirmed']});
-  assert.ok(explicit.documentChanges.length >= 3);
-  assert.ok(!JSON.stringify(explicit).includes('app.cs'));
+  if (protocol >= 2) {
+    // Protocol 2 asks with window/showMessageRequest before renaming a resource in a mixed workspace (not driven
+    // here), and its runic.* commands apply their edit through workspace/applyEdit and answer null.
+    const explicit = await restarted.sendRequest('workspace/executeCommand', {command: 'runic.renameResource', arguments: [en.toString(), ['receipt'], 'confirmed']});
+    assert.equal(explicit, null);
+    await waitFor(() => document.getText().includes('confirmed =') && !document.getText().includes('receipt ='), 'The server did not apply runic.renameResource through workspace/applyEdit');
+  } else {
+    await assert.rejects(restarted.sendRequest('textDocument/rename', { textDocument: {uri: en.toString()}, position: nextPosition, newName: 'unsafe' }), /Rename refused/);
+    const explicit = await restarted.sendRequest('workspace/executeCommand', {command: 'runic.renameResource', arguments: [en.toString(), ['receipt'], 'confirmed']});
+    assert.ok(explicit.documentChanges.length >= 3);
+    assert.ok(!JSON.stringify(explicit).includes('app.cs'));
+  }
   await vscode.workspace.saveAll(false);
+  await multiRoot(api, restarted);
+  if (protocol >= 2) await protocol2(api, root, fs);
   await runicSdk(api, fs);
-  require('node:fs').writeFileSync(process.env.RUNIC_VSCODE_RESULT_FILE, JSON.stringify({passed:true,message:'PASS VS Code extension-host assertions.'}));
+  require('node:fs').writeFileSync(process.env.RUNIC_VSCODE_RESULT_FILE, JSON.stringify({passed:true,message:`PASS VS Code extension-host assertions (Runic protocol ${protocol}).`}));
   console.log('PASS VS Code activation, native providers, all preview examples, sample reuse, unsaved refresh, source edits and restart.');
 };
+/**
+ * A second Translations folder (the third workspace folder, another copy of fixtures/rmf2) starts its own language
+ * server. Both servers advertise the same runic.* commands; the extension registers them once and routes each to the
+ * folder of its source document, so the second client starts and its commands reach its own server.
+ */
+async function multiRoot(api, first) {
+  stage = 'multi-root clients and shared server commands';
+  const second = vscode.workspace.workspaceFolders[2];
+  assert.ok(second, 'The host test needs the second Translations folder');
+  const secondEn = vscode.Uri.joinPath(second.uri, 'en.rmf2');
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(secondEn), { preview: false });
+  const secondClient = await api.ready(secondEn);
+  assert.notEqual(secondClient, first);
+  assert.equal(api.serverState(secondEn), 'running');
+  assert.equal(await api.protocol(secondEn), await api.protocol(vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'en.rmf2')));
+  for (const command of ['runic.preview', 'runic.renderPreview', 'runic.markReviewed', 'runic.renameInput', 'runic.extractGroup'])
+    assert.ok(api.serverCommands().includes(command), `${command} is not registered`);
+  assert.equal((await vscode.commands.getCommands(true)).filter(command => command === 'runic.preview').length, 1);
+  // Routed by the source URI: the second folder still has `payment`, which the first folder renamed.
+  const preview = await retryModified(() => vscode.commands.executeCommand('runic.preview', secondEn.toString(), 'payment', 'en'));
+  assert.equal(preview.key, 'payment');
+  await assert.rejects(Promise.resolve(vscode.commands.executeCommand('runic.preview', vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'en.rmf2').toString(), 'payment', 'en')));
+}
+/**
+ * Protocol 2 (Translations 0.14): the palette refactorings invoke F2 at the symbol and the light-bulb code actions,
+ * and the server applies the edits through workspace/applyEdit.
+ */
+async function protocol2(api, root, fs) {
+  const path = require('node:path');
+  const en = vscode.Uri.joinPath(root, 'en.rmf2');
+  const document = await vscode.workspace.openTextDocument(en);
+  let editor = await vscode.window.showTextDocument(document, { preview: false });
+  stage = 'protocol 2: F2 on an input';
+  const inside = document.positionAt(document.getText().indexOf('confirmed ='));
+  editor.selection = new vscode.Selection(inside, inside);
+  // The palette command opens the editor's rename box at the input; cancel it as a user would with Escape.
+  const command = Promise.resolve(vscode.commands.executeCommand('runic.translations.renameInput', { name: 'count' }));
+  let settled = false; command.then(() => { settled = true; }, () => { settled = true; });
+  const deadline = Date.now() + 10000;
+  while (!settled && Date.now() < deadline) { await vscode.commands.executeCommand('cancelRenameInput'); await new Promise(resolve => setTimeout(resolve, 100)); }
+  const target = await command;
+  assert.ok(target, 'Rename Input did not open the rename at an input');
+  const position = new vscode.Position(target.line, target.character);
+  assert.equal(document.getText(new vscode.Range(position, position.translate(0, 5))), 'count');
+  assert.equal(document.getText(new vscode.Range(position.translate(0, -1), position)), '$');
+  assert.ok(vscode.window.activeTextEditor.selection.active.isEqual(position));
+  // vscode-languageclient reports a prepareRename the server answered with ContentModified as "can't be renamed".
+  const prepared = await retryModified(() => vscode.commands.executeCommand('vscode.prepareRename', en, position), 20, /can't be renamed/);
+  assert.equal(prepared.placeholder, 'count');
+  const rename = await vscode.commands.executeCommand('vscode.executeDocumentRenameProvider', en, position, 'attempts');
+  assert.ok(rename.has(vscode.Uri.joinPath(root, 'de.rmf2')), 'Renaming an input must edit every locale');
+  assert.equal(await vscode.workspace.applyEdit(rename), true);
+  assert.ok(document.getText().includes('{$attempts :integer}') && !/\$count\b/.test(document.getText()));
+  await vscode.workspace.saveAll(false);
+  assert.ok(fs.readFileSync(path.join(root.fsPath, 'de.rmf2'), 'utf8').includes('$attempts'));
+  stage = 'protocol 2: inline resource code action';
+  const account = vscode.Uri.joinPath(root, 'account', 'en.rmf2');
+  const accountDocument = await vscode.workspace.openTextDocument(account);
+  await vscode.window.showTextDocument(accountDocument, { preview: false });
+  const inline = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', account, new vscode.Range(1, 0, 1, 0), 'refactor.inline');
+  assert.deepEqual(inline.map(action => action.title), ['Inline into ../en.rmf2']);
+  const inlined = await vscode.commands.executeCommand('runic.translations.inlineResource');
+  assert.equal(inlined.kind, 'refactor.inline');
+  await waitFor(() => !fs.existsSync(account.fsPath) && /^account\b/m.test(document.getText()), () => `Inline Resource did not move account/en.rmf2 into en.rmf2 (account exists: ${fs.existsSync(account.fsPath)}): ${JSON.stringify(document.getText())}`);
+  assert.ok(document.getText().includes('Your account'));
+  assert.equal(await document.save(), true);
+  stage = 'protocol 2: extract group code action';
+  editor = await vscode.window.showTextDocument(document, { preview: false });
+  const group = document.positionAt(/^account\b/m.exec(document.getText()).index);
+  editor.selection = new vscode.Selection(group, group);
+  const extract = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', en, new vscode.Range(group, group.translate(0, 7)), 'refactor.extract');
+  assert.deepEqual(extract.map(action => action.title), ["Extract group 'account' to account/en.rmf2"]);
+  const extracted = await vscode.commands.executeCommand('runic.translations.extractGroup');
+  assert.equal(extracted.kind, 'refactor.extract');
+  // The created file is written through the workspace edit; VS Code need not open it as a document.
+  const extractedText = () => vscode.workspace.textDocuments.find(item => item.uri.fsPath === account.fsPath)?.getText() ?? (fs.existsSync(account.fsPath) ? fs.readFileSync(account.fsPath, 'utf8') : '');
+  await waitFor(() => extractedText().includes('heading = Your account') && !/^account\b/m.test(document.getText()),
+    () => `Extract Group did not move the account group back (account/en.rmf2: ${JSON.stringify(extractedText())}): ${JSON.stringify(document.getText())}`);
+  assert.equal(await document.save(), true);
+  await vscode.workspace.saveAll(false);
+  assert.ok(fs.readFileSync(account.fsPath, 'utf8').includes('heading = Your account'));
+  assert.ok(!fs.readFileSync(en.fsPath, 'utf8').includes('Your account'));
+  console.log('PASS protocol 2: F2 on an input, Inline Resource and Extract Group code actions, server-applied command edits.');
+}
 /** The Runic SDK features in the second workspace folder, a copy of fixtures/sdk-app. */
 async function runicSdk(api, fs) {
   const path = require('node:path');
@@ -181,6 +283,18 @@ async function runicSdk(api, fs) {
   assert.equal(String(help[0].command.arguments[0]), 'https://github.com/Runic-Artifex/runic-sdk/blob/main/docs/diagnostics.md#runicbridge013');
   console.log('PASS Runic SDK: workspace detection, tasks, session file liveness, ViewModels tree, doctor and code actions.');
 }
+/** Retries a request the server answered with ContentModified: a just-started server may still be reading its documents, or a watched-file change arrived while it was pending. */
+async function retryModified(request, attempts = 20, also) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await request(); }
+    catch (error) {
+      const message = String(error?.message ?? error);
+      if (attempt >= attempts || !(/content changed while the request was pending|ContentModified/i.test(message) || also?.test(message))) throw error;
+      console.log(`retrying after: ${message}`);
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+}
 async function waitFor(predicate, message, timeout = 10000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 50)); }
@@ -189,6 +303,9 @@ async function waitFor(predicate, message, timeout = 10000) {
 }
 const execute = exports.run;
 exports.run = async () => {
+  // The stage reached, for a run that VS Code ends or the runner kills before the assertions report.
+  const progress = setInterval(() => require('node:fs').writeFileSync(`${process.env.RUNIC_VSCODE_RESULT_FILE}.stage`, stage), 500);
   try { await execute(); }
   catch (error) { require('node:fs').writeFileSync(process.env.RUNIC_VSCODE_RESULT_FILE, JSON.stringify({ passed: false, message: `${stage}: ${error.stack || String(error)}` })); throw error; }
+  finally { clearInterval(progress); }
 };

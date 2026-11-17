@@ -230,7 +230,9 @@ Output**, for the server log.
 
 For SDK development, set `runic.translations.serverAssembly` to the built tool DLL;
 `runic.dotnetPath` selects the installed .NET executable. Separate
-workspace folders get separate server instances. Restarting reopens unsaved
+workspace folders get separate server instances; the server's `runic.*` commands
+(such as the **Mark reviewed** quick fix's) are registered once and run against
+the folder of the file they name. Restarting reopens unsaved
 buffers; stopping releases watchers and terminates the language-server client.
 For grouped projects, declared `sourceRoots` inside the opened workspace are
 covered by one canonical recursive watch plan, so mounted add/change/delete/rename
@@ -335,13 +337,37 @@ Out-of-order requests and cancelled selections cannot replace a newer preview.
 
 The LSP owns direct and grouped MF2 plus configuration synchronization. Existing C#, TypeScript,
 Svelte language services retain their files. Resource-source edits are not
-application-call-site refactors. Standard resource F2 refuses workspaces
-containing application or other non-resource sources or unindexable links; the
-explicit **Rename Resource in Resource Sources** command intentionally applies
-the narrower transaction. Use the native language service
+application-call-site refactors. In a workspace containing application or other
+non-resource sources or unindexable links, standard resource F2 asks before it
+renames in resource sources only (Translations 0.14), or refuses (Translations
+0.13), where the explicit **Rename Resource in Resource Sources** command
+intentionally applies the narrower transaction. Use the native language service
 for generated API usages and review source-only input/slot operations against
 application bindings. Unsupported language operations must not be treated as a
 successful whole-application rename.
+
+### Refactorings: F2 and the light bulb
+
+With Translations 0.14 (the language server's protocol 2), the Translations
+refactorings take the editor's standard paths, and the server applies their
+edits:
+
+- **F2** renames a resource, an MF2 local, a caller input (on `$name`, in every
+  locale's resource) or a slot reference (on the value of `ref=`, also in the
+  `runic.json` slot contracts).
+- **The light bulb** (Ctrl+.) on a group's name offers **Extract group 'x' to
+  x/en.rmf2**; in a feature-local resource it offers **Inline into
+  ../en.rmf2**, one action per ancestor resource of the same locale (this
+  replaces the file dialog).
+
+The palette commands remain: **Rename Input**, **Rename Slot** and **Rename
+Resource in Resource Sources** move the cursor to the symbol and open the F2
+rename box; **Extract Group to Directory** and **Inline Resource into Ancestor**
+open the code action of that kind. With Translations 0.13 they keep their 0.21
+behaviour (a pick list and an input box, a file dialog for Inline), and F2
+renames resources and MF2 locals only. The extension asks the server for
+protocol 2 and falls back when it does not offer it; **Runic: Show Output**
+logs `Runic protocol 1` or `2` for each workspace folder.
 
 ## VS Code and Visual Studio
 
@@ -365,11 +391,11 @@ features later.
 | Pseudo-locales (`pseudoLocales`) in the preview | Change Preview Locale | Locale selector in the preview window |
 | Change Preview Regional Locale | Command | Regional locale field in the preview window |
 | Change Preview Time Zone | Command | Time zone field in the preview window |
-| Rename Input in Resource Sources | Command | No (2.0) |
-| Rename Slot in Resource Sources | Command | No (2.0) |
-| Rename Resource in Resource Sources | Command | No (2.0) |
-| Extract Group to Directory | Command | No (2.0) |
-| Inline Resource into Ancestor | Command | No (2.0) |
+| Rename Input in Resource Sources | F2 with Translations 0.14, command | No (2.0) |
+| Rename Slot in Resource Sources | F2 with Translations 0.14, command | No (2.0) |
+| Rename Resource in Resource Sources | F2 with Translations 0.14, command | No (2.0) |
+| Extract Group to Directory | Light bulb with Translations 0.14, command | No (2.0) |
+| Inline Resource into Ancestor | Light bulb with Translations 0.14, command | No (2.0) |
 | Export XLIFF | Command | No (2.0) |
 | Import XLIFF (dry run) | Command | No (2.0) |
 | Override sources of library catalogs (diagnostics, completion, hover, definition) | Yes, library sources open read-only | Yes, except definition into library sources |
@@ -404,16 +430,28 @@ bun run package
 
 The host check uses the installed `code`, or `VSCODE_EXECUTABLE_PATH`, with an
 isolated profile, extension directory and a multi-root workspace of a copy of
-`fixtures/rmf2` (Translations only) and of `fixtures/sdk-app` (a Runic SDK
-project). The Translations fixture gets the repository's
+`fixtures/rmf2` (Translations only), of `fixtures/sdk-app` (a Runic SDK
+project) and a second copy of `fixtures/rmf2`, whose own language server shows
+that the folders share the server's `runic.*` commands. Each Translations fixture gets the repository's
 `.config/dotnet-tools.json`, and `dotnet tool restore` installs that
 `dotnet-runic-translations` release from NuGet, so the extension starts the
 language server as it does in a user's workspace. The SDK fixture is never
 built: the test writes the session file and the source map that `dotnet runic
 dev` and the build would, with a stand-in `dotnet runic dev` process whose death
 the session must follow, and a stand-in `dotnet` answers `dotnet runic doctor`. Set
-`RUNIC_TRANSLATIONS_SERVER_ASSEMBLY` to a built `dotnet-runic-translations.dll`
-to test a local server build instead. The check requires an assertion
+`RUNIC_TRANSLATIONS_SERVER_ASSEMBLY` (or `RUNIC_TRANSLATIONS_SERVER`) to a built
+`dotnet-runic-translations.dll` to test a local server build instead. The test
+follows the protocol the server offers: against a protocol 2 server (Translations
+0.14) it also runs F2 on an input and the Inline Resource and Extract Group code
+actions through the palette commands, and checks that the `runic.*` commands
+apply their edits. `bun run test:host:protocol2` requires protocol 2 and fails
+against an older server:
+
+```sh
+RUNIC_TRANSLATIONS_SERVER=<runic-translations-sdk>/tools/dotnet-runic-translations/bin/Release/net10.0/dotnet-runic-translations.dll \
+  bun run test:host:protocol2
+```
+ The check requires an assertion
 report, not merely a zero CLI exit code. Failure logs are retained under
 `artifacts/host-failure`. Packaging produces `artifacts/runic-devkit.vsix`;
 no marketplace upload or user-profile installation is part of these commands.
