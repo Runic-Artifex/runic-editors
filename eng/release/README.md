@@ -9,8 +9,11 @@ from the released commit and a `SHA256SUMS` file:
 | `runic-devkit-vs.vsix` | Visual Studio 2026, **Runic DevKit**, `RunicArtifex.DevKit.VisualStudio` (until 0.21 `runic-translations-visualstudio.vsix`, `Runic.Artifex.Translations.Rmf2`) |
 | `SHA256SUMS` | `sha256sum` lines of both VSIX files |
 
-Nothing is published to the VS Code Marketplace, Open VSX or the Visual Studio
-Marketplace (D066.25 #4); install a VSIX from the release.
+After the GitHub release, the same files are published to the VS Code
+Marketplace and, for final versions, the Visual Studio Marketplace through trusted
+publishing ([Stores](#stores)). Runic DevKit is not on Open VSX for now: users of
+VSCodium, Cursor, Windsurf and other Open VSX editors install the VSIX from the
+GitHub release.
 
 Up to 0.11.0 both extensions were released with Runic Translations
 (runic-translations-sdk), as `0.11.1000` (VS Code) and `0.11.0.1000` (Visual
@@ -22,10 +25,11 @@ former ones, which users uninstall ([VS Code](../../vscode/README.md#moving-from
 [Visual Studio](../../visualstudio/README.md#moving-from-runic-mf2-translations)).
 
 The store identities are fixed before the first marketplace listing and are
-permanent once published: VS Code Marketplace and Open VSX
-`runic-artifex.runic-devkit`, Visual Studio Marketplace `runic-artifex.runic-devkit-vs`
+permanent once published: VS Code Marketplace `runic-artifex.runic-devkit`,
+Visual Studio Marketplace `runic-artifex.runic-devkit-vs`
 (`publishManifest.json` `internalName` `runic-devkit-vs`). `MARKETPLACE` in
-[`release.mjs`](release.mjs) holds them and `release.test.mjs` pins them.
+[`release.mjs`](release.mjs) holds them, and `release.test.mjs` pins them and
+checks that `vscode/package.json` and `visualstudio/publishManifest.json` agree.
 
 ## Versioning
 
@@ -109,7 +113,9 @@ for the dispatched commit (`release.mjs find-ci`), downloads its `vscode-vsix`
 and `visualstudio-vsix` artifacts by id, checks both files' identities and
 mapped versions (`prepare`), writes `candidate.json` and `SHA256SUMS`, and
 checks that neither the tag `v<version>` nor a release exists for another commit
-(`release-check`). A dry run ends there.
+(`release-check`). It then checks each store selected by the **stores** input and
+prints its exact publish command (`store-publish <stores> <version> <vsix>
+--dry-run`, see [Stores](#stores)). A dry run ends there.
 
 Without dry-run, the `publish` job, the only job with `contents: write`,
 `id-token: write` and `attestations: write`, runs in the `release` environment
@@ -121,6 +127,83 @@ the inventory (`verify`), attests the build provenance of both VSIX files and
 version. A rerun keeps a release of this tag and commit, finishes a draft, and
 never modifies a published release. `release.test.mjs` pins this contract.
 
+## Stores
+
+The publish jobs follow D070.11–D070.14. Open VSX is deferred.
+
+| Store | Job | Identity | Versions | Tool |
+| --- | --- | --- | --- | --- |
+| VS Code Marketplace | `marketplace-vscode` (ubuntu) | `runic-artifex.runic-devkit` | every release; `x.y.z-rc.N`/`-preview.N` with `--pre-release` | `@vscode/vsce` 4.1.1 (`vscode/bun.lock`): `vsce publish --packagePath <vsix> --oidc --skip-duplicate [--pre-release]` |
+| Visual Studio Marketplace | `marketplace-visualstudio` (windows-2025) | `runic-artifex.runic-devkit-vs` | final versions only | `VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -oidc` from `Microsoft.VSSDK.BuildTools` 18.12.1606 |
+
+The version mapping is the one in [IDE extension versions](#ide-extension-versions):
+0.22.0 is VS Code `0.22.1000` (a normal Marketplace release with the Preview label)
+and Visual Studio `0.22.0.1000`; `1.0.0-rc.N` is VS Code `1.0.(500+N)` as a
+Marketplace pre-release, which only users who opt in receive, and is not published
+to Visual Studio, which has no pre-release channel and would offer it to everyone.
+`1.0.0` (`1.0.1000`) then sorts above every release candidate.
+
+**How a store job runs.** Both jobs need `publish` (the GitHub release), so they
+run only without dry-run, after the release exists. Each runs in the
+`marketplace` environment with `contents: read`, `id-token: write` and
+`actions: read`, downloads the same CI artifacts by id, checks them against the
+candidate job's hashes and inventory (`verify`), then runs `release.mjs
+store-publish <store>`:
+
+1. `store-check`: reads the store's public listing. A version listed with the same
+   bytes and pre-release flag is skipped (so reruns are safe, and VsixPublisher,
+   which overwrites a listed version, never runs twice); a version listed with
+   other bytes or flag, or a newer listed version, fails the job.
+2. It prints and runs the publish command. Both tools exchange the job's GitHub
+   OIDC token for a short-lived Marketplace credential; the workflow stores no
+   token and removes `VSCE_PAT` from the tools' environment.
+3. `store-verify` waits up to 20 minutes for the store's scan and checks that the
+   store lists the version with the right pre-release flag and serves the release's
+   bytes.
+
+The **stores** input (`all`, `vscode`, `visualstudio`, `none`) selects the stores;
+after a partial failure, dispatch again with the failed store: the GitHub release
+and a store that already lists the version are kept. Use `none` while the store
+accounts do not exist.
+
+**Dry run.** The candidate job runs `store-publish <stores> <version> <vsix>
+--dry-run` in every run: it checks the VSIX identities (the VS Code VSIX against
+`publisher.name`, the Visual Studio identity in `publishManifest.json`) and the
+stores' public listings, and prints the exact commands. It reads only the stores'
+public query API and has no OIDC permission. `release.mjs store-check <version>
+<vsix> [store...]` and `store-verify <version> <vsix> [store...] [--wait <s>]`
+also run locally.
+
+**Listing.** `vscode/package.json` (icon, `homepage`, `bugs`, keywords,
+`galleryBanner`, `qna: false`, `preview`), `vscode/README.md` and `CHANGELOG.md`
+are the VS Code listing; `package.mjs` packs them with relative links pointing at
+the release tag (`--baseContentUrl`/`--baseImagesUrl`) and checks the icon (PNG,
+at least 128 px), at most 30 keywords, and no SVG images or `http:` links. The
+Visual Studio listing is `visualstudio/publishManifest.json`, `overview.md` and the
+manifest's `MoreInfo`, `ReleaseNotes`, `Icon`, `PreviewImage`, `Tags` and
+`<Preview>true</Preview>`, checked by `package.py`. The icons are rendered from the
+Runic Artifex brand mark by [`eng/brand/render-icons.sh`](../brand/render-icons.sh).
+Q&A is off on both stores; questions go to GitHub issues (D070.14).
+
+**VsixPublisher.** The extension still builds with `Microsoft.VSSDK.BuildTools`
+18.9.820 (`visualstudio/RunicArtifex.DevKit.VisualStudio.csproj`). The publish job
+restores 18.12.1606, the first version whose VsixPublisher has `-oidc`, from the
+restore-only project [`vsixpublisher/`](vsixpublisher/VsixPublisher.csproj) in
+locked mode, so publishing does not move the build toolchain.
+
+**One-time setup (maintainer).** Before the first publish:
+
+1. Create the Microsoft publisher `runic-artifex` ("Runic Artifex") at
+   <https://marketplace.visualstudio.com/manage>; it serves both Marketplaces.
+2. Add its Trusted Publishing policy: owner `Runic-Artifex`, repository
+   `runic-editors`, workflow `release.yml`, environment `marketplace`.
+3. Create the GitHub environment `marketplace` with required reviewers and
+   deployment branches `main` only, and no secrets.
+4. Approve the `marketplace` jobs of the first release run.
+
+Until then dispatch with **stores** `none`, or keep the dry run: without the
+policy the OIDC exchange fails and nothing is published.
+
 ## Verifying a release
 
 ```sh
@@ -130,5 +213,6 @@ gh attestation verify runic-devkit.vsix -R Runic-Artifex/runic-editors \
 ```
 
 The attestation shows that the release workflow of this repository, which runs
-only on `main`, released those bytes. It does not build them: it takes them from
-the successful CI run of the same commit and checks them by hash first.
+only on `main`, released those bytes. The workflow does not build them: it takes
+them from the successful CI run of the same commit and checks them by hash first.
+After publishing, `store-verify` checks that each Marketplace serves the same bytes.

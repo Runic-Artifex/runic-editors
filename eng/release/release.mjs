@@ -4,6 +4,11 @@
 //   verify <vsix> <candidate> <version> <ci-run>   check them again against the candidate inventory
 //   release-check <version>                        tag and any release must be absent or at this commit (read-only)
 //   release <version> <vsix> <sha256sums>          create the release, or finish a draft of this commit
+//   store-check <version> <vsix> [store...]        is the version listed on the stores, and as these bytes? (read-only)
+//   store-publish <stores> <version> <vsix> [--dry-run]
+//                                                  check, print and (without --dry-run) run each store's publish command
+//   store-verify <version> <vsix> [store...] [--wait <seconds>]
+//                                                  after publishing: each store lists these bytes with the right flag
 // Adapted from runic-translations-sdk eng/release/ci-artifact.mjs, which released these files with Runic Translations.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -31,6 +36,18 @@ export const MARKETPLACE = {
   vscode: { itemName: "runic-artifex.runic-devkit" },
   visualStudio: { internalName: "runic-devkit-vs", itemName: "runic-artifex.runic-devkit-vs" },
 };
+// The stores the release workflow publishes to (D070.11; Open VSX is deferred). The Visual Studio Marketplace has no
+// pre-release channel and VsixPublisher overwrites a listed version, so it gets final versions only.
+export const STORES = {
+  vscode: { title: "VS Code Marketplace", vsix: VSIX[0], format: "vscode", itemName: MARKETPLACE.vscode.itemName,
+    target: "Microsoft.VisualStudio.Code", asset: "Microsoft.VisualStudio.Services.VSIXPackage" },
+  visualstudio: { title: "Visual Studio Marketplace", vsix: VSIX[1], format: "visualStudio", itemName: MARKETPLACE.visualStudio.itemName,
+    target: "Microsoft.VisualStudio.Ide", asset: "Microsoft.VisualStudio.Ide.Payload", finalOnly: true },
+};
+export const PUBLISH_MANIFEST = "visualstudio/publishManifest.json";
+export const VSCE = "vscode/node_modules/@vscode/vsce/vsce";
+// Microsoft.VSSDK.BuildTools as restored by eng/release/vsixpublisher (NuGet.config keeps packages in .cache/nuget).
+export const VSIXPUBLISHER = ".cache/nuget/microsoft.vssdk.buildtools/18.12.1606/tools/vssdk/bin/VsixPublisher.exe";
 // Runic Translations attached both extensions to its own releases up to this version (the VS Code extension as
 // 0.11.1000, the Visual Studio one as 0.11.0.1000), so a release from this repository must map above it.
 export const LAST_TRANSLATIONS_RELEASE = "0.11.0";
@@ -216,6 +233,149 @@ export function createRelease(version, source, files, spawn = spawnSync, notes =
   return `${found ? "Completed" : "Created"} GitHub release ${tag} at ${source}.`;
 }
 
+// --- Stores -----------------------------------------------------------------------------------------------------
+
+const GALLERY = "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery";
+// IncludeVersions | IncludeFiles | IncludeVersionProperties | IncludeAssetUri
+const GALLERY_FLAGS = 0x1 | 0x2 | 0x10 | 0x80;
+const PRE_RELEASE_PROPERTY = "Microsoft.VisualStudio.Code.PreRelease";
+const compareDotted = (a, b) => {
+  const [x, y] = [a, b].map(version => version.split(".").map(Number));
+  for (let index = 0; index < Math.max(x.length, y.length); index++) {
+    const difference = (x[index] ?? 0) - (y[index] ?? 0);
+    if (difference) return difference;
+  }
+  return 0;
+};
+
+// The stores a `stores` input selects for a version: all, none or one store name. Visual Studio only for a final version.
+export function selectStores(input, version) {
+  const names = input === "all" ? Object.keys(STORES) : input === "none" ? [] : [input];
+  for (const name of names) assert.ok(STORES[name], `Unknown store ${name}; use all, none, ${Object.keys(STORES).join(" or ")}`);
+  const skipped = names.filter(name => STORES[name].finalOnly && version.includes("-"));
+  return { stores: names.filter(name => !skipped.includes(name)), skipped };
+}
+
+// The store's public listing of our extension (versions with their pre-release flag and download URL), or undefined
+// when the store does not list it. Fails when the store answers for another extension.
+export async function galleryListing(name, fetchImpl = fetch) {
+  const store = STORES[name];
+  const response = await fetchImpl(GALLERY, { method: "POST", headers: { "content-type": "application/json",
+    accept: "application/json;api-version=7.2-preview.1" }, body: JSON.stringify({ filters: [{ criteria: [
+    { filterType: 7, value: store.itemName }, { filterType: 8, value: store.target }], pageSize: 1 }], flags: GALLERY_FLAGS }) });
+  if (!response.ok) throw new Error(`${store.title} query for ${store.itemName} failed: ${response.status}`);
+  const extensions = (await response.json()).results?.[0]?.extensions;
+  assert.ok(Array.isArray(extensions), `${store.title} returned no result list for ${store.itemName}`);
+  if (!extensions.length) return undefined;
+  assert.equal(extensions.length, 1, `${store.title} returned several extensions for ${store.itemName}`);
+  const [extension] = extensions;
+  const itemName = `${extension.publisher?.publisherName}.${extension.extensionName}`;
+  assert.equal(itemName.toLowerCase(), store.itemName.toLowerCase(), `${store.title} answered for ${itemName}, not ${store.itemName}`);
+  return { itemName, versions: (extension.versions ?? []).map(entry => ({ version: entry.version,
+    preRelease: (entry.properties ?? []).some(property => property.key === PRE_RELEASE_PROPERTY && property.value === "true"),
+    download: entry.files?.find(file => file.assetType === store.asset)?.source })) };
+}
+
+async function downloadSha256(url, fetchImpl) {
+  assert.ok(url, "The store lists the version without a package download");
+  const response = await fetchImpl(url);
+  if (!response.ok) throw new Error(`Downloading ${url} failed: ${response.status}`);
+  return sha256(Buffer.from(await response.arrayBuffer()));
+}
+
+// The file a store publishes, with its identity checked against the store identity: the VS Code VSIX names
+// publisher.name itself; the Visual Studio Marketplace takes its identity from publishManifest.json.
+export function storePackage(name, vsixDirectory, version, manifestPath = resolve(root, PUBLISH_MANIFEST)) {
+  const store = STORES[name];
+  const path = resolve(vsixDirectory, store.vsix.artifact, store.vsix.file);
+  const metadata = vsixMetadata(path);
+  const versions = ideVersions(version);
+  assert.equal(metadata.version, versions[store.format], `${store.vsix.file} declares version ${metadata.version}, not ${versions[store.format]}`);
+  if (name === "vscode") {
+    assert.equal(`${metadata.publisher}.${metadata.id}`, store.itemName, `${store.vsix.file} is ${metadata.publisher}.${metadata.id}, not ${store.itemName}`);
+    assert.equal(metadata.preRelease, versions.vscodePreRelease, `${store.vsix.file} pre-release flag differs from ${version}`);
+  } else {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    assert.equal(`${manifest.publisher}.${manifest.identity?.internalName}`, store.itemName, `${PUBLISH_MANIFEST} names ${manifest.publisher}.${manifest.identity?.internalName}, not ${store.itemName}`);
+  }
+  return { path, version: versions[store.format], preRelease: name === "vscode" && versions.vscodePreRelease, sha256: sha256(readFileSync(path)) };
+}
+
+// Read-only: "publish" when the store does not list this version and it is above every listed one; "skip" when the
+// store lists exactly these bytes with the right pre-release flag. Anything else fails.
+export async function storeCheck(name, vsixDirectory, version, { fetchImpl = fetch } = {}) {
+  const store = STORES[name];
+  const local = storePackage(name, vsixDirectory, version);
+  const listing = await galleryListing(name, fetchImpl);
+  if (!listing) return { action: "publish", message: `${store.title}: ${store.itemName} is not listed yet; ${local.version} would be its first version.` };
+  const listed = listing.versions.filter(entry => entry.version === local.version);
+  if (listed.length) {
+    for (const entry of listed) {
+      assert.equal(entry.preRelease, local.preRelease, `${store.title} lists ${local.version} ${entry.preRelease ? "as" : "not as"} a pre-release`);
+      const remote = await downloadSha256(entry.download, fetchImpl);
+      assert.equal(remote, local.sha256, `${store.title} lists ${local.version} with other bytes (sha256 ${remote}, release ${local.sha256}); a version cannot be published twice.`);
+    }
+    return { action: "skip", message: `${store.title}: ${store.itemName} ${local.version} is already published with these bytes; skipping.` };
+  }
+  const newest = listing.versions.map(entry => entry.version).sort(compareDotted).at(-1);
+  if (newest && compareDotted(local.version, newest) <= 0) throw new Error(`${store.title} already lists ${store.itemName} ${newest}, above ${local.version}.`);
+  return { action: "publish", message: `${store.title}: ${store.itemName} ${local.version} is not listed (newest ${newest ?? "none"}); it would be published.` };
+}
+
+// The exact publish command of a store, without credentials: both use GitHub OIDC trusted publishing.
+export function publishCommand(name, local, { vsixPublisher = resolve(root, VSIXPUBLISHER), manifest = resolve(root, PUBLISH_MANIFEST) } = {}) {
+  if (name === "vscode") return ["node", resolve(root, VSCE), "publish", "--packagePath", local.path, "--oidc", "--skip-duplicate",
+    ...(local.preRelease ? ["--pre-release"] : [])];
+  return [vsixPublisher, "publish", "-payload", local.path, "-publishManifest", manifest, "-oidc"];
+}
+
+// Checks each selected store, prints its exact publish command and runs it unless this is a dry run. A dry run
+// contacts only the stores' public read APIs.
+export async function storePublish(input, vsixDirectory, version, { dryRun = true, fetchImpl = fetch, spawn = spawnSync, log = console.log,
+  env = process.env, vsixPublisher } = {}) {
+  const { stores, skipped } = selectStores(input, version);
+  for (const name of skipped) log(`${STORES[name].title}: skipped, it gets final versions only (no pre-release channel) and ${version} is not one.`);
+  if (!stores.length && !skipped.length) log("No store selected.");
+  for (const name of stores) {
+    const check = await storeCheck(name, vsixDirectory, version, { fetchImpl });
+    log(check.message);
+    if (check.action !== "publish") continue;
+    const command = publishCommand(name, storePackage(name, vsixDirectory, version), { vsixPublisher });
+    const shown = command.map(part => (/[\s"']/.test(part) ? JSON.stringify(part) : part)).join(" ");
+    if (dryRun) { log(`Dry run, would run: ${shown}`); continue; }
+    if (name === "visualstudio") assert.ok(existsSync(command[0]), `VsixPublisher.exe not found at ${command[0]}; restore eng/release/vsixpublisher first`);
+    log(`Running: ${shown}`);
+    // Trusted publishing only: never hand a stored token to the publish tools.
+    const { VSCE_PAT: _vscePat, ...childEnv } = env;
+    const result = spawn(command[0], command.slice(1), { stdio: "inherit", env: childEnv });
+    if (result.status !== 0) throw new Error(`${STORES[name].title} publish failed (exit ${result.status ?? result.error?.message ?? "unavailable"}).`);
+  }
+  return stores;
+}
+
+// After publishing: each store lists the version with the right pre-release flag, and its package download has the
+// release's bytes. The stores scan a new version before listing it, so this waits up to `waitSeconds`.
+export async function storeVerify(names, vsixDirectory, version, { fetchImpl = fetch, waitSeconds = 0, intervalSeconds = 30,
+  sleep = seconds => new Promise(done => setTimeout(done, seconds * 1000)), log = console.log } = {}) {
+  for (const name of names) {
+    const store = STORES[name];
+    const local = storePackage(name, vsixDirectory, version);
+    for (let waited = 0; ; waited += intervalSeconds) {
+      const entries = (await galleryListing(name, fetchImpl))?.versions.filter(entry => entry.version === local.version) ?? [];
+      if (entries.length) {
+        for (const entry of entries) {
+          assert.equal(entry.preRelease, local.preRelease, `${store.title} lists ${local.version} ${entry.preRelease ? "as" : "not as"} a pre-release`);
+          assert.equal(await downloadSha256(entry.download, fetchImpl), local.sha256, `${store.title} serves other bytes for ${local.version} than the release`);
+        }
+        log(`${store.title}: ${store.itemName} ${local.version} is listed${local.preRelease ? " as a pre-release" : ""} with the release's bytes.`);
+        break;
+      }
+      if (waited >= waitSeconds) throw new Error(`${store.title} does not list ${store.itemName} ${local.version}${waitSeconds ? ` after ${waitSeconds} s` : ""}.`);
+      await sleep(intervalSeconds);
+    }
+  }
+}
+
 const head = () => execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 
 async function main([command, ...args]) {
@@ -243,7 +403,19 @@ async function main([command, ...args]) {
     const files = [...VSIX.map(entry => join(vsixDirectory, entry.artifact, entry.file)), sums];
     for (const file of files) assert.ok(existsSync(file), `Missing release asset ${file}`);
     console.log(createRelease(version, head(), files));
-  } else throw new Error("Use find-ci, prepare <vsix> <version> <ci-run-id> <output>, verify <vsix> <candidate> <version> <ci-run-id>, release-check <version>, or release <version> <vsix> <sha256sums>");
+  } else if (command === "store-check" && args.length >= 2) {
+    const [version, vsixDirectory, ...names] = args;
+    for (const name of names.length ? names : selectStores("all", version).stores) console.log((await storeCheck(name, vsixDirectory, version)).message);
+  } else if (command === "store-publish" && (args.length === 3 || (args.length === 4 && args[3] === "--dry-run"))) {
+    const [stores, version, vsixDirectory] = args;
+    await storePublish(stores, vsixDirectory, version, { dryRun: args[3] === "--dry-run", vsixPublisher: process.env.VSIXPUBLISHER || undefined });
+  } else if (command === "store-verify" && args.length >= 2) {
+    const [version, vsixDirectory, ...rest] = args;
+    const wait = rest.indexOf("--wait");
+    const waitSeconds = wait < 0 ? 0 : Number(rest.splice(wait, 2)[1]);
+    assert.ok(Number.isInteger(waitSeconds) && waitSeconds >= 0, "--wait takes whole seconds");
+    await storeVerify(rest.length ? rest : selectStores("all", version).stores, vsixDirectory, version, { waitSeconds });
+  } else throw new Error("Use find-ci, prepare <vsix> <version> <ci-run-id> <output>, verify <vsix> <candidate> <version> <ci-run-id>, release-check <version>, release <version> <vsix> <sha256sums>, store-check <version> <vsix> [store...], store-publish <all|none|store> <version> <vsix> [--dry-run] or store-verify <version> <vsix> [store...] [--wait <seconds>]");
 }
 
 if (import.meta.main) main(process.argv.slice(2)).catch(error => {

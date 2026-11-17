@@ -29,5 +29,6 @@ evidence justifies more work. Track nonblocking limitations as issues.
 Versions come from `eng/version.json` and are mapped by
 `eng/release/ide-versions.mjs`; never commit a release number into
 `vscode/package.json` or `visualstudio/source.extension.vsixmanifest`. Releases
-are GitHub releases (eng/release/README.md); nothing is published to an
-extension marketplace.
+are GitHub releases, which the release workflow then publishes to the VS Code
+Marketplace and (final versions only) the Visual Studio Marketplace through
+trusted publishing (eng/release/README.md, "Stores"); Open VSX is deferred.
