@@ -75,7 +75,7 @@ public class DevSessionTests
         Check.Equal(null, DevSessions.Parse("{"));
         Check.Equal(null, DevSessions.Parse("[]"));
         Check.Equal(null, DevSessions.Parse(text.Replace("\"processId\": 41250,", "")));
-        Check.Equal(Path.Combine("/app", "obj", "runic", "dev-session.json"), DevSessions.PathFor("/app/App.csproj"));
+        Check.Equal(Path.Combine(Path.GetDirectoryName("/app/App.csproj")!, "obj", "runic", "dev-session.json"), DevSessions.PathFor("/app/App.csproj"));
     }
 
     [Test]
