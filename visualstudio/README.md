@@ -149,6 +149,24 @@ JavaScript breakpoints bind but TSX ones stay unbound. The template's
 `(WebView2 script debugging)` launch profile does not work in Visual Studio
 (SPIKE-VS-0, D070.18); use Debug the Window instead.
 
+**Stopping `dev`.** With `dotnet-runic` 0.22 and later, Visual Studio starts
+`dev` with `RUNIC_DEV_STOP_ON_INPUT=1` and **Stop dotnet runic dev** writes
+`stop` to its standard input and closes it, so `dev` stops as on Ctrl+C: the
+session file says `"stopped"` and the development pages leave `www/`. Only when
+`dev` has not exited within 10 seconds, and with an older tool, Visual Studio
+ends the process tree as before (WIN-06).
+
+### Troubleshooting
+
+- **The JavaScript debugger does not attach** ("Value cannot be null. Parameter
+  name: source", or the attach never finishes). Visual Studio's own JavaScript
+  debug adapter can fail with a damaged `.vs` folder, for example after Visual
+  Studio was ended by force. Close Visual Studio, delete the solution's `.vs`
+  folder and open the solution again. DevKit stops waiting for an attach after
+  60 seconds, says so in the **Runic SDK** Output pane and enables **Debug the
+  Window** again; closing and reopening the solution also ends a run that is
+  still waiting (runic-editors#23).
+
 ## Visual Studio and VS Code
 
 | Feature | Visual Studio | VS Code |
@@ -181,7 +199,7 @@ JavaScript breakpoints bind but TSX ones stay unbound. The template's
 | Open C# Member | Double-click, Enter or context menu in the ViewModels section | ViewModels view |
 | Run dotnet runic doctor, doctor results | Tools → Runic, tool window toolbar, Error List context menu; Doctor section | Command, Doctor view |
 | Doctor findings as problems with help links | Error List on the project file; F1 opens the doctor documentation | Problems with a code link |
-| Start, start `--no-window` and stop `dotnet runic dev` | Tools → Runic, tool window toolbar; output in the "Runic SDK" Output pane. Stop works for the `dev` Visual Studio started; one started in a terminal stops there with Ctrl+C | Commands and tasks; outside `dev` stopped with SIGINT (not on Windows) |
+| Start, start `--no-window` and stop `dotnet runic dev` | Tools → Runic, tool window toolbar; output in the "Runic SDK" Output pane. Stop works for the `dev` Visual Studio started (on its input with `dotnet-runic` 0.22, else by ending it); one started in a terminal stops there with Ctrl+C | Commands and tasks; outside `dev` stopped with SIGINT (not on Windows) |
 | `dev` diagnostics as problems | Error List, read as the `$runic-dev` matcher reads them; F1 opens the Runic diagnostics catalog | Problems through the `$runic-dev` problem matchers |
 | Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time | Watcher and 2 s poll; process command line or image |
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |

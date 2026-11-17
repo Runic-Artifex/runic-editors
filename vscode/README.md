@@ -128,6 +128,17 @@ as stopped; on Windows it checks that the process is `dotnet.exe` or
 **Stop dotnet runic dev** ends the task; a `dev` started in a terminal gets the
 signal of Ctrl+C after you confirm (on Windows, stop it in its terminal).
 
+With `dotnet-runic` 0.22 and later (the tool manifest's version, else
+`dotnet runic --version`), the extension's own `dev` task passes
+`--debug-endpoint` when `dev` runs its Window, so a CS-WebUI Window opens its
+DevTools Protocol port (D070.17), and runs `dev` with `RUNIC_DEV_STOP_ON_INPUT=1`
+in a terminal of its own. **Stop dotnet runic dev**, Ctrl+C in that terminal and
+closing it write `stop` to `dev`'s standard input and close it, so `dev` stops
+as on Ctrl+C on every platform, also on Windows: the session file says
+`"stopped"` and the development pages leave `www/`. Only when `dev` has not
+exited within 10 seconds is it ended by force. With an older tool, and for the
+template's own `runic: dev` tasks, the task runs and stops as before.
+
 ### F5: debug the Window
 
 **Debug the Window (F5 with dotnet runic dev --no-window)** starts the

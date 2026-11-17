@@ -238,8 +238,11 @@ internal sealed class DevSessionService
         string dotnet = await RunicSdkState.DotnetAsync(cancellationToken);
         await TaskScheduler.Default;
         string? manifestVersion = RunicSdkProjects.ProjectToolVersion(project);
+        string? toolVersion = await DevToolVersions.DetectAsync(dotnet, project, manifestVersion, cancellationToken);
         // D070.17: a CS-WebUI Window opens its DevTools Protocol port only when an IDE asks, with dev's 0.22 --debug-endpoint.
-        bool debugEndpoint = !noWindow && DevToolVersions.SupportsDebugEndpoint(await DevToolVersions.DetectAsync(dotnet, project, manifestVersion, cancellationToken));
+        bool debugEndpoint = !noWindow && DevToolVersions.SupportsDebugEndpoint(toolVersion);
+        // WIN-06: the 0.22 dev stops on a stop line on its input and runs its own stop instead of being ended by force.
+        bool stopOnInput = DevToolVersions.SupportsStopOnInput(toolVersion);
         var problems = new DevProblems(project, noWindow, manifestVersion);
         lock (gate) { entry.Problems = problems; entry.ProblemsVersion++; }
         PublishProblems(project, entry, Array.Empty<RunicErrorEntry>());
@@ -261,7 +264,7 @@ internal sealed class DevSessionService
                 if (changed) PublishProblems(project, entry, current);
                 // dev writes the session file before its contract lines; read it at once instead of at the next poll.
                 if (line.StartsWith("[dev] ", StringComparison.Ordinal)) entry.Follower.Refresh();
-            }, debugEndpoint);
+            }, debugEndpoint, stopOnInput);
         }
         catch (InvalidOperationException error)
         {
@@ -294,7 +297,9 @@ internal sealed class DevSessionService
         if (run is { HasExited: false })
         {
             SdkOutput.WriteLine($"Stopping dotnet runic dev (process {run.ProcessId}) for {Path.GetFileName(project)}.");
-            await run.StopAsync(StopTimeout);
+            var how = await run.StopAsync(DevProcess.DefaultInputStopTimeout, StopTimeout);
+            if (run.StopOnInput && how == DevStop.Forced)
+                SdkOutput.WriteLine($"dotnet runic dev did not stop on its input within {DevProcess.DefaultInputStopTimeout.TotalSeconds:0} seconds; ended it by force.");
             Refresh(project);
             return;
         }
@@ -339,9 +344,9 @@ internal sealed class DevSessionService
     {
         List<DevProcess> owned;
         lock (gate) owned = entries.Values.Select(entry => entry.Run).OfType<DevProcess>().Where(run => !run.HasExited).ToList();
-        // Visual Studio is closing: end the processes, as closing VS Code ends its tasks. StopAsync ends the process
-        // tree before its first await, so nothing waits here.
-        foreach (var run in owned) _ = run.StopAsync(TimeSpan.FromSeconds(2));
+        // Visual Studio is closing: stop the processes, as closing VS Code ends its tasks. StopAsync writes the stop
+        // request (0.22) or ends the process tree before its first await, so nothing waits here.
+        foreach (var run in owned) _ = run.StopAsync(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
         lock (gate) { poll?.Dispose(); poll = null; }
     }
 }

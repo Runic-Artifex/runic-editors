@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { detectToolVersion, devArguments, forceStop, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, type DevStop } from "./dev-process.js";
 import { DevSessionFollower, devStateLabel, isActive, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type DoctorCheck, type DoctorReport } from "./doctor.js";
@@ -22,6 +23,8 @@ interface ProjectState {
   sourceMapPath?: string; sourceTree?: SourceTreeNode[]; sourceMapError?: string;
   doctor?: DoctorReport; doctorError?: string; doctorRunning?: boolean;
   execution?: vscode.TaskExecution;
+  /** The `dev` of a task this extension runs with its own terminal (dotnet-runic 0.22 and later), which it stops on its input. */
+  devTerminal?: DevTerminal;
 }
 
 interface RunicTaskDefinition extends vscode.TaskDefinition { type: "runic"; command: "dev" | "doctor" | "build"; noWindow?: boolean; project?: string }
@@ -236,7 +239,7 @@ export class RunicSdk implements vscode.Disposable {
   // ---- dotnet runic dev ---------------------------------------------------------------------------------------------
 
   /** A task of the extension's `runic` type; `dev` gets the `$runic-dev` problem matcher, as the template's task does. */
-  private task(state: ProjectState, command: RunicTaskDefinition["command"], noWindow = false, definition?: RunicTaskDefinition): vscode.Task {
+  private task(state: ProjectState, command: RunicTaskDefinition["command"], noWindow = false, definition?: RunicTaskDefinition, toolVersion = projectRunicToolVersion(state.project)): vscode.Task {
     const dotnet = this.host.dotnetPath(state.folder);
     const several = [...this.projects.values()].filter(item => item.folder === state.folder).length > 1;
     const suffix = several ? ` (${basename(state.project)})` : "";
@@ -244,8 +247,18 @@ export class RunicSdk implements vscode.Disposable {
     definition ??= { type: "runic", command, ...(noWindow ? { noWindow } : {}), ...(several ? { project: this.workspaceRelative(state) } : {}) };
     let task: vscode.Task;
     if (command === "dev") {
-      task = new vscode.Task(definition, state.folder, noWindow ? `dev --no-window${suffix}` : `dev${suffix}`, "runic",
-        new vscode.ProcessExecution(dotnet, ["runic", "dev", ...(noWindow ? ["--no-window"] : []), "--project", state.project], { cwd }), noWindow ? "$runic-dev-no-window" : "$runic-dev");
+      // dotnet-runic 0.22: --debug-endpoint (D070.17) and the stop request on dev's input (WIN-06), through a terminal of the
+      // extension's own that holds dev's standard input. An older or unknown tool runs as a process task, as before.
+      const sdk022 = supportsDevSdk022(toolVersion);
+      const args = devArguments(state.project, noWindow, sdk022);
+      const execution = sdk022
+        ? new vscode.CustomExecution(async () => {
+          const terminal = new DevTerminal(dotnet, args, cwd, this.log, ended => { if (state.devTerminal === ended) state.devTerminal = undefined; });
+          state.devTerminal = terminal;
+          return terminal;
+        })
+        : new vscode.ProcessExecution(dotnet, args, { cwd });
+      task = new vscode.Task(definition, state.folder, noWindow ? `dev --no-window${suffix}` : `dev${suffix}`, "runic", execution, noWindow ? "$runic-dev-no-window" : "$runic-dev");
       task.isBackground = true;
       task.detail = noWindow ? "dotnet runic dev --no-window: the frontend only; F5 starts the Window" : "dotnet runic dev: the development server and the Window";
     } else if (command === "build") {
@@ -296,7 +309,8 @@ export class RunicSdk implements vscode.Disposable {
       await this.stopDev(state.project, true);
       await this.waitFor(state, current => !isActive(current), 30000);
     }
-    const task = await this.workspaceTask(state, noWindow ? templateTaskLabels.devNoWindow : templateTaskLabels.dev) ?? this.task(state, "dev", noWindow);
+    const task = await this.workspaceTask(state, noWindow ? templateTaskLabels.devNoWindow : templateTaskLabels.dev)
+      ?? this.task(state, "dev", noWindow, undefined, await detectToolVersion(this.host.dotnetPath(state.folder), dirname(state.project), projectRunicToolVersion(state.project)));
     this.log.info(`Starting ${task.source === "Workspace" ? `the workspace task "${task.name}"` : `dotnet runic dev${noWindow ? " --no-window" : ""}`} for ${state.project}`);
     state.execution = await vscode.tasks.executeTask(task);
     return state;
@@ -305,8 +319,11 @@ export class RunicSdk implements vscode.Disposable {
   async stopDev(target: unknown, quiet = false) {
     const state = await this.pick(target);
     if (!state) return;
+    const terminal = state.devTerminal;
     const execution = this.runningExecution(state);
-    if (execution) { execution.terminate(); state.execution = undefined; }
+    // dotnet-runic 0.22: stop on the input, so dev runs its own stop; the terminal ends when dev has exited.
+    if (terminal?.running) { await terminal.stop(); state.execution = undefined; }
+    else if (execution) { execution.terminate(); state.execution = undefined; }
     else {
       const snapshot = await state.follower.refresh();
       if (!isActive(snapshot) || !snapshot.session) { if (!quiet) void vscode.window.showInformationMessage(`dotnet runic dev does not run for ${basename(state.project)}.`); return; }
@@ -609,6 +626,65 @@ async function openLocation(location: SourceLocation) {
   const position = new vscode.Position(Math.max(0, location.line - 1), Math.max(0, location.column - 1));
   try { await vscode.window.showTextDocument(vscode.Uri.file(location.file), { selection: new vscode.Range(position, position), preview: true }); }
   catch (error) { throw new Error(`Could not open ${locationText(location)}: ${errorSummary(error)}`); }
+}
+
+/**
+ * The terminal of a `dotnet runic dev` task for `dotnet-runic` 0.22 and later: it starts `dev` with a piped standard
+ * input and `RUNIC_DEV_STOP_ON_INPUT=1`, shows its output (the task's problem matcher reads it), and stops it by
+ * writing `stop` and closing the input, ending the process only when `dev` has not exited within 10 seconds (WIN-06).
+ * Stop, closing the terminal and Ctrl+C in it all stop `dev` this way; the terminal closes with `dev`'s exit code.
+ */
+class DevTerminal implements vscode.Pseudoterminal {
+  private readonly writeEmitter = new vscode.EventEmitter<string>();
+  private readonly closeEmitter = new vscode.EventEmitter<number | void>();
+  readonly onDidWrite = this.writeEmitter.event;
+  readonly onDidClose = this.closeEmitter.event;
+  private child?: ChildProcess;
+  private stopping?: Promise<DevStop>;
+  private ended = false;
+
+  constructor(private readonly dotnet: string, private readonly args: string[], private readonly cwd: string, private readonly log: vscode.LogOutputChannel, private readonly onEnd: (terminal: DevTerminal) => void) {}
+
+  get running(): boolean { return !!this.child && !this.ended; }
+
+  open(): void {
+    this.writeEmitter.fire(terminalText(`> ${this.dotnet} ${this.args.join(" ")}\n`));
+    const child = spawnDev(this.dotnet, this.args, this.cwd, true);
+    this.child = child;
+    const write = (data: string) => this.writeEmitter.fire(terminalText(data));
+    child.stdout?.setEncoding("utf8"); child.stdout?.on("data", write);
+    child.stderr?.setEncoding("utf8"); child.stderr?.on("data", write);
+    child.on("error", error => { write(`\nCould not start ${this.dotnet}: ${error.message}\n`); this.end(1); });
+    child.on("close", (code, signal) => { write(`\ndotnet runic dev exited with ${code ?? signal}.\n`); this.end(code ?? 1); });
+  }
+
+  /** Ctrl+C in the terminal stops dev as the Stop command does. */
+  handleInput(data: string): void {
+    if (data.includes("\x03")) void this.stop();
+  }
+
+  /** The terminal was closed or the task terminated: stop dev the same way. */
+  close(): void {
+    void this.stop();
+  }
+
+  stop(): Promise<DevStop> {
+    const child = this.child;
+    if (!child || this.ended) return Promise.resolve("exited");
+    this.stopping ??= stopDevProcess(child, { stopOnInput: true, force: forceStop }).then(how => {
+      if (how === "forced") this.log.warn(`dotnet runic dev (process ${child.pid}) did not stop on its input within 10 seconds; ended it by force.`);
+      else this.log.info(`dotnet runic dev (process ${child.pid}) stopped on its input.`);
+      return how;
+    });
+    return this.stopping;
+  }
+
+  private end(code: number) {
+    if (this.ended) return;
+    this.ended = true;
+    this.closeEmitter.fire(code);
+    this.onEnd(this);
+  }
 }
 
 /** Runs a task and resolves with its process's exit code. */

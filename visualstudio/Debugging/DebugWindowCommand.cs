@@ -14,6 +14,7 @@ using RunicArtifex.DevKit.VisualStudio.Commands;
 using RunicArtifex.DevKit.VisualStudio.Core;
 using RunicArtifex.DevKit.VisualStudio.DevSession;
 using RunicArtifex.DevKit.VisualStudio.ToolWindow;
+using SolutionEvents = Microsoft.VisualStudio.Shell.Events.SolutionEvents;
 
 namespace RunicArtifex.DevKit.VisualStudio.Debugging;
 
@@ -28,7 +29,19 @@ namespace RunicArtifex.DevKit.VisualStudio.Debugging;
 internal sealed class DebugWindowCommand : RunicCommandHandler
 {
     private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(10);
-    private static int running;
+
+    /// <summary>
+    /// The running run, if any. A hung <c>Attach2</c> or a solution reload releases it, so the command does not stay
+    /// disabled until Visual Studio restarts (runic-editors#23).
+    /// </summary>
+    private static readonly SingleRun Run = new();
+
+    public DebugWindowCommand()
+    {
+        // A solution closed and opened again (as after deleting .vs) starts over: a run still waiting ends.
+        SolutionEvents.OnAfterCloseSolution += (_, _) => ResetAfter("the solution closed");
+        SolutionEvents.OnAfterOpenSolution += (_, _) => ResetAfter("the solution opened");
+    }
 
     public override int Id => RunicCommandIds.DebugWindow;
 
@@ -36,17 +49,37 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         command.Visible = true;
-        command.Enabled = RunicSdkState.Instance.Projects.Count > 0 && Volatile.Read(ref running) == 0;
+        command.Enabled = RunicSdkState.Instance.Projects.Count > 0 && !Run.IsRunning;
     }
 
     public override async Task ExecuteAsync(RunicPackage package, CancellationToken cancellationToken)
     {
-        if (Interlocked.Exchange(ref running, 1) == 1) return;
-        try { await RunAsync(cancellationToken); }
-        finally { Volatile.Write(ref running, 0); await PageAttach.SetStatusAsync(""); }
+        if (Run.TryStart(cancellationToken) is not { } ticket) return;
+        try { await RunAsync(ticket.Token, () => { if (Run.Release(ticket)) UpdateCommands(); }); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && !ticket.IsCurrent) { }
+        finally
+        {
+            if (Run.Release(ticket)) UpdateCommands();
+            await PageAttach.SetStatusAsync("");
+        }
     }
 
-    private static async Task RunAsync(CancellationToken cancellationToken)
+    private static void ResetAfter(string reason)
+    {
+        if (!Run.Reset()) return;
+        SdkOutput.WriteLine($"Debug the Window: {reason}; stopped the run that was still waiting.");
+        UpdateCommands();
+    }
+
+    /// <summary>Re-queries the command state now (toolbar buttons otherwise wait for the next idle query).</summary>
+    private static void UpdateCommands() => _ = RunicSdkState.Background.RunAsync(async () =>
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        await PageAttach.SetStatusAsync("");
+        if (await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(SVsUIShell)) is IVsUIShell shell) shell.UpdateCommandUI(0);
+    });
+
+    private static async Task RunAsync(CancellationToken cancellationToken, Action attachHung)
     {
         var service = DevSessionService.Instance;
         string project = await service.PickAsync(null, cancellationToken);
@@ -90,7 +123,7 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         await PageAttach.SetStatusAsync($"Runic: waiting for the page's DevTools endpoint {plan.EndpointUrl}…");
         try
         {
-            var pages = await PageAttach.WaitForPageAsync(plan.EndpointUrl, processId, () => PageAttach.IsRunning(processId), PageAttach.SetStatusAsync, cancellationToken);
+            var pages = await PageAttach.WaitForPageAsync(plan.EndpointUrl, processId, () => PageAttach.IsRunning(processId), PageAttach.SetStatusAsync, cancellationToken, attachHung);
             SdkOutput.WriteLine($"Attached the JavaScript debugger to {string.Join(", ", pages)} ({plan.EndpointUrl}).");
             if (session.Frontend?.DevelopmentServer != null)
                 SdkOutput.WriteLine("TSX and TS breakpoints bind through the development server's source maps with absolute sources, which runic-sdk 0.22's vite-plugin-runic writes.");
