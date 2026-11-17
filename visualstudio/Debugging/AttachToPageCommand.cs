@@ -34,6 +34,7 @@ internal sealed class AttachToPageCommand : RunicCommandHandler
         string project = await service.PickAsync(null, cancellationToken);
         var snapshot = service.Refresh(project);
         var endpoints = CdpEndpoints.Distinct(PageAttach.Launched(project).Concat(snapshot.IsActive ? CdpEndpoints.FromSession(snapshot.Session) : Enumerable.Empty<PageEndpoint>()));
+        SdkOutput.WriteLine($"Attach to the Page: {(endpoints.Count == 0 ? "no endpoint" : string.Join(", ", endpoints.Select(item => $"{item.Engine} {item.Url} ({item.Source})")))} for {Path.GetFileName(project)}.");
         await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         if (endpoints.Count == 0)
         {
@@ -55,7 +56,7 @@ internal sealed class AttachToPageCommand : RunicCommandHandler
         try
         {
             await PageAttach.SetStatusAsync($"Runic: attaching the JavaScript debugger to {endpoint.Url}…");
-            var pages = await PageAttach.TryAttachAsync(endpoint.Url, cancellationToken);
+            var pages = await PageAttach.TryAttachAsync(endpoint.Url, cancellationToken, listing => SdkOutput.WriteLine("Attach to the Page: " + listing));
             if (pages.Count == 0) throw new System.InvalidOperationException($"The DevTools endpoint {endpoint.Url} shows no page yet; try again once the Window shows its page.");
             SdkOutput.WriteLine($"Attached the JavaScript debugger to {string.Join(", ", pages)} ({endpoint.Url}).");
         }

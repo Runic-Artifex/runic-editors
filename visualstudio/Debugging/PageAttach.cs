@@ -12,6 +12,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
 using RunicArtifex.DevKit.VisualStudio.Core;
+using RunicArtifex.DevKit.VisualStudio.ToolWindow;
 
 namespace RunicArtifex.DevKit.VisualStudio.Debugging;
 
@@ -67,13 +68,20 @@ internal static class PageAttach
         try
         {
             var request = WebRequest.CreateHttp(CdpEndpoints.VersionUrl(url));
-            request.Timeout = 2000; request.ReadWriteTimeout = 2000; request.Proxy = null;
-            using (cancellationToken.Register(request.Abort))
+            request.Timeout = 2000; request.ReadWriteTimeout = 2000; request.Proxy = null; request.KeepAlive = false;
+            // GetResponseAsync ignores Timeout: abort the request after it.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(3));
+            using (timeout.Token.Register(request.Abort))
             using (var response = await request.GetResponseAsync().ConfigureAwait(false))
             using (var reader = new StreamReader(response.GetResponseStream()))
                 return CdpEndpoints.IsVersionResponse(await reader.ReadToEndAsync().ConfigureAwait(false));
         }
-        catch (Exception error) when (error is WebException or IOException or InvalidOperationException) { return false; }
+        catch (Exception error) when (error is WebException or IOException or InvalidOperationException or ObjectDisposedException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return false;
+        }
     }
 
     /// <summary>
@@ -84,11 +92,14 @@ internal static class PageAttach
     /// </summary>
     public static async Task<IReadOnlyList<string>> WaitForPageAsync(string url, Func<bool>? stillRunning, Func<string, Task> status, CancellationToken cancellationToken)
     {
+        // Wall-clock time of the Window running; an iteration that ends in break mode does not count.
         var waited = TimeSpan.Zero;
         var step = TimeSpan.FromMilliseconds(500);
         bool answered = false;
+        string? lastListing = null;
         while (true)
         {
+            var iteration = System.Diagnostics.Stopwatch.StartNew();
             cancellationToken.ThrowIfCancellationRequested();
             if (stillRunning != null && !stillRunning()) throw new InvalidOperationException($"The Window exited before its page's DevTools endpoint {url} answered.");
             if (!answered && await AnswersAsync(url, cancellationToken))
@@ -98,15 +109,19 @@ internal static class PageAttach
             }
             if (answered)
             {
-                var attached = await TryAttachAsync(url, cancellationToken);
+                var attached = await TryAttachAsync(url, cancellationToken, listing =>
+                {
+                    if (listing != lastListing) SdkOutput.WriteLine("Debug the Window: " + listing);
+                    lastListing = listing;
+                });
                 if (attached.Count > 0) return attached;
             }
-            if (!await InBreakModeAsync()) waited += step;
+            await Task.Delay(step, cancellationToken);
+            if (!await InBreakModeAsync()) waited += iteration.Elapsed;
             if (waited >= PageTimeout)
                 throw new TimeoutException(answered
                     ? $"The DevTools endpoint {url} answered, but showed no page within {Math.Round(PageTimeout.TotalMinutes)} minutes. Use Attach to the Page once the Window shows its page."
                     : $"The page's DevTools endpoint {url} did not answer within {Math.Round(PageTimeout.TotalMinutes)} minutes of the Window running.{(IsElevated() ? " Visual Studio runs as administrator, so WebView2 ignores the port; run it without elevation." : "")} The .NET debugger stays attached; use Attach to the Page once the Window shows its page.");
-            await Task.Delay(step, cancellationToken);
         }
     }
 
@@ -117,8 +132,11 @@ internal static class PageAttach
         catch (COMException) { return false; }
     }
 
-    /// <summary>One attempt: lists the endpoint's targets on the CDP transport and attaches to the pages; empty when none is listed yet.</summary>
-    public static async Task<IReadOnlyList<string>> TryAttachAsync(string url, CancellationToken cancellationToken)
+    /// <summary>
+    /// One attempt: lists the endpoint's targets on the CDP transport and attaches to the pages; empty when none is listed
+    /// yet. <paramref name="report"/> receives what each qualifier listed, for the Output pane.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> TryAttachAsync(string url, CancellationToken cancellationToken, Action<string>? report = null)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is not EnvDTE80.DTE2 dte) throw new InvalidOperationException("Visual Studio automation (DTE) is unavailable.");
@@ -129,14 +147,18 @@ internal static class PageAttach
         if (transport == null)
             throw new InvalidOperationException("Visual Studio has no \"JavaScript and TypeScript (Chrome DevTools/V8 Inspector)\" debugger transport. Add the \"JavaScript diagnostics\" component (Microsoft.VisualStudio.Component.JavaScript.Diagnostics) in the Visual Studio Installer.");
         var attached = new List<string>();
+        var listings = new List<string>();
         foreach (string qualifier in CdpEndpoints.Qualifiers(url))
         {
             EnvDTE.Processes processes;
             try { processes = await RetryAsync(() => { ThreadHelper.ThrowIfNotOnUIThread(); return debugger.GetProcesses(transport, qualifier); }, cancellationToken); }
-            catch (Exception error) when (error is COMException or ArgumentException) { continue; }
+            catch (Exception error) when (error is COMException or ArgumentException) { listings.Add($"{qualifier}: {error.Message}"); continue; }
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-            var pages = processes.OfType<EnvDTE80.Process2>().Where(process => { ThreadHelper.ThrowIfNotOnUIThread(); return CdpEndpoints.IsPageTarget(process.Name); }).ToList();
+            var all = processes.OfType<EnvDTE80.Process2>().ToList();
+            var pages = all.Where(process => { ThreadHelper.ThrowIfNotOnUIThread(); return CdpEndpoints.IsPageTarget(process.Name); }).ToList();
+            listings.Add($"{qualifier}: {(all.Count == 0 ? "no targets" : string.Join(", ", all.Select(process => { ThreadHelper.ThrowIfNotOnUIThread(); return process.Name; })))}");
             if (pages.Count == 0) continue;
+            report?.Invoke(string.Join("; ", listings));
             foreach (var page in pages)
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
@@ -146,6 +168,7 @@ internal static class PageAttach
             }
             return attached;
         }
+        report?.Invoke(string.Join("; ", listings));
         return attached;
     }
 
