@@ -160,7 +160,6 @@
         <Icon guid="ImageCatalogGuid" id="Checklist" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Run dotnet runic doctor</ButtonText><CanonicalName>.Runic.RunDoctor</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="RefreshViewModels" priority="0x0110" type="Button">
@@ -168,7 +167,6 @@
         <Icon guid="ImageCatalogGuid" id="Refresh" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings><ButtonText>Refresh ViewModels</ButtonText><CanonicalName>.Runic.RefreshViewModels</CanonicalName></Strings>
       </Button>
       <Button guid="guidRunicCommands" id="DebugWindow" priority="0x0111" type="Button">

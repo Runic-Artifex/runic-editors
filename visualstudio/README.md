@@ -54,9 +54,10 @@ the former command set; assign them again. Their command names
 
 Commands appear in the **Tools → Runic** menu. **View → Other Windows → Runic**
 (also **Tools → Runic → Runic**) opens the Runic tool window, with sections for
-the Dev Session, ViewModels, Doctor and Translations and a toolbar; in this build
-the sections are placeholders and the Runic SDK commands stay hidden until they
-are implemented (the 0.22 parity work, see [Layout](#layout)). Assign preferred shortcuts in Visual Studio’s
+the Dev Session, ViewModels, Doctor and Translations and a toolbar. The
+ViewModels and Doctor sections work in this build; the Dev Session and
+Translations sections are placeholders, and the Runic SDK commands that are not
+implemented yet stay hidden (the 0.22 parity work, see [Layout](#layout)). Assign preferred shortcuts in Visual Studio’s
 keyboard options; the extension does not override existing IDE bindings.
 
 Within an MF2 editor:
@@ -119,6 +120,10 @@ than traversed.
 | Server output | "Runic Translations" Output pane (Tools → Runic → Show Translations Output); trace in Tools → Options → Runic DevKit | Show Output command and status bar |
 | Server state, catalog and locale | No | Status bar |
 | Start failure | One InfoBar per solution, with the reason, Show output and install help | One notification per folder, with install help |
+| ViewModels tree of the development source map | Runic tool window, ViewModels section; Refresh ViewModels | ViewModels view |
+| Open C# Member | Double-click, Enter or context menu in the ViewModels section | ViewModels view |
+| Run dotnet runic doctor, doctor results | Tools → Runic, tool window toolbar, Error List context menu; Doctor section | Command, Doctor view |
+| Doctor findings as problems with help links | Error List on the project file; F1 opens the doctor documentation | Problems with a code link |
 
 Full command parity waits for the production language server (2.0).
 
@@ -140,13 +145,13 @@ placeholder. Implementing a command means changing its handler file, not the
 | `Translations/` | Preview Message, Restart Language Server (implemented); Export XLIFF, Import XLIFF (dry run), Import Catalog, Override Library Message, Show/Refresh Translation Status |
 | `Output/`, `Settings/` | Show Translations Output, Show Runic SDK Output, Options |
 | `DevSession/` | Start `dotnet runic dev`, Start `--no-window`, Stop, Open the Development Server, Open the dev Session File |
-| `ToolWindow/` | Runic tool window (implemented), Run `dotnet runic doctor`, Refresh ViewModels |
+| `ToolWindow/` | Runic tool window, Run `dotnet runic doctor`, Refresh ViewModels (implemented) |
 | `Debugging/` | Debug the Window, Attach to the Page (JavaScript) |
 
 `Core/` (`RunicArtifex.DevKit.VisualStudio.Core`, netstandard2.0, no
 dependencies) holds the logic that needs no Visual Studio: the command and
-section catalogs now, and the dev session, doctor and source-map readers
-later. The VSIX ships it next to the extension's assembly. `Core.Tests/` (TUnit)
+section catalogs, the doctor and source-map readers and the trees of the
+ViewModels and Doctor sections, and the dev session reader later. The VSIX ships it next to the extension's assembly. `Core.Tests/` (TUnit)
 checks `Commands.vsct`, the catalog and the handler files against each other and
 runs on Linux and Windows: `dotnet run --project visualstudio/Core.Tests`.
 

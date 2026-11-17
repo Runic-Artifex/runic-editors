@@ -1,0 +1,14 @@
+{
+  "protocol": "runic.commandline/1", "command": "doctor", "success": true, "exitCode": 0,
+  "payloadType": "runic.application.tool.doctor/1", "fault": null, "diagnostics": [],
+  "payload": {
+    "project": "/app/App.csproj", "host": "desktop", "target": null, "healthy": false,
+    "summary": { "passed": 1, "warnings": 1, "failed": 1 },
+    "checks": [
+      { "id": "dotnet-sdk", "status": "pass", "message": "SDK 10.0.403.", "remediation": null },
+      { "id": "lock-file", "status": "warn", "message": "No lock file.", "remediation": "Run npm install." },
+      { "id": "views-window", "status": "fail", "message": "Not a Window project.", "remediation": "Set RunicApplicationFrontendWindowProject." }
+    ],
+    "hosts": ["desktop"]
+  }
+}
