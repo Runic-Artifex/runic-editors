@@ -279,6 +279,27 @@ published URL); templates write the published `project-v1.schema.json` URI.
 
 ## Commands and preview
 
+| Command | What it does |
+| --- | --- |
+| Runic: Restart Language Server | Stops and starts the language server; reopens unsaved buffers |
+| Runic: Show Output | The language server's log |
+| Runic: Preview Message | The message preview panel |
+| Runic: Change Preview Samples | Another `@example` sample set, or custom values |
+| Runic: Change Preview Locale | The open panel's language, pseudo-locales included |
+| Runic: Change Preview Regional Locale | The locale a user requests, such as `de-CH` for `de` text |
+| Runic: Change Preview Time Zone | The zone `timeZone=local` formats in |
+| Runic: Rename Input in Resource Sources | F2 on the input (protocol 2), or a pick list and an input box (0.13) |
+| Runic: Rename Slot in Resource Sources | F2 on the slot reference (protocol 2), or a pick list and an input box (0.13) |
+| Runic: Rename Resource in Resource Sources | F2 on the resource (protocol 2); renames in resource sources only |
+| Runic: Extract Group to Directory | The Extract code action (protocol 2) |
+| Runic: Inline Resource into Ancestor | The Inline code action (protocol 2), or a file dialog (0.13) |
+| Runic: Export XLIFF | One XLIFF 2.1 document per translated locale |
+| Runic: Import XLIFF (dry run) | What an import would do, written to the output |
+| Runic: Override Library Message… | Adds a library message to the application's overrides |
+| Runic: Show Translation Status | Coverage per locale |
+| Runic: Import .resx or i18next Catalog | A dry run, then the import after you confirm |
+| Runic: Refresh Translation Status | The Translations view |
+
 **Export XLIFF** writes one XLIFF 2.1 document per translated locale into a
 folder you choose, and **Import XLIFF (dry run)** reports what importing a
 translated document would do, unit by unit, without writing anything (the
@@ -382,48 +403,11 @@ logs `Runic protocol 1` or `2` for each workspace folder.
 
 ## VS Code and Visual Studio
 
-Both extensions use the same language server. Visual Studio keeps a smaller
-command set until the production language server (2.0), and gets the Runic SDK
-features later.
-
-| Feature | VS Code | Visual Studio |
-| --- | --- | --- |
-| Highlighting, completion, symbols, folding, formatting | Yes | Yes |
-| Diagnostics for every project file | Yes | Yes |
-| Diagnostic documentation links | Yes | Where the IDE shows LSP code descriptions |
-| Hover with base text and description | Yes | Yes |
-| Definition, references, quick fixes | Yes | Yes |
-| F2 rename of resources and MF2 locals | Yes | Yes |
-| Unsaved `runic.json` in refactors | Yes | Yes |
-| `runic.json` schema validation | Bundled schema, or `$schema` | `$schema` (published schema) |
-| Preview Message | Command | Tools menu |
-| Change Preview Samples | Command | Sample selector in the preview window |
-| Change Preview Locale | Command | Locale selector in the preview window |
-| Pseudo-locales (`pseudoLocales`) in the preview | Change Preview Locale | Locale selector in the preview window |
-| Change Preview Regional Locale | Command | Regional locale field in the preview window |
-| Change Preview Time Zone | Command | Time zone field in the preview window |
-| Rename Input in Resource Sources | F2 with Translations 0.14, command | No (2.0) |
-| Rename Slot in Resource Sources | F2 with Translations 0.14, command | No (2.0) |
-| Rename Resource in Resource Sources | F2 with Translations 0.14, command | No (2.0) |
-| Extract Group to Directory | Light bulb with Translations 0.14, command | No (2.0) |
-| Inline Resource into Ancestor | Light bulb with Translations 0.14, command | No (2.0) |
-| Export XLIFF | Command | No (2.0) |
-| Import XLIFF (dry run) | Command | No (2.0) |
-| Override sources of library catalogs (diagnostics, completion, hover, definition) | Yes, library sources open read-only | Yes, except definition into library sources |
-| Override Library Message… | Command | No (2.0) |
-| Show Translation Status | Command, coverage in the status bar | No (2.0) |
-| Import .resx or i18next Catalog | Command (dry run first) | No (2.0) |
-| Review state in hover | Yes | Yes |
-| Mark reviewed quick fix (`RTR0090`) | Yes | Where the IDE runs code-action commands |
-| Restart Language Server | Command | Tools menu |
-| Show Output | Command and status bar | Server stderr in the diagnostic trace |
-| Server state, catalog, locale and coverage | Status bar | No |
-| Start failure | One notification per folder, with install help | IDE notification on initialization failure |
-| Start and stop `dotnet runic dev`, session file, problem matchers | Dev Session view, tasks | No (later) |
-| F5 of the Window with `dotnet runic dev --no-window` | `runic` debug configuration, or the template's | Launch profile of the template |
-| `dotnet runic doctor` results | Doctor view and Problems | No (later) |
-| Runic diagnostic codes' catalog entries | Quick fix | No (later) |
-| ViewModels and Bridge members, opening C# members | ViewModels view | No (later) |
+Runic DevKit for Visual Studio has the same Runic SDK and Translations
+features, with Visual Studio's own menus, tool window and Error List. The
+[Visual Studio README](../visualstudio/README.md#visual-studio-and-vs-code)
+compares the two extensions feature by feature and lists what Visual Studio
+does not have yet.
 
 ## Build and test
 
