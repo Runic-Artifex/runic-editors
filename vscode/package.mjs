@@ -4,7 +4,9 @@
 // copied to a staging directory, package.json is stamped there and vsce packs the copy, so
 // packaging never modifies tracked files. The stamp also sets "preview" (the Marketplace "Preview"
 // label), which every release carries: the extension is a preview product until 2.0. Only a
-// x.y.z-preview.N or x.y.z-rc.N release is packaged with --pre-release.
+// x.y.z-preview.N or x.y.z-rc.N release is packaged with --pre-release. Relative README links point at the
+// release tag (--baseContentUrl/--baseImagesUrl), and the store listing (icon, keywords, README and CHANGELOG
+// images) is checked after packing (eng/release/listing.mjs).
 // See eng/release/ide-versions.mjs for the version mapping.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -12,6 +14,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { ideVersions, releaseVersion, vsixMetadata } from '../eng/release/ide-versions.mjs';
+import { checkVscodeListing, listingBaseUrls, vscodeListing } from '../eng/release/listing.mjs';
 
 const here = import.meta.dirname;
 const vsce = join(dirname(createRequire(import.meta.url).resolve('@vscode/vsce/package.json')), 'vsce');
@@ -19,9 +22,10 @@ const run = (args, cwd) => execFileSync(process.execPath, [vsce, ...args], { cwd
 const versions = ideVersions(process.argv[2] ?? releaseVersion());
 const output = resolve(process.argv[3] ?? join(here, 'artifacts', 'runic-devkit.vsix'));
 const staging = join(here, 'artifacts', 'package');
+const baseUrls = listingBaseUrls(versions.release);
 
 const files = run(['ls', '--no-dependencies'], here).split('\n').map(line => line.trim()).filter(Boolean);
-assert.ok(files.includes('package.json') && files.includes('dist/extension.cjs') && files.includes('dist/schemas/project-v1.schema.json'), `Unexpected vsce file list: ${files.join(', ')}`);
+assert.ok(files.includes('package.json') && files.includes('dist/extension.cjs') && files.includes('dist/schemas/project-v1.schema.json') && files.includes('media/icon.png'), `Unexpected vsce file list: ${files.join(', ')}`);
 rmSync(staging, { recursive: true, force: true });
 mkdirSync(staging, { recursive: true });
 mkdirSync(dirname(output), { recursive: true });
@@ -31,7 +35,8 @@ try {
   const manifest = JSON.parse(readFileSync(join(here, 'package.json'), 'utf8'));
   writeFileSync(join(staging, 'package.json'), `${JSON.stringify({ ...manifest, version: versions.vscode, preview: versions.vscodePreview }, null, 2)}\n`);
   rmSync(output, { force: true });
-  run(['package', '--no-dependencies', ...(versions.vscodePreRelease ? ['--pre-release'] : []), '--out', output], staging);
+  run(['package', '--no-dependencies', ...(versions.vscodePreRelease ? ['--pre-release'] : []),
+    '--baseContentUrl', baseUrls.content, '--baseImagesUrl', baseUrls.images, '--out', output], staging);
 } finally {
   rmSync(staging, { recursive: true, force: true });
 }
@@ -41,4 +46,5 @@ assert.deepEqual(packed, { id: 'runic-devkit', version: versions.vscode, publish
   preRelease: versions.vscodePreRelease, preview: versions.vscodePreview, packageVersion: versions.vscode,
   packagePreview: versions.vscodePreview },
   `${output} does not carry the ${versions.release} mapping ${JSON.stringify(versions)}`);
-console.log(`Packaged ${output}: version ${versions.vscode}${versions.vscodePreRelease ? ' (pre-release)' : ''} for release ${versions.release}`);
+const icon = checkVscodeListing(vscodeListing(output));
+console.log(`Packaged ${output}: version ${versions.vscode}${versions.vscodePreRelease ? ' (pre-release)' : ''} for release ${versions.release}, icon ${icon.width}x${icon.height}`);

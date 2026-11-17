@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, REPOSITORY, VSIX, assertNewVersion, createRelease, findCiArtifacts, githubPrerelease, prepare,
-  releaseCheck, releaseNotes, scanVsix, selectArtifact, selectCiRun, sha256Sums, verify } from "./release.mjs";
+import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, PUBLISH_MANIFEST, REPOSITORY, STORES, VSCE, VSIX, VSIXPUBLISHER, assertNewVersion, createRelease,
+  findCiArtifacts, galleryListing, githubPrerelease, prepare, publishCommand, releaseCheck, releaseNotes, root, scanVsix, selectArtifact, selectCiRun,
+  selectStores, sha256Sums, storeCheck, storePackage, storePublish, storeVerify, verify } from "./release.mjs";
+import { MAX_KEYWORDS, checkVscodeListing, listingBaseUrls, markdownProblems, pngSize } from "./listing.mjs";
 import { writeVsixFixtures } from "./vsix-fixtures.mjs";
 
 const sha = "a".repeat(40);
@@ -218,8 +221,10 @@ test("the release is dispatch-only, a dry run by default, and only the publish j
   expect(candidate.steps.some(step => step.uses?.startsWith("actions/attest") || / release "\$VERSION"/.test(step.run ?? ""))).toBe(false);
   expect(publish.if).toBe("${{ !inputs.dry-run }}");
   expect(publish.permissions).toEqual({ contents: "write", "id-token": "write", attestations: "write", actions: "read" });
-  for (const permission of ["id-token", "attestations", "contents"])
+  for (const permission of ["attestations", "contents"])
     expect(Object.entries(release.jobs).filter(([, job]) => job.permissions?.[permission] === "write").map(([name]) => name)).toEqual(["publish"]);
+  expect(Object.entries(release.jobs).filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name))
+    .toEqual(["publish", "marketplace-vscode", "marketplace-visualstudio"]);
   // Downloads by id from the CI run the candidate job selected.
   for (const [job, source] of [[candidate, "steps.ci"], [publish, "needs.candidate"]]) {
     const download = job.steps.find(step => step.with?.["artifact-ids"]);
@@ -234,4 +239,218 @@ test("the release is dispatch-only, a dry run by default, and only the publish j
   expect(index(step => step.run?.includes("sha256sum --check --strict"))).toBeLessThan(index(step => step.run?.includes("release.mjs verify")));
   expect(index(step => step.run?.includes("release.mjs verify"))).toBeLessThan(attest);
   expect(index(step => step.run === 'bun eng/release/release.mjs release "$VERSION" artifacts/vsix artifacts/release/SHA256SUMS')).toBeGreaterThan(attest);
+});
+
+// --- Stores ---------------------------------------------------------------------------------------------------------
+
+const GALLERY = "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery";
+const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+// A fake Marketplace: `listed` maps a store to its versions ({ version, preRelease, bytes }), or to undefined.
+const fakeStores = (listed = {}, { publisher = "runic-artifex", status = 200 } = {}) => {
+  const queries = [];
+  const fetchImpl = async (url, init) => {
+    if (url !== GALLERY) {
+      const [name, version] = new URL(url).pathname.split("/").slice(-2);
+      return new Response(listed[name].find(entry => entry.version === version).bytes);
+    }
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(init.body);
+    queries.push(body);
+    if (status !== 200) return new Response("", { status });
+    const [itemName, target] = body.filters[0].criteria.map(criterion => criterion.value);
+    const name = Object.keys(STORES).find(key => STORES[key].itemName === itemName && STORES[key].target === target);
+    const versions = listed[name];
+    const extensions = versions ? [{ publisher: { publisherName: publisher }, extensionName: itemName.split(".")[1], versions: versions.map(entry => ({
+      version: entry.version, properties: entry.preRelease ? [{ key: "Microsoft.VisualStudio.Code.PreRelease", value: "true" }] : [],
+      files: [{ assetType: STORES[name].asset, source: `https://cdn.example/${name}/${entry.version}` }] })) }] : [];
+    return Response.json({ results: [{ extensions }] });
+  };
+  return { fetchImpl, queries };
+};
+const withVsix = async (version, body) => {
+  const directory = mkdtempSync(join(tmpdir(), "runic-editors-stores-"));
+  try {
+    writeVsixFixtures(directory, version);
+    const bytes = Object.fromEntries(Object.entries(STORES).map(([name, store]) => [name, readFileSync(join(directory, store.vsix.artifact, store.vsix.file))]));
+    await body(directory, bytes);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+};
+
+test("the stores are the VS Code and Visual Studio Marketplaces; Visual Studio gets final versions only", () => {
+  expect(Object.keys(STORES)).toEqual(["vscode", "visualstudio"]);
+  expect(STORES.vscode.itemName).toBe(MARKETPLACE.vscode.itemName);
+  expect(STORES.visualstudio.itemName).toBe(MARKETPLACE.visualStudio.itemName);
+  expect(selectStores("all", "0.22.0")).toEqual({ stores: ["vscode", "visualstudio"], skipped: [] });
+  expect(selectStores("all", "1.0.0-rc.1")).toEqual({ stores: ["vscode"], skipped: ["visualstudio"] });
+  expect(selectStores("visualstudio", "1.0.0-rc.1")).toEqual({ stores: [], skipped: ["visualstudio"] });
+  expect(selectStores("none", "0.22.0")).toEqual({ stores: [], skipped: [] });
+  expect(() => selectStores("openvsx", "0.22.0")).toThrow("Unknown store openvsx");
+});
+
+test("store-check queries the public gallery by item name and store and reads versions and pre-release flags", async () => {
+  const { fetchImpl, queries } = fakeStores({ vscode: [{ version: "1.0.501", preRelease: true }, { version: "0.22.1000" }] });
+  expect(await galleryListing("vscode", fetchImpl)).toEqual({ itemName: "runic-artifex.runic-devkit", versions: [
+    { version: "1.0.501", preRelease: true, download: "https://cdn.example/vscode/1.0.501" },
+    { version: "0.22.1000", preRelease: false, download: "https://cdn.example/vscode/0.22.1000" }] });
+  expect(await galleryListing("visualstudio", fetchImpl)).toBeUndefined();
+  expect(queries.map(query => query.filters[0].criteria)).toEqual([
+    [{ filterType: 7, value: "runic-artifex.runic-devkit" }, { filterType: 8, value: "Microsoft.VisualStudio.Code" }],
+    [{ filterType: 7, value: "runic-artifex.runic-devkit-vs" }, { filterType: 8, value: "Microsoft.VisualStudio.Ide" }]]);
+  await expect(galleryListing("vscode", fakeStores({ vscode: [] }, { publisher: "someone" }).fetchImpl)).rejects.toThrow("answered for someone.runic-devkit");
+  await expect(galleryListing("vscode", fakeStores({}, { status: 503 }).fetchImpl)).rejects.toThrow("failed: 503");
+});
+
+test("store-check publishes a new version, skips the same bytes and refuses other bytes, flags or a lower version", async () => {
+  await withVsix("0.22.0", async (vsix, bytes) => {
+    const check = (listed, name = "vscode") => storeCheck(name, vsix, "0.22.0", { fetchImpl: fakeStores(listed).fetchImpl });
+    expect(await check({})).toMatchObject({ action: "publish", message: expect.stringContaining("not listed yet") });
+    expect(await check({ visualstudio: [] }, "visualstudio")).toMatchObject({ action: "publish" });
+    expect(await check({ vscode: [{ version: "0.21.1000", bytes: "old" }] })).toMatchObject({ action: "publish", message: expect.stringContaining("newest 0.21.1000") });
+    expect(await check({ vscode: [{ version: "0.22.1000", bytes: bytes.vscode }] })).toMatchObject({ action: "skip" });
+    expect(await check({ visualstudio: [{ version: "0.22.0.1000", bytes: bytes.visualstudio }] }, "visualstudio")).toMatchObject({ action: "skip" });
+    await expect(check({ vscode: [{ version: "0.22.1000", bytes: "other" }] })).rejects.toThrow("with other bytes");
+    await expect(check({ visualstudio: [{ version: "0.22.0.1000", bytes: "other" }] }, "visualstudio")).rejects.toThrow("with other bytes");
+    await expect(check({ vscode: [{ version: "0.22.1000", preRelease: true, bytes: bytes.vscode }] })).rejects.toThrow("as a pre-release");
+    await expect(check({ vscode: [{ version: "0.23.1000", bytes: "newer" }] })).rejects.toThrow("already lists runic-artifex.runic-devkit 0.23.1000, above 0.22.1000");
+  });
+  await withVsix("1.0.0-rc.2", async (vsix, bytes) => {
+    const fetchImpl = fakeStores({ vscode: [{ version: "1.0.502", bytes: bytes.vscode }] }).fetchImpl;
+    await expect(storeCheck("vscode", vsix, "1.0.0-rc.2", { fetchImpl })).rejects.toThrow("not as a pre-release");
+  });
+});
+
+test("the Visual Studio store identity comes from publishManifest.json and must match MARKETPLACE", async () => {
+  await withVsix("0.22.0", async vsix => {
+    expect(storePackage("visualstudio", vsix, "0.22.0")).toMatchObject({ version: "0.22.0.1000", preRelease: false });
+    const directory = mkdtempSync(join(tmpdir(), "runic-editors-manifest-"));
+    try {
+      const manifest = join(directory, "publishManifest.json");
+      writeFileSync(manifest, JSON.stringify({ publisher: "runic-artifex", identity: { internalName: "runic-mf2-translations" } }));
+      expect(() => storePackage("visualstudio", vsix, "0.22.0", manifest)).toThrow("not runic-artifex.runic-devkit-vs");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+    expect(() => storePackage("vscode", vsix, "0.23.0")).toThrow("declares version 0.22.1000, not 0.23.1000");
+  });
+});
+
+test("store-publish prints the exact trusted-publishing commands and runs them only outside a dry run", async () => {
+  await withVsix("1.0.0-rc.2", async vsix => {
+    const local = storePackage("vscode", vsix, "1.0.0-rc.2");
+    expect(publishCommand("vscode", local)).toEqual(["node", resolve(root, VSCE), "publish", "--packagePath", local.path, "--oidc", "--skip-duplicate", "--pre-release"]);
+    const log = [], calls = [];
+    const spawn = (...args) => { calls.push(args); return { status: 0 }; };
+    expect(await storePublish("all", vsix, "1.0.0-rc.2", { fetchImpl: fakeStores().fetchImpl, spawn, log: line => log.push(line) })).toEqual(["vscode"]);
+    expect(calls).toEqual([]);
+    expect(log[0]).toContain("Visual Studio Marketplace: skipped, it gets final versions only");
+    expect(log.at(-1)).toBe(`Dry run, would run: node ${resolve(root, VSCE)} publish --packagePath ${local.path} --oidc --skip-duplicate --pre-release`);
+  });
+  await withVsix("0.22.0", async (vsix, bytes) => {
+    const vs = storePackage("visualstudio", vsix, "0.22.0");
+    expect(publishCommand("visualstudio", vs)).toEqual([resolve(root, VSIXPUBLISHER), "publish", "-payload", vs.path, "-publishManifest", resolve(root, PUBLISH_MANIFEST), "-oidc"]);
+    expect(publishCommand("vscode", storePackage("vscode", vsix, "0.22.0"))).not.toContain("--pre-release");
+    const calls = [];
+    const spawn = (command, args, options) => { calls.push([command, ...args, options.env]); return { status: 0 }; };
+    const env = { PATH: "/bin", VSCE_PAT: "secret", ACTIONS_ID_TOKEN_REQUEST_URL: "https://token" };
+    await storePublish("vscode", vsix, "0.22.0", { dryRun: false, fetchImpl: fakeStores().fetchImpl, spawn, env, log: () => {} });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].slice(0, 4)).toEqual(["node", resolve(root, VSCE), "publish", "--packagePath"]);
+    expect(calls[0].at(-1)).toEqual({ PATH: "/bin", ACTIONS_ID_TOKEN_REQUEST_URL: "https://token" });
+    // Already listed with these bytes: nothing runs (VsixPublisher would overwrite).
+    calls.length = 0;
+    await storePublish("all", vsix, "0.22.0", { dryRun: false, spawn, env, log: () => {}, fetchImpl: fakeStores({
+      vscode: [{ version: "0.22.1000", bytes: bytes.vscode }], visualstudio: [{ version: "0.22.0.1000", bytes: bytes.visualstudio }] }).fetchImpl });
+    expect(calls).toEqual([]);
+    await expect(storePublish("visualstudio", vsix, "0.22.0", { dryRun: false, spawn, env, log: () => {}, fetchImpl: fakeStores().fetchImpl,
+      vsixPublisher: join(vsix, "missing", "VsixPublisher.exe") })).rejects.toThrow("VsixPublisher.exe not found");
+    await expect(storePublish("vscode", vsix, "0.22.0", { dryRun: false, env, log: () => {}, fetchImpl: fakeStores().fetchImpl,
+      spawn: () => ({ status: 1 }) })).rejects.toThrow("VS Code Marketplace publish failed (exit 1)");
+  });
+});
+
+test("store-verify waits until each store lists the release's bytes with the right flag", async () => {
+  await withVsix("0.22.0", async (vsix, bytes) => {
+    let polls = 0;
+    const listed = fakeStores({ vscode: [{ version: "0.22.1000", bytes: bytes.vscode }] }).fetchImpl;
+    const fetchImpl = async (url, init) => (url === GALLERY && ++polls < 3 ? Response.json({ results: [{ extensions: [] }] }) : listed(url, init));
+    const sleeps = [];
+    await storeVerify(["vscode"], vsix, "0.22.0", { fetchImpl, waitSeconds: 90, sleep: async seconds => sleeps.push(seconds), log: () => {} });
+    expect(sleeps).toEqual([30, 30]);
+    await expect(storeVerify(["vscode"], vsix, "0.22.0", { fetchImpl: fakeStores().fetchImpl, waitSeconds: 60, sleep: async () => {}, log: () => {} }))
+      .rejects.toThrow("does not list runic-artifex.runic-devkit 0.22.1000 after 60 s");
+    await expect(storeVerify(["visualstudio"], vsix, "0.22.0", { log: () => {},
+      fetchImpl: fakeStores({ visualstudio: [{ version: "0.22.0.1000", bytes: "other" }] }).fetchImpl })).rejects.toThrow("serves other bytes");
+    expect(hash(bytes.vscode)).toBe(storePackage("vscode", vsix, "0.22.0").sha256);
+  });
+});
+
+test("the listing files agree with the store identities and the store limits", () => {
+  const read = path => readFileSync(new URL(`../../${path}`, import.meta.url));
+  const publish = JSON.parse(read(PUBLISH_MANIFEST));
+  expect(`${publish.publisher}.${publish.identity.internalName}`).toBe(MARKETPLACE.visualStudio.itemName);
+  expect(publish).toMatchObject({ publisher: MARKETPLACE.publisher, overview: "overview.md", qna: false, priceCategory: "free", private: false,
+    repo: `https://github.com/${REPOSITORY}` });
+  expect(publish.categories.length).toBeGreaterThanOrEqual(1);
+  expect(publish.categories.length).toBeLessThanOrEqual(3);
+  expect(markdownProblems(read("visualstudio/overview.md").toString(), "overview.md")).toEqual([]);
+  const vscode = JSON.parse(read("vscode/package.json"));
+  expect(vscode).toMatchObject({ icon: "media/icon.png", qna: false, bugs: { url: `https://github.com/${REPOSITORY}/issues` }, preview: true });
+  expect(vscode.keywords.length).toBeLessThanOrEqual(MAX_KEYWORDS);
+  expect(vscode.devDependencies["@vscode/vsce"]).toBe("4.1.1");
+  expect(vscode.devDependencies.ovsx).toBeUndefined();
+  const manifest = read("visualstudio/source.extension.vsixmanifest").toString();
+  for (const element of ["<Icon>media\\icon.png</Icon>", "<PreviewImage>media\\preview.png</PreviewImage>", "<Preview>true</Preview>"]) expect(manifest).toContain(element);
+  expect([pngSize(read("vscode/media/icon.png")), pngSize(read("visualstudio/media/icon.png")), pngSize(read("visualstudio/media/preview.png"))])
+    .toEqual([{ width: 256, height: 256 }, { width: 32, height: 32 }, { width: 200, height: 200 }]);
+  const tool = read("eng/release/vsixpublisher/VsixPublisher.csproj").toString();
+  expect(VSIXPUBLISHER).toContain(`/microsoft.vssdk.buildtools/${/Include="Microsoft.VSSDK.BuildTools" Version="([^"]+)"/.exec(tool)[1]}/`);
+  expect(JSON.parse(read("eng/release/vsixpublisher/packages.lock.json")).dependencies[".NETFramework,Version=v4.7.2"]["Microsoft.VSSDK.BuildTools"].resolved).toBe("18.12.1606");
+});
+
+test("the listing checks reject SVG images, plain http, missing icons and too many keywords", () => {
+  expect(listingBaseUrls("0.22.0")).toEqual({ content: "https://github.com/Runic-Artifex/runic-editors/blob/v0.22.0/vscode",
+    images: "https://raw.githubusercontent.com/Runic-Artifex/runic-editors/v0.22.0/vscode" });
+  expect(markdownProblems("![a](https://x/a.png) [b](https://x) [c](#c)", "R")).toEqual([]);
+  expect(markdownProblems('![a](media/a.svg) <img src="https://x/b.SVG?raw=1"> [c](http://x)', "R")).toEqual([
+    "R shows the SVG image media/a.svg", "R shows the SVG image https://x/b.SVG?raw=1", "R links to http://x over plain http"]);
+  const icon = readFileSync(new URL("../../vscode/media/icon.png", import.meta.url));
+  const manifest = { icon: "media/icon.png", keywords: ["runic"], qna: false, homepage: "https://h", bugs: { url: "https://b" }, repository: { url: "https://r" } };
+  const listing = { manifest, readme: "# Runic DevKit", changelog: "", icon };
+  expect(checkVscodeListing(listing)).toEqual({ width: 256, height: 256 });
+  expect(() => checkVscodeListing({ ...listing, icon: undefined })).toThrow("does not contain the icon");
+  expect(() => checkVscodeListing({ ...listing, icon: readFileSync(new URL("../../visualstudio/media/icon.png", import.meta.url)) })).toThrow("at least 128 px");
+  expect(() => checkVscodeListing({ ...listing, manifest: { ...manifest, keywords: Array(31).fill("k") } })).toThrow("1 to 30 keywords");
+  expect(() => checkVscodeListing({ ...listing, manifest: { ...manifest, qna: "marketplace" } })).toThrow("Q&A");
+  expect(() => checkVscodeListing({ ...listing, readme: "![x](a.svg)" })).toThrow("SVG image a.svg");
+});
+
+test("the store jobs publish the released files from the marketplace environment, never in a dry run", () => {
+  const release = workflow("release.yml");
+  const raw = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
+  expect(release.on.workflow_dispatch.inputs.stores).toMatchObject({ type: "choice", default: "all", options: ["all", "vscode", "visualstudio", "none"] });
+  // Trusted publishing only: the workflow reads no stored secret, and Open VSX is deferred.
+  expect(raw).not.toMatch(/secrets\.|OVSX|ovsx|VSCE_PAT|--pat|personalAccessToken/i);
+  const { candidate, "marketplace-vscode": vscode, "marketplace-visualstudio": visualStudio } = release.jobs;
+  const dryRun = candidate.steps.find(step => step.run?.includes("store-publish"));
+  expect(dryRun.run).toBe('bun eng/release/release.mjs store-publish "$STORES" "$VERSION" artifacts/vsix --dry-run');
+  expect(dryRun.env.STORES).toBe("${{ inputs.stores }}");
+  for (const [job, store, runner] of [[vscode, "vscode", "ubuntu-24.04"], [visualStudio, "visualstudio", "windows-2025"]]) {
+    expect(job.needs).toEqual(["candidate", "publish"]);
+    expect(job.environment).toBe("marketplace");
+    expect(job["runs-on"]).toBe(runner);
+    expect(job.permissions).toEqual({ contents: "read", "id-token": "write", actions: "read" });
+    expect(job.if).toContain("!inputs.dry-run");
+    expect(job.if).toContain(`inputs.stores == 'all' || inputs.stores == '${store}'`);
+    const steps = job.steps;
+    const index = predicate => steps.findIndex(predicate);
+    const download = steps.find(step => step.with?.["artifact-ids"]);
+    expect(download.with).toMatchObject({ "artifact-ids": "${{ needs.candidate.outputs.vsix-artifact-ids }}", path: "artifacts/vsix", "run-id": "${{ needs.candidate.outputs.ci-run-id }}" });
+    const publish = index(step => step.run === `bun eng/release/release.mjs store-publish ${store} "$VERSION" artifacts/vsix`);
+    expect(publish).toBeGreaterThan(-1);
+    expect(index(step => step.run?.includes("sha256sum --check --strict"))).toBeLessThan(index(step => step.run?.includes("release.mjs verify")));
+    expect(index(step => step.run?.includes("release.mjs verify"))).toBeLessThan(publish);
+    expect(index(step => step.run?.startsWith(`bun eng/release/release.mjs store-verify "$VERSION" artifacts/vsix ${store}`))).toBeGreaterThan(publish);
+    for (const step of steps.filter(step => step.uses)) expect(step.uses).toMatch(/@[0-9a-f]{40}$/);
+  }
+  expect(visualStudio.if).toContain("!contains(inputs.version, '-')");
+  expect(visualStudio.steps.find(step => step.name === "Restore VsixPublisher").run).toBe("dotnet restore eng/release/vsixpublisher --locked-mode");
+  expect(vscode.steps.find(step => step.name === "Install vsce").run).toBe("bun install --frozen-lockfile --ignore-scripts");
 });

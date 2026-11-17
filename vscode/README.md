@@ -3,9 +3,24 @@
 **Preview.** This extension is a preview product until the production language
 server (2.0): its commands and settings, and the `lsp` protocol it uses, are
 outside the 1.0 compatibility rules and may change in a minor release. Every
-release carries the Marketplace "Preview" label. It is released as a VSIX file
-on the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
-of runic-editors, not on an extension marketplace.
+release carries the Marketplace "Preview" label.
+
+## Install
+
+- **VS Code Marketplace** (from 0.22.0): search for **Runic DevKit** in the
+  Extensions view, open
+  [runic-artifex.runic-devkit](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit),
+  or run `code --install-extension runic-artifex.runic-devkit`. Release
+  candidates (`1.0.0-rc.N`) are Marketplace pre-releases: choose **Switch to
+  Pre-Release Version** to get them.
+- **VSIX file:** download `runic-devkit.vsix` from the
+  [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases) of
+  runic-editors and run `code --install-extension runic-devkit.vsix` (or
+  **Extensions: Install from VSIX…**). `SHA256SUMS` and a build-provenance
+  attestation come with each release.
+- **Open VSX:** Runic DevKit is not on Open VSX for now. In VSCodium, Cursor,
+  Windsurf and other editors that install from Open VSX, install the VSIX file
+  from the GitHub release.
 
 One extension for the Runic SDK and Runic Translations:
 
@@ -45,7 +60,7 @@ install does not replace the former one:
    server for the same files. On activation Runic DevKit shows one notification
    that names the former extensions it finds and offers to uninstall them; reload
    the window afterwards.
-2. Install `runic-devkit.vsix` from the release
+2. Install Runic DevKit from the Marketplace or the release ([Install](#install))
    (`code --install-extension runic-devkit.vsix`).
 
 From Runic MF2 Translations, settings and commands also moved to the `runic.`

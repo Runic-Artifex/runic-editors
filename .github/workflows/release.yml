@@ -1,8 +1,10 @@
 name: Release
 
-# Draft (runic-editors#1): releases the two VSIX files that CI built for a commit on main as a GitHub release with
-# SHA256SUMS and build-provenance attestations. Nothing is published to an extension marketplace (D066.25 #4).
-# Dispatch-only and a dry run by default; see eng/release/README.md.
+# Releases the two VSIX files that CI built for a commit on main as a GitHub release with SHA256SUMS and
+# build-provenance attestations, then publishes the same files to the VS Code Marketplace and (final versions only)
+# the Visual Studio Marketplace through trusted publishing (D070.11-D070.14; Open VSX is deferred). Dispatch-only and
+# a dry run by default: a dry run checks the stores' public listings and prints the publish commands, and never
+# publishes. See eng/release/README.md ("Stores").
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +17,12 @@ on:
         required: false
         type: boolean
         default: true
+      stores:
+        description: Stores to publish to after the GitHub release (Visual Studio gets final versions only); none until the store accounts exist
+        required: false
+        type: choice
+        options: [all, vscode, visualstudio, none]
+        default: all
 
 concurrency:
   group: release
@@ -97,6 +105,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bun eng/release/release.mjs release-check "$VERSION"
+      # Read-only: the stores' public listings and the exact publish commands; no credentials, no publish endpoint.
+      - name: Check the stores and print the publish commands (dry run)
+        env:
+          STORES: ${{ inputs.stores }}
+        run: bun eng/release/release.mjs store-publish "$STORES" "$VERSION" artifacts/vsix --dry-run
 
   publish:
     needs: candidate
@@ -152,3 +165,119 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bun eng/release/release.mjs release "$VERSION" artifacts/vsix artifacts/release/SHA256SUMS
+
+  # The store jobs run after the GitHub release, in the `marketplace` environment (required reviewers, main only, no
+  # stored secrets), and publish exactly the files the release has: the same CI artifacts, checked by hash and
+  # against the candidate inventory. Each publishes through GitHub OIDC trusted publishing, skips a version the store
+  # already lists with these bytes (store-check), and waits until the store lists it (store-verify). A rerun with a
+  # single `stores` value retries one store.
+  marketplace-vscode:
+    needs: [candidate, publish]
+    if: ${{ !inputs.dry-run && (inputs.stores == 'all' || inputs.stores == 'vscode') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # vsce needs Node >= 22.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # @vscode/vsce from vscode/bun.lock; no lifecycle scripts in a job that can request an OIDC token.
+      - name: Install vsce
+        working-directory: vscode
+        run: bun install --frozen-lockfile --ignore-scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.vsix-artifact-ids }}
+          path: artifacts/vsix
+          run-id: ${{ needs.candidate.outputs.ci-run-id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate-${{ github.run_id }}
+          path: artifacts/release
+      - name: Check the candidate files against the candidate job
+        working-directory: artifacts/release
+        env:
+          RELEASE_SHA256: ${{ needs.candidate.outputs.release-sha256 }}
+        run: |
+          test -n "$RELEASE_SHA256"
+          printf '%s\n' "$RELEASE_SHA256" | sha256sum --check --strict
+      - name: Verify the VSIX files against the candidate inventory
+        env:
+          CI_RUN_ID: ${{ needs.candidate.outputs.ci-run-id }}
+        run: bun eng/release/release.mjs verify artifacts/vsix artifacts/release/candidate.json "$VERSION" "$CI_RUN_ID"
+      # vsce publish --packagePath <vsix> --oidc --skip-duplicate, with --pre-release exactly for x.y.z-rc.N/-preview.N.
+      - name: Publish to the VS Code Marketplace
+        run: bun eng/release/release.mjs store-publish vscode "$VERSION" artifacts/vsix
+      - name: Check the VS Code Marketplace listing
+        run: bun eng/release/release.mjs store-verify "$VERSION" artifacts/vsix vscode --wait 1200
+
+  # Final versions only: the Visual Studio Marketplace has no pre-release channel, and VsixPublisher overwrites a
+  # listed version, so store-publish skips a version that is already listed. VsixPublisher.exe (.NET Framework) comes
+  # from the pinned Microsoft.VSSDK.BuildTools of eng/release/vsixpublisher, restored in locked mode.
+  marketplace-visualstudio:
+    needs: [candidate, publish]
+    if: ${{ !inputs.dry-run && (inputs.stores == 'all' || inputs.stores == 'visualstudio') && !contains(inputs.version, '-') }}
+    runs-on: windows-2025
+    timeout-minutes: 40
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      VERSION: ${{ inputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Restore VsixPublisher
+        run: dotnet restore eng/release/vsixpublisher --locked-mode
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.vsix-artifact-ids }}
+          path: artifacts/vsix
+          run-id: ${{ needs.candidate.outputs.ci-run-id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate-${{ github.run_id }}
+          path: artifacts/release
+      - name: Check the candidate files against the candidate job
+        working-directory: artifacts/release
+        env:
+          RELEASE_SHA256: ${{ needs.candidate.outputs.release-sha256 }}
+        run: |
+          test -n "$RELEASE_SHA256"
+          printf '%s\n' "$RELEASE_SHA256" | sha256sum --check --strict
+      - name: Verify the VSIX files against the candidate inventory
+        env:
+          CI_RUN_ID: ${{ needs.candidate.outputs.ci-run-id }}
+        run: bun eng/release/release.mjs verify artifacts/vsix artifacts/release/candidate.json "$VERSION" "$CI_RUN_ID"
+      # VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -oidc
+      - name: Publish to the Visual Studio Marketplace
+        run: bun eng/release/release.mjs store-publish visualstudio "$VERSION" artifacts/vsix
+      - name: Check the Visual Studio Marketplace listing
+        run: bun eng/release/release.mjs store-verify "$VERSION" artifacts/vsix visualstudio --wait 1200
