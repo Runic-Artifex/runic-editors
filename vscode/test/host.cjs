@@ -253,6 +253,27 @@ async function protocol2(api, root, fs) {
   await vscode.workspace.saveAll(false);
   assert.ok(fs.readFileSync(profile.fsPath, 'utf8').includes('title = Your profile'), 'profile/en.rmf2 on disk lacks the extracted group');
   assert.ok(!/^profile\b/m.test(fs.readFileSync(en.fsPath, 'utf8')), 'en.rmf2 on disk still has the profile group');
+  // A refactoring the server refuses on resolve (here: a group that de.rmf2 lacks) warns with its reason instead of
+  // applying nothing silently (#38).
+  stage = 'protocol 2: refused extract group warns';
+  editor = await vscode.window.showTextDocument(document, { preview: false });
+  assert.equal(await editor.edit(builder => builder.insert(document.positionAt(document.getText().length), '\norphan {\n  title = Only in English\n}\n')), true);
+  await saveIfDirty(document);
+  const orphan = () => /^orphan\b/m.exec(document.getText());
+  const refused = api.refusedActions().length;
+  editor = await vscode.window.showTextDocument(document, { preview: false });
+  const orphanGroup = document.positionAt(orphan().index);
+  const offered = await untilCodeActions(en, new vscode.Range(orphanGroup, orphanGroup.translate(0, 6)), 'refactor.extract', "Extract group 'orphan' to orphan/en.rmf2");
+  assert.deepEqual(offered.map(action => action.title), ["Extract group 'orphan' to orphan/en.rmf2"]);
+  editor.selection = new vscode.Selection(orphanGroup, orphanGroup);
+  await vscode.commands.executeCommand('runic.translations.extractGroup');
+  await waitFor(() => api.refusedActions().length > refused, () => `The refused Extract Group showed no warning (outdated: ${JSON.stringify(api.outdatedActions())}; en.rmf2: ${JSON.stringify(document.getText())})`);
+  assert.match(api.refusedActions().at(-1), /^Runic: "Extract group 'orphan' to orphan\/en\.rmf2" was not applied: \S/);
+  assert.ok(orphan(), 'A refused Extract Group must leave the group in en.rmf2');
+  editor = await vscode.window.showTextDocument(document, { preview: false });
+  const start = orphan().index;
+  assert.equal(await editor.edit(builder => builder.delete(new vscode.Range(document.positionAt(start - 1), document.positionAt(document.getText().indexOf('}', start) + 2)))), true);
+  await saveIfDirty(document);
   console.log('PASS protocol 2: F2 on an input, Inline Resource and Extract Group code actions (also into a new folder), server-applied command edits.');
 }
 /** Saves a document that has unsaved changes; a clean one is on disk already. */

@@ -55,6 +55,8 @@ const documentInfo = new Map<string, DocumentInfo>();
 const startupNotice = new OneTimeNotice();
 /** The warnings shown for code actions the server kept rejecting as outdated (refactor-retry.ts; the host test reads them). */
 const outdatedActions: string[] = [];
+/** The warnings shown for code actions whose resolve the server refused (refactor-retry.ts; the host test reads them). */
+const refusedActions: string[] = [];
 // runic-translations status per project (its runic.json path); refreshed after saves and watched file changes, since
 // the command reads the files on disk. A catalog that does not compile has no report until it compiles again.
 const projectStatus = new Map<string, { result?: StatusResult; pending?: Promise<void>; stale: boolean }>();
@@ -242,10 +244,13 @@ async function clientFor(uri: vscode.Uri): Promise<LanguageClient> {
               return sent;
             },
             // A resolve the server rejects as outdated (ContentModified, which vscode-languageclient reports as a
-            // CancellationError) runs once more, then warns instead of applying nothing silently (#32).
+            // CancellationError) runs once more, then warns instead of applying nothing silently (#32). One it refuses
+            // for another reason warns with the server's reason at once (#38).
             resolveCodeAction: (item, token, next) => resolveOutdatedOnce(item, async () => await next(item, token), {
-              outdated: error => !token.isCancellationRequested && (error instanceof vscode.CancellationError || isContentModified(error)),
+              cancelled: () => token.isCancellationRequested,
+              outdated: error => error instanceof vscode.CancellationError || isContentModified(error),
               warn: message => { outdatedActions.push(message); output.warn(message); void vscode.window.showWarningMessage(message); },
+              refused: message => { refusedActions.push(message); output.warn(message); void vscode.window.showWarningMessage(message); },
             }),
           },
         };
@@ -644,7 +649,7 @@ export function activate(context: vscode.ExtensionContext) {
   register("previewTimeZone", options => openPreview(options, false, false, "timeZone"));
   refreshStatus();
   return { sdk: runicSdk.api(), ready: (uri: vscode.Uri) => clientFor(uri), previewState: () => session.state, statusHtml: () => statusPanel?.webview.html,
-    status: () => statusItem?.text, protocol: async (uri: vscode.Uri) => protocolOf(await clientFor(uri)), serverCommands: () => serverCommands?.commands ?? [], outdatedActions: () => [...outdatedActions], serverState: (uri: vscode.Uri) => { const folder = vscode.workspace.getWorkspaceFolder(uri); return folder && serverStates.get(folder.uri.toString())?.state; } };
+    status: () => statusItem?.text, protocol: async (uri: vscode.Uri) => protocolOf(await clientFor(uri)), serverCommands: () => serverCommands?.commands ?? [], outdatedActions: () => [...outdatedActions], refusedActions: () => [...refusedActions], serverState: (uri: vscode.Uri) => { const folder = vscode.workspace.getWorkspaceFolder(uri); return folder && serverStates.get(folder.uri.toString())?.state; } };
 }
 /**
  * Runic (runic-artifex.runic, 0.20–0.21) and Runic MF2 Translations (runic-artifex.runic-translations, up to 0.11) are
