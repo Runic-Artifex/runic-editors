@@ -128,6 +128,12 @@ function Rename-At($document, [string]$pattern, [int]$offset, [string]$current, 
     Start-Sleep -Milliseconds 500
     [Windows.Forms.SendKeys]::SendWait('{ENTER}')
 }
+# The main window's InfoBar whose text contains a message.
+function InfoBar([string]$message) {
+    $main = [Windows.Automation.AutomationElement]::FromHandle((Get-Process -Id $ide.Id).MainWindowHandle)
+    @($main.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ClassNameProperty, 'InfoBarControl')) |
+        Where-Object { $_.Current.Name -like "*$message*" -or (Texts $_) -like "*$message*" })[0]
+}
 # A button of the InfoBar that Visual Studio shows for the server's window/showMessageRequest.
 function InfoBar-Button([string]$message, [string]$button) {
     $main = [Windows.Automation.AutomationElement]::FromHandle((Get-Process -Id $ide.Id).MainWindowHandle)
@@ -403,6 +409,14 @@ try {
     $dte.Documents.SaveAll()
     Wait-For { [IO.File]::ReadAllText("$fixture\de.rmf2") -match '(?m)^details =' } 'The resource rename did not reach de.rmf2.' | Out-Null
     Passed 'F2 on a resource in a mixed workspace asks through window/showMessageRequest; Cancel keeps it, the confirmation renames it'
+    # A rename the server refuses (runic-editors#32): Visual Studio closes the rename box, and DevKit shows the server's
+    # reason in an InfoBar and the Runic Translations pane.
+    $refusal = 'Runic Translations refused the rename: Input names must be identifiers.'
+    Rename-At $document '\.input \{\$attempts' 9 'attempts' '9bad'
+    Wait-For { InfoBar $refusal } "A refused F2 showed no InfoBar: $refusal" 30 | Out-Null
+    Wait-Pane 'Runic Translations' { param($text) $text.Contains($refusal) } 'A refused F2 did not reach the Runic Translations pane.' | Out-Null
+    if ((Text $document) -notmatch '\{\$attempts :integer\}') { throw 'A refused F2 changed the document.' }
+    Passed 'F2 the server refuses shows its reason (InfoBar and Runic Translations pane)'
 
     $receipt = [ordered]@{ sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId; windowName = 'Visual Studio Runic DevKit'
         snapshotName = 'install, package, commands, dev session, doctor, language server, preview, refactorings'; vsixVersion = $version

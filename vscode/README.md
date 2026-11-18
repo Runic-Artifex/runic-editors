@@ -402,6 +402,11 @@ edits. The host test runs them against `dotnet-runic-translations` 0.14.0:
 - A resource rename in a workspace with application sources asks first, with
   **Rename in resource sources** or **Cancel** (the server's
   `window/showMessageRequest`).
+- The server builds a light-bulb refactoring's edit when VS Code resolves the
+  action, and rejects it as outdated when files changed meanwhile, for example
+  through the file watcher after a save. The extension then resolves the action
+  once more; if that is outdated too, it says so in a warning (run the action
+  again) instead of applying nothing silently (runic-editors#32).
 
 The palette commands remain: **Rename Input**, **Rename Slot** and **Rename
 Resource in Resource Sources** move the cursor to the symbol and open the F2

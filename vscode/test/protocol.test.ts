@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { ServerCommands, advertisedCommands, commandSource, refactoringRoute, renameOffset, runicProtocol, type Refactoring } from "../src/protocol.js";
+import { isContentModified, outdatedActionMessage, resolveOutdatedOnce } from "../src/refactor-retry.js";
 
 // The initialize results of Translations 0.13 (no experimental.runic) and 0.14 with the opt-in, as the servers send them.
 const commands = ["runic.extractGroup", "runic.inlineResource", "runic.markReviewed", "runic.preview", "runic.renameInput", "runic.renameSlot", "runic.renameResource", "runic.renderPreview"];
@@ -99,4 +100,45 @@ test("a command without a source URI is refused", () => {
   expect(() => commandSource([])).toThrow("names no source document");
   expect(() => commandSource([3])).toThrow("names no source document");
   expect(commandSource(["file:///a/en.rmf2", ["shop"]])).toBe("file:///a/en.rmf2");
+});
+
+// A code action resolve the server rejects as outdated (#32): once more, then a warning instead of a silent no-op.
+class Outdated extends Error {}
+const action = { title: "Inline into ../en.rmf2" };
+function host() {
+  const warnings: string[] = [];
+  return { warnings, outdated: (error: unknown) => error instanceof Outdated, warn: (message: string) => { warnings.push(message); }, pause: 1 };
+}
+
+test("an outdated resolve runs once more and its result is used", async () => {
+  const h = host(); let calls = 0;
+  const resolved = await resolveOutdatedOnce(action, async () => { if (++calls === 1) throw new Outdated(); return { ...action, edit: true }; }, h);
+  expect(resolved).toEqual({ ...action, edit: true });
+  expect(calls).toBe(2);
+  expect(h.warnings).toEqual([]);
+});
+
+test("a resolve that stays outdated warns with the action's title and applies nothing", async () => {
+  const h = host(); let calls = 0;
+  const resolved = await resolveOutdatedOnce(action, async () => { calls++; throw new Outdated(); }, h);
+  expect(resolved).toBe(action);
+  expect(calls).toBe(2);
+  expect(h.warnings).toEqual([outdatedActionMessage(action.title)]);
+  expect(h.warnings[0]).toContain('"Inline into ../en.rmf2" was not applied');
+});
+
+test("other resolve errors and first-time successes pass through unchanged", async () => {
+  const h = host(); let calls = 0;
+  const failure = new Error("Use an identifier.");
+  await expect(resolveOutdatedOnce(action, async () => { calls++; throw failure; }, h)).rejects.toBe(failure);
+  expect(calls).toBe(1);
+  expect(await resolveOutdatedOnce(action, async () => undefined, h)).toBe(action);
+  expect(h.warnings).toEqual([]);
+});
+
+test("ContentModified is the JSON-RPC code -32801", () => {
+  expect(isContentModified({ code: -32801, message: "Document content changed while the request was pending." })).toBe(true);
+  expect(isContentModified({ code: -32803 })).toBe(false);
+  expect(isContentModified(new Error("x"))).toBe(false);
+  expect(isContentModified(undefined)).toBe(false);
 });
