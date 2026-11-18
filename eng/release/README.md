@@ -207,8 +207,8 @@ policy the OIDC exchange fails and nothing is published.
 ### Publishing to the Visual Studio Marketplace
 
 The Visual Studio extension, **Runic DevKit** `runic-artifex.runic-devkit-vs`, goes
-to the Visual Studio Marketplace from 0.22.0 if Visual Studio parity lands in it,
-otherwise from its first final release after (D070.11). The rules:
+to the Visual Studio Marketplace from 0.22.0, the release Visual Studio parity
+landed in (D070.11). The rules:
 
 - **Final versions only** (D070.11). The job runs only for a version without `-`:
   `1.0.0-rc.N` and `-preview.N` versions reach Visual Studio users through the
