@@ -40,7 +40,8 @@ The first start of a new experimental instance shows Visual Studio's first-run d
 
 `native-host.ps1` copies `fixtures/rmf2` and `fixtures/sdk-app` to a temporary folder, writes a tool manifest with
 this repository's `dotnet-runic-translations` and `dotnet-runic` (`-RunicToolVersion`, default 0.21.0), restores
-them and the SDK project, and puts the project into a solution. Then, in Visual Studio:
+them and the SDK project, and puts the project into a solution with a minimal SDK project around `fixtures/rmf2`
+(so its files are project items). Then, in Visual Studio:
 
 | Check | How |
 | --- | --- |
@@ -53,6 +54,7 @@ them and the SDK project, and puts the project into a solution. Then, in Visual 
 | Doctor runs | Run dotnet runic doctor runs the real tool on the project and its summary reaches the Runic SDK pane |
 | Language server | It starts (Runic Translations pane) when an RMF2 document opens |
 | Translations | Preview Message renders inert rich content, reports and recovers from an invalid number, switches locale and has samples; Restart Language Server keeps an unsaved buffer |
+| Refactorings (protocol 2) | The light bulb's **Inline into ../en.rmf2 (leaves en.rmf2 empty)** empties `account/en.rmf2`; saving it alone keeps it, saving `en.rmf2` too deletes it (closed, no longer a project item). **Extract group** creates it again. An emptied child written into before the save is kept. F2 renames an input in every locale and a slot with its `runic.json` contract; F2 on a resource asks in an InfoBar (`window/showMessageRequest`, the sdk-app's C# makes the workspace mixed): Cancel keeps it, **Rename in resource sources** renames it |
 
 The stand-in follows the VS Code host test (`vscode/test/run-host.mjs`): a real `dotnet runic dev` needs a frontend
 toolchain and minutes, and the follower only reads the session file and checks the process.
@@ -79,5 +81,5 @@ result of each line in the release PR.
 | 12 | ViewModels | Build, then click a ViewModel member in the ViewModels section | The C# file opens at the member |
 | 13 | Doctor | Run Doctor on a project with a failing check | The Doctor section and the Error List show it; the help link opens the tool's README |
 | 14 | Translations tools | Export XLIFF, Import XLIFF (Dry Run), Import Catalog, Override Library Message, Show Translation Status | Each writes its result to the Translations pane; library documents open read-only |
-| 15 | Refactoring | F2 on an `$input`, a slot and a resource; the light bulb's Extract Group and Inline Resource (Translations 0.14) | The edits apply; edited files stay open and unsaved. Visual Studio cannot delete files through LSP (`resourceOperations` has no `delete`), so record what happens to the file Inline Resource empties |
+| 15 | Refactoring | In the real app: F2 on an `$input`, a slot and a resource; the light bulb's Extract Group and Inline Resource (Translations 0.14); then Save All, and check Solution Explorer and Git Changes | The edits apply; edited files stay open and unsaved until saved. After the save, the file Inline Resource emptied is gone from disk, Solution Explorer and the project, and Git Changes shows it deleted |
 | 16 | Keyboard | Reach the tool window, its toolbar and every tree row with the keyboard; Narrator reads row names | Everything is reachable and named |

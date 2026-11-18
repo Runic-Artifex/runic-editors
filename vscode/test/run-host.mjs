@@ -8,8 +8,9 @@ import { execFileSync, spawn } from 'node:child_process';
 // and `dotnet tool restore` installs it from NuGet, so the extension starts `dotnet tool run runic-translations -- lsp`
 // as it does for users. RUNIC_TRANSLATIONS_SERVER_ASSEMBLY (or RUNIC_TRANSLATIONS_SERVER) =<dotnet-runic-translations.dll>
 // tests a locally built server instead (runic.translations.serverAssembly). The host test takes the protocol 2 path
-// when the server advertises it (Translations 0.14); RUNIC_TRANSLATIONS_PROTOCOL=2 (`bun run test:host:protocol2`)
-// fails the run when it does not.
+// when the server advertises it (Translations 0.14 and later). The pinned release speaks protocol 2, so a run against
+// it fails when the server does not; for a local server build, RUNIC_TRANSLATIONS_PROTOCOL=2
+// (`bun run test:host:protocol2`) insists on it, and without it the test follows what the server advertises.
 // The workspace has a second folder, a copy of fixtures/sdk-app (a Runic SDK project), for the Runic SDK features: a
 // stand-in for `dotnet runic dev` (a process whose command line names dotnet-runic.dll with dev) gives the session file
 // a live process ID, and a stand-in `dotnet` (runic.dotnetPath of that folder) answers `dotnet runic doctor`.
@@ -27,7 +28,8 @@ await mkdir(environment.XDG_RUNTIME_DIR, { mode: 0o700 });
 for (const name of ['VSCODE_IPC_HOOK_CLI', 'VSCODE_CLI', 'ELECTRON_RUN_AS_NODE']) delete environment[name];
 try {
   const serverAssembly = process.env.RUNIC_TRANSLATIONS_SERVER_ASSEMBLY || process.env.RUNIC_TRANSLATIONS_SERVER;
-  if (process.env.RUNIC_TRANSLATIONS_PROTOCOL && !serverAssembly) throw new Error('RUNIC_TRANSLATIONS_PROTOCOL needs a server build (RUNIC_TRANSLATIONS_SERVER_ASSEMBLY or RUNIC_TRANSLATIONS_SERVER); `bun run test:host` tests the NuGet tool of .config/dotnet-tools.json.');
+  // The NuGet tool of .config/dotnet-tools.json (Translations 0.14.0) speaks protocol 2.
+  if (!serverAssembly) environment.RUNIC_TRANSLATIONS_PROTOCOL ??= '2';
   const translations = async folder => {
     await cp(join(repository, 'fixtures/rmf2'), folder, { recursive: true });
     if (serverAssembly) {

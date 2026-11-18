@@ -17,6 +17,7 @@ trap { ($_.Exception.ToString() + "`n" + $_.ScriptStackTrace + "`n" + $_.Invocat
 Add-Type -Path "$PSScriptRoot\VisualStudioAutomation.cs"
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
 
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $checks = [Collections.Generic.List[string]]::new()
@@ -79,6 +80,63 @@ function Guard-Question {
 }
 function Render($window) { (Named $window 'Render preview' ([Windows.Automation.ControlType]::Button)).GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke() }
 function Close-Preview($window) { $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern).Close() }
+# The text of an open document (DTE TextDocument).
+function Text($document) { $text = $document.Object('TextDocument'); $text.StartPoint.CreateEditPoint().GetText($text.EndPoint) }
+function Find-Document([string]$path) { @($dte.Documents | Where-Object { $_.FullName -eq $path })[0] }
+function Foreground { [VisualStudioAutomation]::SetForegroundWindow((Get-Process -Id $ide.Id).MainWindowHandle) | Out-Null }
+# An invokable element of Visual Studio whose name matches: the light bulb's menu is a popup window of the process or
+# part of the main window.
+function Find-Invokable([string]$pattern) {
+    $windows = @([Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children,
+        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, $ide.Id)))
+    foreach ($window in $windows) {
+        foreach ($element in $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+            if ($element.Current.Name -like $pattern -and $element.GetSupportedPatterns() -contains [Windows.Automation.InvokePattern]::Pattern) { return $element }
+        }
+    }
+}
+# Opens the light bulb (View.QuickActionsForPosition, Ctrl+.) at the caret and runs the action whose title matches.
+function Invoke-QuickAction($document, [string]$pattern) {
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $document.Activate(); Foreground
+        Run-Command 'View.QuickActionsForPosition'
+        $deadline = [DateTime]::UtcNow.AddSeconds(15)
+        do { $action = Find-Invokable $pattern; if ($action) { break }; Start-Sleep -Milliseconds 300 } while ([DateTime]::UtcNow -lt $deadline)
+        if ($action) {
+            $title = $action.Current.Name
+            $action.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+            return $title.TrimEnd(' ', '.')
+        }
+        [Windows.Forms.SendKeys]::SendWait('{ESC}')
+    }
+    throw "The light bulb offered no action like '$pattern'."
+}
+# F2 (Refactor.Rename) at the first match of a pattern in a document, plus an offset; the server's prepareRename puts
+# the current name in the rename box, which takes the new name and Enter.
+function Rename-At($document, [string]$pattern, [int]$offset, [string]$current, [string]$name) {
+    $document.Activate()
+    $lines = (Text $document) -split "`n"
+    $line = @(0..($lines.Count - 1) | Where-Object { $lines[$_] -match $pattern })[0]
+    if ($null -eq $line) { throw "No '$pattern' in $($document.FullName)." }
+    $document.Selection.MoveToLineAndOffset($line + 1, [regex]::Match($lines[$line], $pattern).Index + $offset + 1)
+    Foreground
+    Run-Command 'Refactor.Rename'
+    $main = [Windows.Automation.AutomationElement]::FromHandle((Get-Process -Id $ide.Id).MainWindowHandle)
+    $box = Wait-For { @($main.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit)) |
+        Where-Object { $_.Current.ClassName -eq 'TextBox' -and !$_.Current.AutomationId -and $_.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $current })[0] } "F2 opened no rename box with '$current'." 20
+    $box.SetFocus(); $box.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($name)
+    Start-Sleep -Milliseconds 500
+    [Windows.Forms.SendKeys]::SendWait('{ENTER}')
+}
+# A button of the InfoBar that Visual Studio shows for the server's window/showMessageRequest.
+function InfoBar-Button([string]$message, [string]$button) {
+    $main = [Windows.Automation.AutomationElement]::FromHandle((Get-Process -Id $ide.Id).MainWindowHandle)
+    foreach ($bar in $main.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ClassNameProperty, 'InfoBarControl'))) {
+        if ($bar.Current.Name -notlike "*$message*") { continue }
+        return @($bar.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)) |
+            Where-Object { $_.Current.Name -eq $button })[0]
+    }
+}
 function Write-Session([string]$path, $session) {
     # dotnet runic dev replaces the file by rename; do the same so the extension never reads half a file.
     New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
@@ -90,7 +148,8 @@ $running = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -e
 if ($running.Count) { throw "Close the /RootSuffix $RootSuffix instance first (process $($running.ProcessId -join ', ')): this check starts its own." }
 
 # The temporary workspace: fixtures/rmf2 (Translations only) and fixtures/sdk-app (a Runic SDK Window project) in one
-# solution, with a tool manifest for the language server (this repository's pin) and dotnet-runic (doctor).
+# solution, with a tool manifest for the language server (this repository's pin) and dotnet-runic (doctor). fixtures/rmf2
+# gets a minimal SDK project, so its files are project items, as the refactorings' delete expects.
 $work = Join-Path $env:TEMP ('runic-vs-host-' + [Guid]::NewGuid().ToString('N'))
 Copy-Item "$root\fixtures\rmf2" "$work\rmf2" -Recurse
 Copy-Item "$root\fixtures\sdk-app" "$work\sdk-app" -Recurse
@@ -112,6 +171,11 @@ try {
         & dotnet new sln -n RunicHost 2>&1 | ForEach-Object { Note "new sln: $_" }
         $solution = @(Get-ChildItem $work -File | Where-Object { $_.Extension -in '.sln', '.slnx' })[0].FullName
         & dotnet sln $solution add $project 2>&1 | ForEach-Object { Note "sln add: $_" }
+        if ($LASTEXITCODE) { throw "dotnet sln add failed ($LASTEXITCODE)." }
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>' | Set-Content "$work\rmf2\Translations.csproj"
+        & dotnet restore "$work\rmf2\Translations.csproj" 2>&1 | ForEach-Object { Note "restore: $_" }
+        if ($LASTEXITCODE) { throw "dotnet restore of the Translations project failed ($LASTEXITCODE)." }
+        & dotnet sln $solution add "$work\rmf2\Translations.csproj" 2>&1 | ForEach-Object { Note "sln add: $_" }
         if ($LASTEXITCODE) { throw "dotnet sln add failed ($LASTEXITCODE)." }
     }
     finally { Pop-Location }
@@ -137,7 +201,10 @@ try {
     @{ processId = $ide.Id; executable = $Executable } | ConvertTo-Json | Set-Content "$ReceiptPath.running"
     Note "devenv $($ide.Id) started on $solution"
     $dte = Wait-For { [VisualStudioAutomation]::FindDte($ide.Id) } 'Visual Studio automation did not register (a first-run or sign-in dialog may be open).' 180
-    Wait-For { $dte.Solution.IsOpen -and $dte.Solution.Projects.Count -ge 1 } 'The fixture solution did not open.' 180 | Out-Null
+    Wait-For { $dte.Solution.IsOpen -and $dte.Solution.Projects.Count -ge 2 } 'The fixture solution did not open.' 180 | Out-Null
+    # The solution lists rmf2\Translations.csproj first; F5 (5b) starts the Runic SDK project.
+    # (dotnet sln puts each project in a solution folder, so the startup project is named by its relative path.)
+    Wait-For { $dte.Solution.SolutionBuild.StartupProjects = 'sdk-app\App.csproj'; @($dte.Solution.SolutionBuild.StartupProjects) -contains 'sdk-app\App.csproj' } 'The Runic SDK project could not be made the startup project.' 60 | Out-Null
     Passed 'solution with a Runic SDK project opened'
 
     # 3. Every button of Commands.vsct is registered (by command set and ID). Visual Studio 18.12 gives the commands
@@ -265,9 +332,80 @@ try {
     $preview = Preview 'plain'
     Wait-For { if ((Texts $preview) -like '*UNSAVED preview marker*') { $true } } 'Restart lost the unsaved buffer.' | Out-Null
     Passed 'Restart Language Server keeps the unsaved buffer'
+    Close-Preview $preview; $preview = $null
+
+    # 8. The Translations refactorings through the language server's protocol 2 (Translations 0.14). Visual Studio has
+    #    no `delete` resource operation, so Inline Resource empties the child, says so in its title, and DevKit deletes
+    #    the child through its project item once it and the file that received its resources are saved. The workspace is
+    #    mixed (sdk-app holds C#), so renaming a resource asks first through window/showMessageRequest (an InfoBar).
+    $document.Activate(); $document.Selection.SelectAll(); $document.Selection.Insert($original); $document.Save() | Out-Null
+    $child = "$fixture\account\en.rmf2"
+    $dte.ItemOperations.OpenFile($child).Activate() | Out-Null
+    $childDocument = Wait-For { Find-Document $child } 'account/en.rmf2 did not open.'
+    $childDocument.Selection.GotoLine(2)
+    $title = Invoke-QuickAction $childDocument 'Inline into*'
+    if ($title -ne 'Inline into ../en.rmf2 (leaves en.rmf2 empty)') { throw "Unexpected Inline Resource title: $title" }
+    Wait-For { (Text $childDocument) -eq '' -and (Text $document) -match 'heading = Your account' } 'Inline Resource did not move account/en.rmf2 into en.rmf2.' | Out-Null
+    if ((Get-Item $child).Length -eq 0) { throw 'Inline Resource emptied account/en.rmf2 on disk before a save.' }
+    Wait-Pane 'Runic Translations' { param($text) $text.Contains('Inline Resource applied') } 'DevKit did not follow the applied Inline Resource.' | Out-Null
+    $childDocument.Save() | Out-Null
+    Start-Sleep -Seconds 3
+    if (!(Test-Path $child)) { throw 'The emptied account/en.rmf2 was deleted while en.rmf2 still held its resources unsaved.' }
+    $document.Save() | Out-Null
+    Wait-For { !(Test-Path $child) } 'The emptied account/en.rmf2 was not deleted after both files were saved.' 30 | Out-Null
+    Wait-For { !(Find-Document $child) -and !$dte.Solution.FindProjectItem($child) } 'The deleted account/en.rmf2 is still open or a project item.' 30 | Out-Null
+    if ([IO.File]::ReadAllText("$fixture\en.rmf2") -notmatch 'heading = Your account') { throw 'en.rmf2 on disk lacks the inlined resources.' }
+    Passed "Inline Resource ('$title'); the emptied child is deleted through its project item once both files are saved"
+
+    $document.Selection.StartOfDocument()
+    $lines = (Text $document) -split "`n"
+    $group = @(0..($lines.Count - 1) | Where-Object { $lines[$_] -match '^account\b' })[0]
+    $document.Selection.MoveToLineAndOffset($group + 1, 3)
+    $title = Invoke-QuickAction $document 'Extract group*'
+    Wait-For { Find-Document $child } 'Extract Group did not create account/en.rmf2.' | Out-Null
+    $dte.Documents.SaveAll()
+    Wait-For { (Test-Path $child) -and [IO.File]::ReadAllText($child) -match 'heading = Your account' -and [IO.File]::ReadAllText("$fixture\en.rmf2") -notmatch '(?m)^account\b' } 'Extract Group did not move the account group back.' | Out-Null
+    Passed "Extract Group ('$title')"
+
+    # An emptied child that the user writes into before saving is kept.
+    $childDocument = Find-Document $child
+    $childDocument.Selection.GotoLine(2)
+    Invoke-QuickAction $childDocument 'Inline into*' | Out-Null
+    Wait-For { (Text $childDocument) -eq '' } 'Inline Resource did not empty account/en.rmf2.' | Out-Null
+    $childDocument.Activate(); $childDocument.Selection.Insert("# Kept by the user`n")
+    $dte.Documents.SaveAll()
+    Wait-Pane 'Runic Translations' { param($text) $text.Contains('is not empty any more; it is kept') } 'DevKit did not keep the edited child.' | Out-Null
+    Start-Sleep -Seconds 2
+    if (!(Test-Path $child) -or [IO.File]::ReadAllText($child) -notmatch 'Kept by the user') { throw 'An emptied child the user wrote into was deleted.' }
+    Passed 'Inline Resource: a child the user writes into before saving is kept'
+
+    Rename-At $document '\.input \{\$count' 9 'count' 'attempts'
+    Wait-For { (Text $document) -match '\{\$attempts :integer\}' } 'F2 did not rename the input.' | Out-Null
+    $dte.Documents.SaveAll()
+    Wait-For { [IO.File]::ReadAllText("$fixture\de.rmf2") -match '\$attempts' } 'F2 on an input did not rename it in de.rmf2.' | Out-Null
+    Passed 'F2 renames an input in every locale'
+    Rename-At $document 'ref=retry' 4 'retry' 'again'
+    Wait-For { (Text $document) -match 'ref=again' } 'F2 did not rename the slot reference.' | Out-Null
+    $dte.Documents.SaveAll()
+    Wait-For { [IO.File]::ReadAllText("$fixture\runic.json") -match '"again"' } 'F2 on a slot did not rename it in runic.json.' | Out-Null
+    Passed 'F2 renames a slot reference and its runic.json declaration'
+    $question = 'Rename in resource sources?'
+    Rename-At $document '^plain =' 2 'plain' 'summary'
+    $cancel = Wait-For { InfoBar-Button $question 'Cancel' } 'Renaming a resource in a mixed workspace did not ask (window/showMessageRequest InfoBar).' 30
+    $cancel.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-For { !(InfoBar-Button $question 'Cancel') } 'The rename question stayed open after Cancel.' | Out-Null
+    Start-Sleep -Seconds 2
+    if ((Text $document) -notmatch '(?m)^plain =') { throw 'Cancel in the rename question still renamed the resource.' }
+    Rename-At $document '^plain =' 2 'plain' 'details'
+    $confirm = Wait-For { InfoBar-Button $question 'Rename in resource sources' } 'The rename question did not come back.' 30
+    $confirm.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-For { (Text $document) -match '(?m)^details =' } 'Confirming the question did not rename the resource.' | Out-Null
+    $dte.Documents.SaveAll()
+    Wait-For { [IO.File]::ReadAllText("$fixture\de.rmf2") -match '(?m)^details =' } 'The resource rename did not reach de.rmf2.' | Out-Null
+    Passed 'F2 on a resource in a mixed workspace asks through window/showMessageRequest; Cancel keeps it, the confirmation renames it'
 
     $receipt = [ordered]@{ sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId; windowName = 'Visual Studio Runic DevKit'
-        snapshotName = 'install, package, commands, dev session, doctor, language server, preview'; vsixVersion = $version
+        snapshotName = 'install, package, commands, dev session, doctor, language server, preview, refactorings'; vsixVersion = $version
         ideProcessId = $ide.Id; serverBefore = $before; serverAfter = @($after.ProcessId); commandsWithoutCanonicalName = $unnamed; checks = $checks }
 }
 finally {

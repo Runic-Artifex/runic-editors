@@ -15,8 +15,9 @@ One extension for the Runic SDK and Runic Translations, as
 - **Translations** (in every solution with Runic Translations): direct `.mf2`
   and grouped `.rmf2` resources through the project's Runic language server:
   highlighting, diagnostics, completion, hover, symbols, definition and
-  references, formatting, F2 rename of resources and MF2 locals, the message
-  preview, XLIFF, catalog import, library overrides and translation status.
+  references, formatting, F2 rename of resources, MF2 locals, inputs and slots,
+  Extract Group and Inline Resource in the light bulb, the message preview,
+  XLIFF, catalog import, library overrides and translation status.
 
 ## Install
 
@@ -232,11 +233,11 @@ restarts it, for example after switching solutions or changing the tool.
 ### In the editor
 
 Visual Studio's LSP support gives highlighting, diagnostics, completion, hover,
-symbols, Go to Definition, Find All References, quick fixes, Format Document and
-F2 rename of resources and MF2 locals. F2 refuses a resource rename when
-application or other non-resource files make a whole-workspace rename unsafe.
-MF2 local rename stays within its lexical scope. Runic does not rename C#,
-TypeScript or Svelte call sites.
+symbols, Go to Definition, Find All References, quick fixes, Format Document,
+F2 rename and the refactorings of the light bulb (see
+[Refactorings](#refactorings-f2-and-the-light-bulb)). MF2 local rename stays
+within its lexical scope. Runic does not rename C#, TypeScript or Svelte call
+sites.
 
 Diagnostics cover every file of a project with an open file, including closed
 translations and `runic.json`. Hover over a message in a translation shows the
@@ -249,7 +250,46 @@ F2 resource rename use unsaved configuration edits.
 The client watches direct `.mf2`, grouped `.rmf2` and manifests under the
 solution. When `sourceRoots` points outside the config directory, open a
 solution that contains those files. The server rejects symlink and
-reparse-point mounts rather than following them.
+reparse-point mounts rather than following them. With Translations 0.14, the
+server also watches the files itself, because Visual Studio cannot register
+file watchers for it; changes made outside Visual Studio reach it within about
+200 ms.
+
+### Refactorings: F2 and the light bulb
+
+DevKit asks the language server for its protocol 2
+(`initializationOptions.runicProtocol: 2`), which Translations 0.14 speaks;
+Translations 0.13 ignores the request. The refactorings come from the server
+through standard LSP, with no refactoring code in this extension (D070.1):
+
+- **F2** renames a resource, an MF2 local, a caller input (on `$name`, in every
+  locale's resource) or a slot reference (on the value of `ref=`, also in the
+  `runic.json` slot contracts). When the solution also holds application
+  sources (C#, TypeScript, Svelte), a resource rename asks first in an InfoBar,
+  **Rename in resource sources** or **Cancel** (the server's
+  `window/showMessageRequest`): Runic renames the resource in resource sources
+  only and does not update call sites.
+- **The light bulb** (Ctrl+.) on a group's name offers **Extract group 'x' to
+  x/en.rmf2**, which creates that file. In a feature-local resource it offers
+  **Inline into ../en.rmf2 (leaves en.rmf2 empty)**, one action per ancestor
+  resource of the same locale.
+
+Visual Studio cannot delete files through LSP (its client has no `delete`
+resource operation), so Inline Resource moves the resources into the ancestor
+and empties the child file instead of deleting it, as its title says; a
+server-side delete could lose moved resources that are not saved yet. The
+edited files stay open and unsaved. **Once the emptied file and the files that
+received its resources are saved, DevKit deletes the emptied file** through
+its project item, so Solution Explorer and source control see a normal delete,
+and says so in the **Runic Translations** Output pane. It deletes only the
+file that action emptied, and only while it is saved and empty on disk: when
+you undo the Inline or write into the file before saving it, the file stays.
+A file in no project of the solution is left empty, with a note in the pane;
+delete it yourself.
+
+With Translations 0.13, F2 renames resources and MF2 locals only, a resource
+rename in a solution with application sources is refused, and there are no
+Extract Group and Inline Resource actions; use the CLI or VS Code for them.
 
 ### Translations tools
 
@@ -307,7 +347,8 @@ work when the settings are empty; set them before starting Visual Studio.
 | Diagnostic documentation links | Where the IDE shows LSP code descriptions | Yes |
 | Hover with base text and description | Yes | Yes |
 | Definition, references, quick fixes | Yes | Yes |
-| F2 rename of resources and MF2 locals | Yes | Yes |
+| F2 rename of resources, MF2 locals, inputs and slots | Yes (Translations 0.14) | Yes (Translations 0.14) |
+| Resource rename next to application sources | Asks in an InfoBar (Translations 0.14) | Asks in a notification (Translations 0.14) |
 | Unsaved `runic.json` in refactors | Yes | Yes |
 | `runic.json` schema validation | `$schema` (published schema) | Bundled schema, or `$schema` |
 | Preview Message | Tools → Runic menu, editor context menu | Command |
@@ -315,8 +356,8 @@ work when the settings are empty; set them before starting Visual Studio.
 | Change Preview Locale | Locale selector in the preview window | Command |
 | Pseudo-locales (`pseudoLocales`) in the preview | Locale selector in the preview window | Change Preview Locale |
 | Regional locale and time zone of the preview | Fields in the preview window | Commands |
-| Rename Input, Rename Slot, Rename Resource in Resource Sources | Not yet ([Known limits](#known-limits)) | F2 with Translations 0.14, commands |
-| Extract Group to Directory, Inline Resource into Ancestor | Not yet ([Known limits](#known-limits)) | Light bulb with Translations 0.14, commands |
+| Rename Input, Rename Slot, Rename Resource in Resource Sources | F2 with Translations 0.14 | F2 with Translations 0.14, commands |
+| Extract Group to Directory, Inline Resource into Ancestor | Light bulb with Translations 0.14; DevKit deletes the file Inline empties once it is saved | Light bulb with Translations 0.14, commands |
 | Restart Language Server | Tools → Runic menu | Command |
 | Export XLIFF, Import XLIFF (dry run) | Tools → Runic menu; folder or file picker, tool output in the "Runic Translations" Output pane | Commands |
 | Import .resx or i18next Catalog | Tools → Runic menu; dry run, then import after confirmation | Command |
@@ -351,12 +392,18 @@ work when the settings are empty; set them before starting Visual Studio.
   there is no ARM64 test machine. The native integration check last passed on
   Visual Studio Community 2026 18.12.0; the range is not evidence that every
   18.x release has been run.
-- **No Rename Input, Rename Slot, Extract Group or Inline Resource yet.** These
-  refactorings come from the language server through standard LSP (F2 and the
-  light bulb), with no refactoring code in this extension (D070.1). They arrive
-  with the language server of Translations 0.14, which is not released yet. With
-  Translations 0.13, F2 renames resources and MF2 locals only, and the CLI and
-  VS Code run the other resource transactions.
+- **Inline Resource deletes its file only after the save.** Visual Studio has
+  no LSP file delete, so the server empties the child file and DevKit deletes it
+  once it and the edited ancestor are saved
+  ([Refactorings](#refactorings-f2-and-the-light-bulb)). Until then the empty
+  file stays in the project; a file in no project stays until you delete it.
+- **No palette-style refactoring commands.** Rename Input, Rename Slot, Extract
+  Group and Inline Resource are F2 and the light bulb only (Translations 0.14);
+  VS Code also has commands for them.
+- **A refused F2 shows no message.** When the server refuses a rename (for
+  example while the catalog does not compile), Visual Studio's rename box closes
+  without an error; the reason is in the Runic Translations pane with the trace
+  on (Tools → Options → Runic DevKit).
 - **No status bar item** for the language server's state, catalog and locale.
 - **F5 debugs .NET only.** Page breakpoints need Debug the Window or Attach to
   the Page; there is no Runic launch type for both (D070.19).
@@ -442,7 +489,8 @@ own managed assembly; VS-owned DLLs resolve from the host.
 
 The native check runs the installed VSIX in Visual Studio 2026 on a signed-in
 Windows desktop; hosted CI runners have none, so it runs by hand before each
-release. It passed on Visual Studio Community 2026 18.12.0 on 2026-11-17.
+release. It passed on Visual Studio Community 2026 18.12 (devenv 18.12.12405.243) on
+2026-11-18, with `dotnet-runic-translations` 0.14.0 and its refactorings.
 [`test/README.md`](test/README.md) describes it in full, with the manual
 checklist for what needs human eyes.
 

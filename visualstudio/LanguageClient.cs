@@ -37,15 +37,18 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
     public string Name => "Runic MF2";
     public IEnumerable<string> ConfigurationSections => Array.Empty<string>();
     // runic.json buffers are synchronized by ConfigurationBuffers, so the server accepts
-    // configuration-changing refactors from this client.
-    public object? InitializationOptions => new { runicConfigurationSync = true };
+    // configuration-changing refactors from this client. runicProtocol 2 opts in to the language server protocol of
+    // Translations 0.14 (F2 for inputs and slots, the Extract Group and Inline Resource code actions, rename
+    // confirmation through window/showMessageRequest, the server's own file watcher); Translations 0.13 ignores it.
+    public object? InitializationOptions => new { runicConfigurationSync = true, runicProtocol = 2 };
     internal ConfigurationBuffers Configuration { get; } = new();
     public IEnumerable<string> FilesToWatch => new[] { "**/*.mf2", "**/*.rmf2", "**/runic.json" };
     // The extension shows its own start-failure InfoBar, once per solution, with install help (ServerStartInfoBar).
     public bool ShowNotificationOnInitializeFailed => false;
-    // Go to Definition into a library catalog opens a read-only copy of its runic-library: source (Translations/LibraryDocuments.cs).
-    public object? MiddleLayer => libraryDocuments ??= new Translations.LibraryDocuments(RequestAsync);
-    private Translations.LibraryDocuments? libraryDocuments;
+    // Go to Definition into a library catalog opens a read-only copy of its runic-library: source (Translations/LibraryDocuments.cs),
+    // and the file Inline Resource empties is deleted once it is saved (Translations/InlineCleanup.cs).
+    public object? MiddleLayer => middleLayer ??= new Translations.MiddleLayers(new Translations.LibraryDocuments(RequestAsync), new Translations.InlineCleanup());
+    private Translations.MiddleLayers? middleLayer;
     public object? CustomMessageTarget => null;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StartAsync;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StopAsync;

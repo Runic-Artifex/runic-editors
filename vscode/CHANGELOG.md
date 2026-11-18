@@ -19,6 +19,13 @@ activation it offers once to uninstall Runic or Runic MF2 Translations when eith
 is still installed. See [Moving from Runic or Runic MF2
 Translations](README.md#moving-from-runic-or-runic-mf2-translations).
 
+- Tested against `dotnet-runic-translations` 0.14.0 and its language server
+  protocol 2: F2 renames inputs and slot references, the light bulb offers
+  Extract Group and Inline Resource, and a resource rename next to application
+  sources asks first. The palette commands open the same rename box or code
+  action; with 0.13.0 they work as in 0.21. The bundled `runic.json` schema is
+  unchanged.
+
 ## 0.21.0
 
 - The **ViewModels** view reads the development source map of Runic SDK 0.21

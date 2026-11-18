@@ -12,8 +12,9 @@ exports.run = async function () {
   assert.equal(vscode.extensions.getExtension('runic-artifex.runic'), undefined);
   assert.equal(vscode.extensions.getExtension('runic-artifex.runic-translations'), undefined);
   const api = await extension.activate(); const client = await api.ready(en);
-  // The Runic protocol the server speaks: 1 for Translations 0.13 (the NuGet tool CI restores), 2 for a server that
-  // advertises experimental.runic (Translations 0.14). RUNIC_TRANSLATIONS_PROTOCOL makes a local run insist on one.
+  // The Runic protocol the server speaks: 2 for a server that advertises experimental.runic (Translations 0.14, the
+  // NuGet tool CI restores), 1 for Translations 0.13. RUNIC_TRANSLATIONS_PROTOCOL (run-host.mjs sets 2 for the NuGet
+  // tool) makes the run insist on one.
   const protocol = await api.protocol(en);
   if (process.env.RUNIC_TRANSLATIONS_PROTOCOL) assert.equal(protocol, Number(process.env.RUNIC_TRANSLATIONS_PROTOCOL), 'The server does not speak the requested Runic protocol');
   console.log(`Runic protocol ${protocol}`);
