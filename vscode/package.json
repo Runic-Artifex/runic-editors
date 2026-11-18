@@ -426,13 +426,20 @@
     "problemPatterns": [
       {
         "name": "runic-dev",
-        "regexp": "^\\s*(?:\\d+>)?(\\S.*?)(?:\\((\\d+)(?:,(\\d+))?(?:,\\d+,\\d+)?\\))?\\s*:\\s+(?:\\S+\\s+)?(error|warning)\\s+([A-Za-z]+\\d+)\\s*:\\s*(.*?)(?:\\s+\\[[^\\]]+\\])?$",
+        "regexp": "^\\s*(?:\\[[A-Za-z][\\w-]*\\]\\s+)?(?:\\d+>)?(\\S.*?)(?:\\((\\d+)(?:,(\\d+))?(?:,\\d+,\\d+)?\\))?\\s*:\\s+(?:\\S+\\s+)?(error|warning)\\s+([A-Za-z]+\\d+)\\s*:\\s*(.*?)(?:\\s+\\[[^\\]]+\\])?$",
         "file": 1,
         "line": 2,
         "column": 3,
         "severity": 4,
         "code": 5,
         "message": 6
+      },
+      {
+        "name": "runic-dev-none",
+        "regexp": "(?!)",
+        "file": 1,
+        "line": 2,
+        "message": 3
       }
     ],
     "problemMatchers": [
@@ -462,6 +469,30 @@
           "${workspaceFolder}"
         ],
         "pattern": "$runic-dev",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[dev\\] Evaluating",
+          "endsPattern": "^\\[dev\\] Ready$"
+        }
+      },
+      {
+        "name": "runic-dev-terminal",
+        "label": "dotnet runic dev (DevKit's terminal)",
+        "owner": "runic",
+        "source": "runic",
+        "pattern": "$runic-dev-none",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[dev\\] (Evaluating|Window exited|Reloading)",
+          "endsPattern": "^\\[dev\\] Ready$"
+        }
+      },
+      {
+        "name": "runic-dev-terminal-no-window",
+        "label": "dotnet runic dev --no-window (DevKit's terminal)",
+        "owner": "runic",
+        "source": "runic",
+        "pattern": "$runic-dev-none",
         "background": {
           "activeOnStart": true,
           "beginsPattern": "^\\[dev\\] Evaluating",

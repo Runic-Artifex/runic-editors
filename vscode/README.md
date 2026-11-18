@@ -109,7 +109,12 @@ runs its own task of type `runic`:
 Its `$runic-dev` and `$runic-dev-no-window` problem matchers are the template's:
 `$msCompile`'s pattern for `dev`'s faults (`RAPPDEV`) and the build's errors
 (`CS`, `RUNICBRIDGE`), and a background task that is ready at each
-`[dev] Ready`.
+`[dev] Ready`. The pattern skips the `[host] ` label that `dev` writes before
+each build line. With `dotnet-runic` 0.22 and later, the extension runs `dev` in
+its own terminal and reports its problems itself, because a problem matcher keeps
+every problem of a build cycle: a C# error leaves Problems at the `[dev] Ready`
+after its fix (`dev` is ready only after a build that succeeded), and warnings
+stay until the next cycle.
 
 The extension follows `obj/runic/dev-session.json`
 (`runic.application.tool.dev-session/1`, see "Session file" in the

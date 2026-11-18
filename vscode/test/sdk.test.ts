@@ -8,6 +8,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { detectToolVersion, devArguments, forceStop, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
 import { DevSessionFollower, devSessionPath, devSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
+import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, readyPattern } from "../src/dev-problems.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
 import { detectWorkspace, isRunicSdkProject, projectRunicToolVersion, runicToolVersion } from "../src/workspace.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor } from "../src/doctor.js";
@@ -424,9 +425,75 @@ test("the manifest keeps the Translations commands and settings under the new id
   const matchers = Object.fromEntries(manifest.contributes.problemMatchers.map((matcher: { name: string; background: unknown }) => [matcher.name, matcher.background]));
   expect(matchers["runic-dev"]).toEqual({ activeOnStart: true, beginsPattern: "^\\[dev\\] (Evaluating|Window exited|Reloading)", endsPattern: "^\\[dev\\] Ready$" });
   expect(matchers["runic-dev-no-window"]).toEqual({ activeOnStart: true, beginsPattern: "^\\[dev\\] Evaluating", endsPattern: "^\\[dev\\] Ready$" });
+  // The extension's dev terminal reports the problems itself (DevProblems); its matchers only mark the task ready.
+  expect(matchers["runic-dev-terminal"]).toEqual(matchers["runic-dev"]);
+  expect(matchers["runic-dev-terminal-no-window"]).toEqual(matchers["runic-dev-no-window"]);
+  expect(matchers["runic-dev"]).toEqual({ activeOnStart: true, beginsPattern: beginsPattern.source, endsPattern: readyPattern.source });
+  expect(matchers["runic-dev-no-window"].beginsPattern).toBe(beginsNoWindowPattern.source);
+  const patterns = Object.fromEntries(manifest.contributes.problemPatterns.map((item: { name: string; regexp: string }) => [item.name, item.regexp]));
+  expect(patterns["runic-dev"]).toBe(diagnosticPattern.source);
+  expect(new RegExp(patterns["runic-dev-none"]).test("[host] /app/X.cs(1,1): error CS1002: ; expected")).toBe(false);
   const pattern = new RegExp(manifest.contributes.problemPatterns[0].regexp);
   expect(pattern.exec("/app/App.csproj : error RAPPDEV1007: The vite development server exited unexpectedly with code 1.")?.slice(1, 7)).toEqual(["/app/App.csproj", undefined, undefined, "error", "RAPPDEV1007", "The vite development server exited unexpectedly with code 1."]);
   expect(pattern.exec("CounterViewModel.cs(18,5): error CS1002: ; expected [/app/App.csproj]")?.slice(1, 7)).toEqual(["CounterViewModel.cs", "18", "5", "error", "CS1002", "; expected"]);
+  // dev's [host] label before each build line (#36): the file is the path, not "[host] <path>".
+  expect(pattern.exec("[host] /app/WorkspaceViewModel.cs(77,26): error CS1002: ; expected [/app/App.csproj]")?.slice(1, 7)).toEqual(["/app/WorkspaceViewModel.cs", "77", "26", "error", "CS1002", "; expected"]);
+  expect(pattern.exec("[host] C:\\src\\App\\WorkspaceViewModel.cs(77,26): error CS1002: ; expected [C:\\src\\App\\App.csproj]")?.slice(1, 7)).toEqual(["C:\\src\\App\\WorkspaceViewModel.cs", "77", "26", "error", "CS1002", "; expected"]);
+  expect(pattern.exec("[host]     C:\\src\\App\\CounterViewModel.cs(5,16,5,21): warning CS0168: The variable 'x' is declared but never used [C:\\src\\App\\App.csproj]")?.slice(1, 7)).toEqual(["C:\\src\\App\\CounterViewModel.cs", "5", "16", "warning", "CS0168", "The variable 'x' is declared but never used"]);
+  expect(pattern.exec("[app] 1>/app/App.csproj : warning RUNICBRIDGE013: A ViewModel member is not supported.")?.slice(1, 7)).toEqual(["/app/App.csproj", undefined, undefined, "warning", "RUNICBRIDGE013", "A ViewModel member is not supported."]);
+  expect(pattern.exec("[host] dotnet watch ❌ Exited with error code 1")).toBeNull();
+  expect(pattern.exec("[dev] Ready")).toBeNull();
+});
+
+// ---- dev's problems in the extension's own terminal (#36) -----------------------------------------------------------
+
+test("a dev problem keeps its file, line, column, severity and code without the [host] label", () => {
+  expect(parseDevProblem("[host] \u001b[31m/app/X.cs(77,26): error CS1002: ; expected [/app/App.csproj]\u001b[39m\r", "/app")).toEqual(
+    { file: "/app/X.cs", line: 77, column: 26, severity: "error", code: "CS1002", message: "; expected" });
+  expect(parseDevProblem("[host] C:\\src\\App\\X.cs(3,9): warning CS0168: unused [C:\\src\\App\\App.csproj]", "/app")?.file).toBe("C:\\src\\App\\X.cs");
+  expect(parseDevProblem("[host] Models/X.cs(3,9): warning CS0168: unused", "/app")).toEqual(
+    { file: "/app/Models/X.cs", line: 3, column: 9, severity: "warning", code: "CS0168", message: "unused" });
+  expect(parseDevProblem("/app/App.csproj : error RAPPDEV1007: The vite development server exited unexpectedly with code 1.", "/app")).toEqual(
+    { file: "/app/App.csproj", line: 1, column: 1, severity: "error", code: "RAPPDEV1007", message: "The vite development server exited unexpectedly with code 1." });
+  expect(parseDevProblem("[vite] 12:00:01 [vite] page reload src/App.tsx", "/app")).toBeUndefined();
+});
+
+test("[dev] Ready drops a fixed build error and keeps the warnings; a new cycle drops both", () => {
+  const problems = new DevProblems("/app", false);
+  const summary = () => problems.problems.map(item => `${item.severity} ${item.code} ${item.file}:${item.line}`);
+  expect(problems.add("[dev] Evaluating Views Window project...")).toBe(false);
+  expect(problems.add("[host] /app/A.cs(3,9): warning CS0168: unused [/app/App.csproj]")).toBe(true);
+  expect(problems.add("[host] /app/B.cs(77,26): error CS1002: ; expected [/app/App.csproj]")).toBe(true);
+  // MSBuild's summary repeats them.
+  expect(problems.add("[host] /app/B.cs(77,26): error CS1002: ; expected [/app/App.csproj]")).toBe(false);
+  expect(problems.add("[host] dotnet watch ❌ Exited with error code 1")).toBe(false);
+  expect(summary()).toEqual(["warning CS0168 /app/A.cs:3", "error CS1002 /app/B.cs:77"]);
+  // The fix: dotnet watch rebuilds and starts the Window, with no Window exited in between.
+  expect(problems.add("[host] /app/A.cs(3,9): warning CS0168: unused [/app/App.csproj]")).toBe(false);
+  expect(problems.add("[dev] Window started: process 4120")).toBe(false);
+  expect(problems.add("[dev] Ready\r")).toBe(true);
+  expect(summary()).toEqual(["warning CS0168 /app/A.cs:3"]);
+  expect(problems.add("[dev] Ready")).toBe(false);
+  // The same error again after Ready is a problem again.
+  expect(problems.add("[dev] Window exited: process 4120")).toBe(true);
+  expect(problems.problems).toEqual([]);
+  expect(problems.add("[host] /app/B.cs(77,26): error CS1002: ; expected [/app/App.csproj]")).toBe(true);
+  expect(summary()).toEqual(["error CS1002 /app/B.cs:77"]);
+  // --no-window begins a cycle only at [dev] Evaluating.
+  const frontend = new DevProblems("/app", true);
+  frontend.add("/app/App.csproj : error RAPPDEV1007: The vite development server exited unexpectedly with code 1.");
+  expect(frontend.add("[dev] Window exited: process 1")).toBe(false);
+  expect(frontend.add("[dev] Evaluating Views Window project...")).toBe(true);
+});
+
+test("dev's output splits into lines across chunks", () => {
+  const lines = new LineSplitter();
+  expect(lines.push("[host] /app/B.cs(77,26): err")).toEqual([]);
+  expect(lines.push("or CS1002: ; expected\r\n[dev] Re")).toEqual(["[host] /app/B.cs(77,26): error CS1002: ; expected\r"]);
+  expect(lines.push("ady\n")).toEqual(["[dev] Ready"]);
+  expect(lines.push("[dev] Window exited: process 1")).toEqual([]);
+  expect(lines.flush()).toEqual(["[dev] Window exited: process 1"]);
+  expect(lines.flush()).toEqual([]);
 });
 
 // ---- dotnet-runic 0.22: --debug-endpoint and the stop request on dev's input ---------------------------------------

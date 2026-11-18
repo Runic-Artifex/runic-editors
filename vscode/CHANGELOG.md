@@ -29,6 +29,12 @@ Translations](README.md#moving-from-runic-or-runic-mf2-translations).
   rejects as outdated, because files changed between the code action and its
   resolve (a save's file-watcher event), is resolved once more; if it is still
   outdated, a warning says so instead of nothing happening (runic-editors#32).
+- `dotnet runic dev`'s build errors open their file again: the `$runic-dev`
+  problem matchers skip the `[host] ` label that `dev` writes before each build
+  line, which had become part of the file. With `dotnet-runic` 0.22, a fixed C#
+  error leaves Problems once `dev` prints `[dev] Ready` after the fix, and the
+  warnings stay; the extension's own `dev` terminal reports these problems
+  (runic-editors#36).
 
 ## 0.21.0
 
