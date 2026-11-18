@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { ServerCommands, advertisedCommands, commandSource, refactoringRoute, renameOffset, runicProtocol, type Refactoring } from "../src/protocol.js";
-import { isContentModified, outdatedActionMessage, refusedActionMessage, resolveOutdatedOnce, retryContentModified, untilListed } from "../src/refactor-retry.js";
+import { isContentModified, outdatedActionMessage, refusedActionMessage, resolveOutdatedOnce, retryContentModified, unlistedActionMessage, untilFound, untilListed } from "../src/refactor-retry.js";
 
 // The initialize results of Translations 0.13 (no experimental.runic) and 0.14 with the opt-in, as the servers send them.
 const commands = ["runic.extractGroup", "runic.inlineResource", "runic.markReviewed", "runic.preview", "runic.renameInput", "runic.renameSlot", "runic.renameResource", "runic.renderPreview"];
@@ -164,6 +164,18 @@ test("an empty code action listing is asked for again, briefly (#40)", async () 
   calls = 0;
   expect(await untilListed(async () => { calls++; return undefined; }, 4, 1)).toEqual([]);
   expect(calls).toBe(4);
+});
+
+test("an outline read as empty after a save is read again, within its bound (#40)", async () => {
+  let calls = 0;
+  // CI: the documentSymbol answer was ContentModified, which the client reads as an empty outline.
+  const outline = async () => ++calls < 3 ? [] : [{ detail: "profile" }];
+  expect(await untilFound(async () => (await outline()).find(item => item.detail === "profile"), 12, 1)).toEqual({ detail: "profile" });
+  expect(calls).toBe(3);
+  calls = 0;
+  expect(await untilFound(async () => { calls++; return undefined; }, 5, 1)).toBeUndefined();
+  expect(calls).toBe(5);
+  expect(unlistedActionMessage("Extract Group")).toBe("Runic: Extract Group is not available here: the language server listed no such action at the cursor. Run it again once the server has read the file.");
 });
 
 test("a cancellation is rethrown without a message, and a first-time success passes through", async () => {

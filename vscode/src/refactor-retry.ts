@@ -59,16 +59,27 @@ export async function retryContentModified<T>(request: () => PromiseLike<T>, att
 }
 
 /**
- * The code actions of a range, asked for again while there are none, at most `attempts` times. VS Code's listing
- * reads a server's ContentModified answer as no actions, so a refactoring run right after a save would apply nothing
- * (runic-editors#40). Returns the last listing, which may be empty.
+ * A value read from VS Code's providers, read again while it is missing, at most `attempts` times (3 s by default).
+ * vscode-languageclient answers a request that the server rejected with ContentModified (a save's watched-file event
+ * arrived while it was pending) with an empty result: no code actions, an empty outline. A refactoring run right after
+ * a save would otherwise apply nothing, or fail to find its group (runic-editors#40). Undefined when still missing.
  */
-export async function untilListed<T>(list: () => PromiseLike<readonly T[] | undefined>, attempts = 6, pause = 250): Promise<readonly T[]> {
+export async function untilFound<T>(read: () => PromiseLike<T | undefined>, attempts = 12, pause = 250): Promise<T | undefined> {
   for (let attempt = 1; ; attempt++) {
-    const actions = (await list()) ?? [];
-    if (actions.length > 0 || attempt >= attempts) return actions;
+    const value = await read();
+    if (value !== undefined || attempt >= attempts) return value;
     await new Promise(resolveDelay => setTimeout(resolveDelay, pause));
   }
+}
+
+/** The code actions of a range, asked for again while there are none (see {@link untilFound}); the last listing, which may be empty. */
+export async function untilListed<T>(list: () => PromiseLike<readonly T[] | undefined>, attempts = 12, pause = 250): Promise<readonly T[]> {
+  return await untilFound(async () => { const actions = (await list()) ?? []; return actions.length > 0 ? actions : undefined; }, attempts, pause) ?? [];
+}
+
+/** The warning for a refactoring whose code action the server did not list within the retries. */
+export function unlistedActionMessage(refactoring: string): string {
+  return `Runic: ${refactoring} is not available here: the language server listed no such action at the cursor. Run it again once the server has read the file.`;
 }
 
 /**

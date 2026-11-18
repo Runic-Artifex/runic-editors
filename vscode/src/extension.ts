@@ -9,7 +9,7 @@ import { ForwardedWatchers } from "./watchers.js";
 import { OneTimeNotice, errorSummary, localeStatus, parseStatus, statusHtml, statusPresentation, type DocumentInfo, type ServerState, type StatusResult } from "./status.js";
 import { RunicSdk } from "./sdk.js";
 import { ServerCommands, advertisedCommands, commandSource, refactoringRoute, renameOffset, requestedProtocol, runicProtocol, type Refactoring } from "./protocol.js";
-import { isContentModified, resolveOutdatedOnce, retryContentModified, untilListed } from "./refactor-retry.js";
+import { isContentModified, resolveOutdatedOnce, retryContentModified, unlistedActionMessage, untilFound, untilListed } from "./refactor-retry.js";
 import { commandId, extensionId, formerCommandId, formerExtensionsNotice, formerSettingsInUse, settingValue } from "./identity.js";
 import { canonicalLocale, isOverriddenIn, libraryCatalogChoices, libraryInstallPattern, libraryDocumentProject, libraryLocaleChoices, libraryMessageChoices, libraryScheme, messageLine, overrideSourcePath, overridesAddArguments, unsavedDocuments, type LibraryCatalogs } from "./libraries.js";
 
@@ -59,6 +59,8 @@ const outdatedActions: string[] = [];
 const refusedActions: string[] = [];
 /** The last code action resolves and how each ended, for the host test's report of a refactoring that never finishes (#40). */
 const resolveLog: { title: string; started: number; state: string }[] = [];
+/** The errors the extension's commands showed, for the host test's report of a command that returned nothing. */
+const commandErrors: string[] = [];
 // runic-translations status per project (its runic.json path); refreshed after saves and watched file changes, since
 // the command reads the files on disk. A catalog that does not compile has no report until it compiles again.
 const projectStatus = new Map<string, { result?: StatusResult; pending?: Promise<void>; stale: boolean }>();
@@ -323,8 +325,9 @@ async function renamePart(part: "Input" | "Slot", { editor, client, info }: Awai
 const protocolOf = (client: LanguageClient) => protocols.get(client) ?? 1;
 /** The document symbol of a resource or group: the server's outline names each by its dotted path in the file. */
 async function symbolOf(document: vscode.TextDocument, path: string[]): Promise<vscode.DocumentSymbol> {
-  const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[] | undefined>("vscode.executeDocumentSymbolProvider", document.uri) ?? [];
-  const symbol = symbols.find(item => item.detail === path.join("."));
+  // An outline the server answered with ContentModified reads as empty, right after a save (#40): read it again.
+  const symbol = await untilFound(async () => (await vscode.commands.executeCommand<vscode.DocumentSymbol[] | undefined>("vscode.executeDocumentSymbolProvider", document.uri) ?? [])
+    .find(item => item.detail === path.join(".")));
   if (!symbol) throw new Error(`The outline has no ${path.join(".")}. Retry once the language server has read the file.`);
   return symbol;
 }
@@ -341,21 +344,28 @@ async function renameAt(editor: vscode.TextEditor, position: vscode.Position) {
  * The command applies the action it lists itself. `editor.action.codeAction` lists the actions again, and VS Code reads
  * a server's ContentModified answer to that listing as no actions, so a refactoring run right after a save applied
  * nothing without a message (#40). The listing here is asked for again while it is empty, and the action is resolved
- * through the client (a refusal or an outdated answer warns, refactor-retry.ts). With no action, or several where the
- * user must choose, the editor's own command shows its message or menu.
+ * through the client (a refusal or an outdated answer warns, refactor-retry.ts). With several where the user must
+ * choose, the editor's own command shows its menu. With none after the retries, a warning says so. The result names the
+ * path taken: `applied`, `menu` or `unlisted`.
  */
 async function codeActionAt(editor: vscode.TextEditor, selection: vscode.Selection, kind: string, apply: "first" | "ifSingle") {
   const shown = await vscode.window.showTextDocument(editor.document, editor.viewColumn);
   shown.selection = selection;
   const actions = await untilListed(() => vscode.commands.executeCommand<vscode.CodeAction[]>("vscode.executeCodeActionProvider", shown.document.uri, selection, kind, 1));
+  const uri = shown.document.uri.toString();
+  if (actions.length === 0) {
+    const message = unlistedActionMessage(kind === "refactor.extract" ? "Extract Group" : "Inline Resource");
+    outdatedActions.push(message); output.warn(message); void vscode.window.showWarningMessage(message);
+    return { uri, kind, path: "unlisted" };
+  }
   const action = apply === "first" || actions.length === 1 ? actions[0] : undefined;
   if (!action) {
     await vscode.commands.executeCommand("editor.action.codeAction", { kind, apply });
-    return { uri: shown.document.uri.toString(), kind };
+    return { uri, kind, path: "menu", actions: actions.length };
   }
   if (action.edit && !await vscode.workspace.applyEdit(action.edit, { isRefactoring: true })) throw new Error(`"${action.title}" could not be applied: the workspace changed. Run it again.`);
   if (action.command) await vscode.commands.executeCommand(action.command.command, ...(action.command.arguments ?? []));
-  return { uri: shown.document.uri.toString(), kind };
+  return { uri, kind, path: "applied", title: action.title, resolved: !!(action.edit || action.command) };
 }
 /** Arguments the palette refactorings accept from other commands and the host test instead of asking. */
 interface RefactoringOptions { name?: string }
@@ -423,7 +433,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidSaveTextDocument(document => { if (isRunicDocument(document) || document.uri.path.endsWith(".review.json")) invalidateProjectStatus(); }));
   // Each command runs under its runic.translations.* ID and, for keybindings of the Translations extension, its former runicTranslations.* ID.
   const register = <Options = PreviewOptions>(name: string, action: (options?: Options) => Promise<unknown>) => {
-    const run = async (options?: Options) => { try { return await action(options); } catch (error) { output.appendLine(String(error)); void vscode.window.showErrorMessage(String(error)); } };
+    const run = async (options?: Options) => { try { return await action(options); } catch (error) { output.appendLine(String(error)); commandErrors.push(`${name}: ${String(error)}`); void vscode.window.showErrorMessage(String(error)); } };
     // The error message is not awaited: it settles only when the user closes it, and the command would not finish (#40).
     context.subscriptions.push(vscode.commands.registerCommand(commandId(name), run), vscode.commands.registerCommand(formerCommandId(name), run));
   };
@@ -675,7 +685,7 @@ export function activate(context: vscode.ExtensionContext) {
   register("previewTimeZone", options => openPreview(options, false, false, "timeZone"));
   refreshStatus();
   return { sdk: runicSdk.api(), ready: (uri: vscode.Uri) => clientFor(uri), previewState: () => session.state, statusHtml: () => statusPanel?.webview.html,
-    status: () => statusItem?.text, protocol: async (uri: vscode.Uri) => protocolOf(await clientFor(uri)), serverCommands: () => serverCommands?.commands ?? [], outdatedActions: () => [...outdatedActions], refusedActions: () => [...refusedActions], resolveLog: () => resolveLog.map(entry => ({ ...entry })), serverState: (uri: vscode.Uri) => { const folder = vscode.workspace.getWorkspaceFolder(uri); return folder && serverStates.get(folder.uri.toString())?.state; } };
+    status: () => statusItem?.text, protocol: async (uri: vscode.Uri) => protocolOf(await clientFor(uri)), serverCommands: () => serverCommands?.commands ?? [], outdatedActions: () => [...outdatedActions], refusedActions: () => [...refusedActions], resolveLog: () => resolveLog.map(entry => ({ ...entry })), commandErrors: () => [...commandErrors], serverState: (uri: vscode.Uri) => { const folder = vscode.workspace.getWorkspaceFolder(uri); return folder && serverStates.get(folder.uri.toString())?.state; } };
 }
 /**
  * Runic (runic-artifex.runic, 0.20–0.21) and Runic MF2 Translations (runic-artifex.runic-translations, up to 0.11) are

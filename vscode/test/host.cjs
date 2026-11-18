@@ -196,8 +196,7 @@ async function protocol2(api, root, fs) {
   stage = 'protocol 2: inline resource code action (apply)';
   await untilApplied(api, async () => {
     await vscode.window.showTextDocument(accountDocument, { preview: false });
-    const inlined = await vscode.commands.executeCommand('runic.translations.inlineResource');
-    assert.equal(inlined.kind, 'refactor.inline');
+    ran(api, await vscode.commands.executeCommand('runic.translations.inlineResource'), 'refactor.inline');
   }, () => !fs.existsSync(account.fsPath) && /^account\b/m.test(document.getText()), () => `Inline Resource did not move account/en.rmf2 into en.rmf2 (account exists: ${fs.existsSync(account.fsPath)}): ${JSON.stringify(document.getText())}`);
   assert.ok(document.getText().includes('Your account'));
   // VS Code may already have saved the refactored file (files.refactoring.autoSave); save only what is still dirty,
@@ -218,8 +217,7 @@ async function protocol2(api, root, fs) {
   await untilApplied(api, async () => {
     editor = await vscode.window.showTextDocument(document, { preview: false });
     editor.selection = new vscode.Selection(group, group);
-    const extracted = await vscode.commands.executeCommand('runic.translations.extractGroup');
-    assert.equal(extracted.kind, 'refactor.extract');
+    ran(api, await vscode.commands.executeCommand('runic.translations.extractGroup'), 'refactor.extract');
   }, () => extractedText().includes('heading = Your account') && !/^account\b/m.test(document.getText()),
     () => `Extract Group did not move the account group back (account/en.rmf2: ${JSON.stringify(extractedText())}): ${JSON.stringify(document.getText())}`);
   await saveIfDirty(document);
@@ -245,8 +243,7 @@ async function protocol2(api, root, fs) {
   await untilApplied(api, async () => {
     editor = await vscode.window.showTextDocument(document, { preview: false });
     editor.selection = new vscode.Selection(profileGroup, profileGroup);
-    const extracted = await vscode.commands.executeCommand('runic.translations.extractGroup');
-    assert.equal(extracted.kind, 'refactor.extract');
+    ran(api, await vscode.commands.executeCommand('runic.translations.extractGroup'), 'refactor.extract');
   }, () => profileText().includes('title = Your profile') && !/^profile\b/m.test(document.getText()),
     () => `Extract Group into a new folder did not move the profile group (profile/en.rmf2: ${JSON.stringify(profileText())}): ${JSON.stringify(document.getText())}`);
   await saveIfDirty(document);
@@ -278,6 +275,15 @@ async function protocol2(api, root, fs) {
   assert.equal(await editor.edit(builder => builder.delete(new vscode.Range(document.positionAt(start - 1), document.positionAt(document.getText().indexOf('}', start) + 2)))), true);
   await saveIfDirty(document);
   console.log('PASS protocol 2: F2 on an input, Inline Resource and Extract Group code actions (also into a new folder), server-applied command edits.');
+}
+/**
+ * A palette refactoring's result: the path it took (`applied`, `menu`, `unlisted`, see codeActionAt) and, when the
+ * command returned nothing, the error it showed (#40).
+ */
+function ran(api, result, kind) {
+  assert.ok(result, `The refactoring command returned nothing; the error it showed: ${api.commandErrors().at(-1) ?? 'none recorded'}`);
+  assert.equal(result.kind, kind, `The refactoring command took another path: ${JSON.stringify(result)}`);
+  return result;
 }
 /** Saves a document that has unsaved changes; a clean one is on disk already. */
 async function saveIfDirty(document) {
@@ -438,7 +444,7 @@ async function withinApplyLimit(api, run, applied, message, limit = 15000) {
   try { expected = applied() ? 'applied' : `not applied: ${typeof message === 'function' ? message() : message}`; } catch (error) { expected = `could not read: ${error.message}`; }
   assert.fail([`${stage}: the refactoring's command did not finish within ${Math.round((Date.now() - started) / 1000)} s (#40).`,
     `Code action resolves: ${JSON.stringify(api.resolveLog().filter(entry => entry.started >= started - 1000).map(entry => ({ ...entry, started: entry.started - started })))} (${resolves} of them when the command started)`,
-    `Outdated warnings: ${JSON.stringify(api.outdatedActions())}; refusals: ${JSON.stringify(api.refusedActions())}`,
+    `Outdated or unlisted warnings: ${JSON.stringify(api.outdatedActions())}; refusals: ${JSON.stringify(api.refusedActions())}; command errors: ${JSON.stringify(api.commandErrors())}`,
     `Documents: ${documents.join(', ')}; active editor: ${vscode.window.activeTextEditor ? vscode.workspace.asRelativePath(vscode.window.activeTextEditor.document.uri) : 'none'}`,
     `Expected change: ${expected}`].join('\n'));
 }
