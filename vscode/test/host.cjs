@@ -192,28 +192,42 @@ async function protocol2(api, root, fs) {
   await vscode.window.showTextDocument(accountDocument, { preview: false });
   const inline = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', account, new vscode.Range(1, 0, 1, 0), 'refactor.inline');
   assert.deepEqual(inline.map(action => action.title), ['Inline into ../en.rmf2']);
-  const inlined = await vscode.commands.executeCommand('runic.translations.inlineResource');
-  assert.equal(inlined.kind, 'refactor.inline');
-  await waitFor(() => !fs.existsSync(account.fsPath) && /^account\b/m.test(document.getText()), () => `Inline Resource did not move account/en.rmf2 into en.rmf2 (account exists: ${fs.existsSync(account.fsPath)}): ${JSON.stringify(document.getText())}`);
+  await untilApplied(async () => {
+    await vscode.window.showTextDocument(accountDocument, { preview: false });
+    const inlined = await vscode.commands.executeCommand('runic.translations.inlineResource');
+    assert.equal(inlined.kind, 'refactor.inline');
+  }, () => !fs.existsSync(account.fsPath) && /^account\b/m.test(document.getText()), () => `Inline Resource did not move account/en.rmf2 into en.rmf2 (account exists: ${fs.existsSync(account.fsPath)}): ${JSON.stringify(document.getText())}`);
   assert.ok(document.getText().includes('Your account'));
-  assert.equal(await document.save(), true);
+  // VS Code may already have saved the refactored file (files.refactoring.autoSave); save only what is still dirty,
+  // then check the outcome on disk.
+  await saveIfDirty(document);
+  assert.ok(!fs.existsSync(account.fsPath), 'Inline Resource must delete account/en.rmf2');
+  assert.ok(/^account\b/m.test(fs.readFileSync(en.fsPath, 'utf8')) && fs.readFileSync(en.fsPath, 'utf8').includes('Your account'), 'en.rmf2 on disk lacks the inlined account group');
   stage = 'protocol 2: extract group code action';
   editor = await vscode.window.showTextDocument(document, { preview: false });
   const group = document.positionAt(/^account\b/m.exec(document.getText()).index);
   editor.selection = new vscode.Selection(group, group);
   const extract = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', en, new vscode.Range(group, group.translate(0, 7)), 'refactor.extract');
   assert.deepEqual(extract.map(action => action.title), ["Extract group 'account' to account/en.rmf2"]);
-  const extracted = await vscode.commands.executeCommand('runic.translations.extractGroup');
-  assert.equal(extracted.kind, 'refactor.extract');
   // The created file is written through the workspace edit; VS Code need not open it as a document.
   const extractedText = () => vscode.workspace.textDocuments.find(item => item.uri.fsPath === account.fsPath)?.getText() ?? (fs.existsSync(account.fsPath) ? fs.readFileSync(account.fsPath, 'utf8') : '');
-  await waitFor(() => extractedText().includes('heading = Your account') && !/^account\b/m.test(document.getText()),
+  await untilApplied(async () => {
+    editor = await vscode.window.showTextDocument(document, { preview: false });
+    editor.selection = new vscode.Selection(group, group);
+    const extracted = await vscode.commands.executeCommand('runic.translations.extractGroup');
+    assert.equal(extracted.kind, 'refactor.extract');
+  }, () => extractedText().includes('heading = Your account') && !/^account\b/m.test(document.getText()),
     () => `Extract Group did not move the account group back (account/en.rmf2: ${JSON.stringify(extractedText())}): ${JSON.stringify(document.getText())}`);
-  assert.equal(await document.save(), true);
+  await saveIfDirty(document);
   await vscode.workspace.saveAll(false);
   assert.ok(fs.readFileSync(account.fsPath, 'utf8').includes('heading = Your account'));
   assert.ok(!fs.readFileSync(en.fsPath, 'utf8').includes('Your account'));
   console.log('PASS protocol 2: F2 on an input, Inline Resource and Extract Group code actions, server-applied command edits.');
+}
+/** Saves a document that has unsaved changes; a clean one is on disk already. */
+async function saveIfDirty(document) {
+  if (document.isDirty) assert.equal(await document.save(), true, `${document.uri.fsPath} did not save`);
+  assert.equal(document.isDirty, false, `${document.uri.fsPath} still has unsaved changes`);
 }
 /** The Runic SDK features in the second workspace folder, a copy of fixtures/sdk-app. */
 async function runicSdk(api, fs) {
@@ -299,6 +313,18 @@ async function retryModified(request, attempts = 20, also) {
       console.log(`retrying after: ${message}`);
       await new Promise(resolve => setTimeout(resolve, 250));
     }
+  }
+}
+/**
+ * Runs a light-bulb refactoring until its edit is applied. editor.action.codeAction applies nothing when the server
+ * answers the resolve with ContentModified, which a watched-file change from the previous step's saves can cause
+ * (#9); a user runs the action again, and so does this, at most three times.
+ */
+async function untilApplied(run, applied, message) {
+  for (let attempt = 1; ; attempt++) {
+    await run();
+    try { return await waitFor(applied, message); }
+    catch (error) { if (attempt >= 3 || applied()) throw error; console.log(`retrying the code action after: ${error.message}`); }
   }
 }
 async function waitFor(predicate, message, timeout = 10000) {
