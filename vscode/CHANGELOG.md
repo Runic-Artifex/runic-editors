@@ -33,6 +33,11 @@ Translations](README.md#moving-from-runic-or-runic-mf2-translations).
   Extract Group from a catalog where a locale lacks the group, shows the server's
   reason as a warning instead of applying nothing without a message; only an
   outdated one is resolved again (runic-editors#38).
+- The palette's Extract Group and Inline Resource work right after a save: they
+  apply the code action they list instead of letting VS Code list it again, which
+  read the server's "changed while pending" answer as no actions and applied
+  nothing. A refactoring command whose error message is still open no longer
+  stays running (runic-editors#40).
 - `dotnet runic dev`'s build errors open their file again: the `$runic-dev`
   problem matchers skip the `[host] ` label that `dev` writes before each build
   line, which had become part of the file. With `dotnet-runic` 0.22, a fixed C#

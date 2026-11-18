@@ -43,6 +43,35 @@ export function isContentModified(error: unknown): boolean {
 }
 
 /**
+ * Sends a request that only reads, again after a short pause while the server answers it with ContentModified (a
+ * save's watched-file event arrived while it was pending), at most `attempts` times; then the last error is thrown.
+ * A palette refactoring asks for the message at the cursor this way, right after the user saved (runic-editors#40).
+ */
+export async function retryContentModified<T>(request: () => PromiseLike<T>, attempts = 4, pause = 150): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await request(); }
+    catch (error) {
+      const modified = isContentModified(error) || /content changed while the request was pending/i.test(error instanceof Error ? error.message : String(error));
+      if (!modified || attempt >= attempts) throw error;
+      await new Promise(resolveDelay => setTimeout(resolveDelay, pause));
+    }
+  }
+}
+
+/**
+ * The code actions of a range, asked for again while there are none, at most `attempts` times. VS Code's listing
+ * reads a server's ContentModified answer as no actions, so a refactoring run right after a save would apply nothing
+ * (runic-editors#40). Returns the last listing, which may be empty.
+ */
+export async function untilListed<T>(list: () => PromiseLike<readonly T[] | undefined>, attempts = 6, pause = 250): Promise<readonly T[]> {
+  for (let attempt = 1; ; attempt++) {
+    const actions = (await list()) ?? [];
+    if (actions.length > 0 || attempt >= attempts) return actions;
+    await new Promise(resolveDelay => setTimeout(resolveDelay, pause));
+  }
+}
+
+/**
  * Resolves a code action, a second time when the first answer is outdated. Returns the resolved action, or the
  * unresolved `item` (which applies nothing) after warning when the second answer is outdated too or the server refused
  * it. Only a cancellation is rethrown unchanged.

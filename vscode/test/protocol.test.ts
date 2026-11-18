@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { ServerCommands, advertisedCommands, commandSource, refactoringRoute, renameOffset, runicProtocol, type Refactoring } from "../src/protocol.js";
-import { isContentModified, outdatedActionMessage, refusedActionMessage, resolveOutdatedOnce } from "../src/refactor-retry.js";
+import { isContentModified, outdatedActionMessage, refusedActionMessage, resolveOutdatedOnce, retryContentModified, untilListed } from "../src/refactor-retry.js";
 
 // The initialize results of Translations 0.13 (no experimental.runic) and 0.14 with the opt-in, as the servers send them.
 const commands = ["runic.extractGroup", "runic.inlineResource", "runic.markReviewed", "runic.preview", "runic.renameInput", "runic.renameSlot", "runic.renameResource", "runic.renderPreview"];
@@ -141,6 +141,29 @@ test("a refused resolve warns at once with the server's reason and applies nothi
   expect(refused).toEqual([refusedActionMessage(action.title, new Error("Use an identifier."))]);
   expect(refused[0]).toBe('Runic: "Inline into ../en.rmf2" was not applied: Use an identifier.');
   expect(refusedActionMessage(action.title, new Error(""))).toBe('Runic: "Inline into ../en.rmf2" was not applied.');
+});
+
+test("a read the server answers with ContentModified is sent again, other errors are not (#40)", async () => {
+  let calls = 0;
+  expect(await retryContentModified(async () => { if (++calls < 3) throw { code: -32801, message: "Document content changed while the request was pending." }; return "info"; }, 4, 1)).toBe("info");
+  expect(calls).toBe(3);
+  calls = 0;
+  // vscode-languageclient can also reject with an Error that carries only the server's message.
+  await expect(retryContentModified(async () => { calls++; throw new Error("Document content changed while the request was pending."); }, 3, 1)).rejects.toThrow("content changed");
+  expect(calls).toBe(3);
+  calls = 0;
+  const refusal = new Error("Place the cursor in a Runic MF2 resource.");
+  await expect(retryContentModified(async () => { calls++; throw refusal; }, 4, 1)).rejects.toBe(refusal);
+  expect(calls).toBe(1);
+});
+
+test("an empty code action listing is asked for again, briefly (#40)", async () => {
+  let calls = 0;
+  expect(await untilListed(async () => ++calls < 3 ? [] : ["Inline into ../en.rmf2"], 6, 1)).toEqual(["Inline into ../en.rmf2"]);
+  expect(calls).toBe(3);
+  calls = 0;
+  expect(await untilListed(async () => { calls++; return undefined; }, 4, 1)).toEqual([]);
+  expect(calls).toBe(4);
 });
 
 test("a cancellation is rethrown without a message, and a first-time success passes through", async () => {

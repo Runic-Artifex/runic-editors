@@ -265,8 +265,11 @@ async function protocol2(api, root, fs) {
   const orphanGroup = document.positionAt(orphan().index);
   const offered = await untilCodeActions(en, new vscode.Range(orphanGroup, orphanGroup.translate(0, 6)), 'refactor.extract', "Extract group 'orphan' to orphan/en.rmf2");
   assert.deepEqual(offered.map(action => action.title), ["Extract group 'orphan' to orphan/en.rmf2"]);
-  editor.selection = new vscode.Selection(orphanGroup, orphanGroup);
-  await vscode.commands.executeCommand('runic.translations.extractGroup');
+  await withinApplyLimit(api, async () => {
+    editor = await vscode.window.showTextDocument(document, { preview: false });
+    editor.selection = new vscode.Selection(orphanGroup, orphanGroup);
+    await vscode.commands.executeCommand('runic.translations.extractGroup');
+  }, () => api.refusedActions().length > refused, 'no refusal warning');
   await waitFor(() => api.refusedActions().length > refused, () => `The refused Extract Group showed no warning (outdated: ${JSON.stringify(api.outdatedActions())}; en.rmf2: ${JSON.stringify(document.getText())})`);
   assert.match(api.refusedActions().at(-1), /^Runic: "Extract group 'orphan' to orphan\/en\.rmf2" was not applied: \S/);
   assert.ok(orphan(), 'A refused Extract Group must leave the group in en.rmf2');
@@ -406,7 +409,7 @@ async function untilCodeActions(uri, range, kind, title, timeout = 20000) {
 async function untilApplied(api, run, applied, message) {
   for (let attempt = 1; ; attempt++) {
     const warned = api.outdatedActions().length;
-    await run();
+    await withinApplyLimit(api, run, applied, message);
     try { return await waitFor(applied, message); }
     catch (error) {
       if (applied()) throw error;
@@ -416,6 +419,28 @@ async function untilApplied(api, run, applied, message) {
       console.log(`running the code action again after its warning: ${warnings.join(' ')}`);
     }
   }
+}
+/**
+ * Runs a refactoring's command, failing the stage with its state when the command has not finished after `limit`
+ * milliseconds, instead of the runner killing VS Code at 120 s with no report (#40). The state names the stage, the
+ * time, the code action resolves since the command started and how each ended, the Runic documents' versions and
+ * unsaved changes, and whether the expected change is there. The language client's trace is in the failure artifact
+ * (logs/…/runic-artifex.runic-devkit/Runic Translations.log).
+ */
+async function withinApplyLimit(api, run, applied, message, limit = 15000) {
+  const started = Date.now(), resolves = api.resolveLog().filter(entry => entry.started >= started - 1000).length;
+  const expired = Symbol('expired');
+  let timer;
+  try { if (await Promise.race([run(), new Promise(resolve => { timer = setTimeout(() => resolve(expired), limit); })]) !== expired) return; } finally { clearTimeout(timer); }
+  const documents = vscode.workspace.textDocuments.filter(document => /\.(rmf2|mf2)$|runic\.json$/.test(document.uri.fsPath))
+    .map(document => `${vscode.workspace.asRelativePath(document.uri)} v${document.version}${document.isDirty ? ' (unsaved)' : ''}`);
+  let expected;
+  try { expected = applied() ? 'applied' : `not applied: ${typeof message === 'function' ? message() : message}`; } catch (error) { expected = `could not read: ${error.message}`; }
+  assert.fail([`${stage}: the refactoring's command did not finish within ${Math.round((Date.now() - started) / 1000)} s (#40).`,
+    `Code action resolves: ${JSON.stringify(api.resolveLog().filter(entry => entry.started >= started - 1000).map(entry => ({ ...entry, started: entry.started - started })))} (${resolves} of them when the command started)`,
+    `Outdated warnings: ${JSON.stringify(api.outdatedActions())}; refusals: ${JSON.stringify(api.refusedActions())}`,
+    `Documents: ${documents.join(', ')}; active editor: ${vscode.window.activeTextEditor ? vscode.workspace.asRelativePath(vscode.window.activeTextEditor.document.uri) : 'none'}`,
+    `Expected change: ${expected}`].join('\n'));
 }
 async function waitFor(predicate, message, timeout = 10000) {
   const deadline = Date.now() + timeout;
