@@ -69,9 +69,9 @@ public enum RunicSlice
 /// <summary>One command of the table: its <c>.vsct</c> symbol, title and owner.</summary>
 public sealed class RunicCommand
 {
-    internal RunicCommand(int id, string symbol, string title, RunicSlice slice, string? canonicalName = null)
+    internal RunicCommand(int id, string symbol, string title, RunicSlice slice, string? canonicalName = null, bool sdkOnly = false)
     {
-        Id = id; Symbol = symbol; Title = title; Slice = slice; CanonicalName = canonicalName;
+        Id = id; Symbol = symbol; Title = title; Slice = slice; CanonicalName = canonicalName; SdkOnly = sdkOnly;
     }
 
     public int Id { get; }
@@ -82,6 +82,11 @@ public sealed class RunicCommand
     public RunicSlice Slice { get; }
     /// <summary>A fixed DTE command name, for the commands that already had one.</summary>
     public string? CanonicalName { get; }
+    /// <summary>
+    /// A Runic SDK command: visible only by <see cref="RunicActivation.ShowsSdkFeatures"/>, and DefaultInvisible in
+    /// <c>Commands.vsct</c> so that it stays hidden before the package loads.
+    /// </summary>
+    public bool SdkOnly { get; }
 }
 
 public static class RunicCommandCatalog
@@ -97,22 +102,25 @@ public static class RunicCommandCatalog
         new RunicCommand(RunicCommandIds.OverrideLibraryMessage, nameof(RunicCommandIds.OverrideLibraryMessage), "Override Library Message...", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.ShowTranslationStatus, nameof(RunicCommandIds.ShowTranslationStatus), "Show Translation Status", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.RefreshTranslationStatus, nameof(RunicCommandIds.RefreshTranslationStatus), "Refresh Translation Status", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.StartDev, nameof(RunicCommandIds.StartDev), "Start dotnet runic dev", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.StartDevNoWindow, nameof(RunicCommandIds.StartDevNoWindow), "Start dotnet runic dev --no-window", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.StopDev, nameof(RunicCommandIds.StopDev), "Stop dotnet runic dev", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.OpenDevServer, nameof(RunicCommandIds.OpenDevServer), "Open the Development Server", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.OpenSessionFile, nameof(RunicCommandIds.OpenSessionFile), "Open the dev Session File", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.ShowSdkOutput, nameof(RunicCommandIds.ShowSdkOutput), "Show Runic SDK Output", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.RunDoctor, nameof(RunicCommandIds.RunDoctor), "Run dotnet runic doctor", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.RefreshViewModels, nameof(RunicCommandIds.RefreshViewModels), "Refresh ViewModels", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.DebugWindow, nameof(RunicCommandIds.DebugWindow), "Debug the Window", RunicSlice.Implemented),
-        new RunicCommand(RunicCommandIds.AttachToPage, nameof(RunicCommandIds.AttachToPage), "Attach to the Page (JavaScript)", RunicSlice.Implemented),
+        new RunicCommand(RunicCommandIds.StartDev, nameof(RunicCommandIds.StartDev), "Start dotnet runic dev", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.StartDevNoWindow, nameof(RunicCommandIds.StartDevNoWindow), "Start dotnet runic dev --no-window", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.StopDev, nameof(RunicCommandIds.StopDev), "Stop dotnet runic dev", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.OpenDevServer, nameof(RunicCommandIds.OpenDevServer), "Open the Development Server", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.OpenSessionFile, nameof(RunicCommandIds.OpenSessionFile), "Open the dev Session File", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.ShowSdkOutput, nameof(RunicCommandIds.ShowSdkOutput), "Show Runic SDK Output", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.RunDoctor, nameof(RunicCommandIds.RunDoctor), "Run dotnet runic doctor", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.RefreshViewModels, nameof(RunicCommandIds.RefreshViewModels), "Refresh ViewModels", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.DebugWindow, nameof(RunicCommandIds.DebugWindow), "Debug the Window", RunicSlice.Implemented, sdkOnly: true),
+        new RunicCommand(RunicCommandIds.AttachToPage, nameof(RunicCommandIds.AttachToPage), "Attach to the Page (JavaScript)", RunicSlice.Implemented, sdkOnly: true),
         new RunicCommand(RunicCommandIds.ShowToolWindow, nameof(RunicCommandIds.ShowToolWindow), "Runic", RunicSlice.Implemented),
         new RunicCommand(RunicCommandIds.OpenOptions, nameof(RunicCommandIds.OpenOptions), "Options...", RunicSlice.Implemented),
     };
 
     public static RunicCommand Get(int id) => All.FirstOrDefault(command => command.Id == id)
         ?? throw new ArgumentOutOfRangeException(nameof(id), $"0x{id:X4} is not a Runic command.");
+
+    /// <summary>Whether the command shows: Translations and general commands always, Runic SDK commands by <see cref="RunicActivation.ShowsSdkFeatures"/>.</summary>
+    public static bool IsVisible(int id, bool scanned, int sdkProjects) => !Get(id).SdkOnly || RunicActivation.ShowsSdkFeatures(scanned, sdkProjects);
 
     /// <summary>What a stub says when it runs before its slice lands. Stubs normally stay hidden.</summary>
     public static string NotAvailableYet(int id) => $"{Get(id).Title} is not available yet in this build of Runic DevKit.";

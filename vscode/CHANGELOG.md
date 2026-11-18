@@ -40,6 +40,23 @@ Translations](README.md#moving-from-runic-or-runic-mf2-translations).
   the process is gone), the extension touches `obj/runic/dev-stopped` once, as
   `dev` does when it stops, so the next build restores the production frontend
   in `www/` (runic-editors#29).
+- A light-bulb refactoring that the server refuses for another reason, such as
+  Extract Group from a catalog where a locale lacks the group, shows the server's
+  reason as a warning instead of applying nothing without a message; only an
+  outdated one is resolved again (runic-editors#38).
+- The palette's refactorings work right after a save. The server's "changed
+  while pending" answer reached VS Code as no code actions or an empty outline,
+  so Extract Group and Inline Resource applied nothing, and Extract Group and
+  Rename Resource reported that the outline had no such group. They now ask
+  again for a few seconds, apply the code action they listed, and warn when the
+  server still lists none. A refactoring command whose error message is still
+  open no longer stays running (runic-editors#40).
+- `dotnet runic dev`'s build errors open their file again: the `$runic-dev`
+  problem matchers skip the `[host] ` label that `dev` writes before each build
+  line, which had become part of the file. With `dotnet-runic` 0.22, a fixed C#
+  error leaves Problems once `dev` prints `[dev] Ready` after the fix, and the
+  warnings stay; the extension's own `dev` terminal reports these problems
+  (runic-editors#36).
 
 ## 0.21.0
 

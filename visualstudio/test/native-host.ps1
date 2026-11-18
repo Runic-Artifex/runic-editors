@@ -385,6 +385,27 @@ try {
     if (!(Test-Path $child) -or [IO.File]::ReadAllText($child) -notmatch 'Kept by the user') { throw 'An emptied child the user wrote into was deleted.' }
     Passed 'Inline Resource: a child the user writes into before saving is kept'
 
+    # Extract Group into a folder that does not exist: Visual Studio drops the `create` (and the new file's edit) when the
+    # folder is missing, so DevKit creates profile/ before Visual Studio applies the edit. The server extracts only from a
+    # catalog that compiles, so de.rmf2 translates the new group too.
+    $profile = "$fixture\profile\en.rmf2"
+    if (Test-Path "$fixture\profile") { throw 'profile/ exists before Extract Group into a new folder.' }
+    $dte.ItemOperations.OpenFile("$fixture\de.rmf2") | Out-Null; $deDocument = Wait-For { Find-Document "$fixture\de.rmf2" } 'de.rmf2 did not open.'
+    $deDocument.Activate(); $deDocument.Selection.EndOfDocument(); $deDocument.Selection.Insert("`nprofile {`n  title = Ihr Profil`n}`n"); $deDocument.Save() | Out-Null
+    $document.Activate(); $document.Selection.EndOfDocument(); $document.Selection.Insert("`nprofile {`n  title = Your profile`n}`n"); $document.Save() | Out-Null
+    Start-Sleep -Seconds 2
+    $lines = (Text $document) -split "`n"
+    $group = @(0..($lines.Count - 1) | Where-Object { $lines[$_] -match '^profile\b' })[0]
+    $document.Selection.MoveToLineAndOffset($group + 1, 3)
+    $title = Invoke-QuickAction $document 'Extract group*'
+    if ($title -ne "Extract group 'profile' to profile/en.rmf2") { throw "Unexpected Extract Group title: $title" }
+    Wait-For { Find-Document $profile } 'Extract Group into a new folder did not create profile/en.rmf2.' | Out-Null
+    $dte.Documents.SaveAll()
+    Wait-For { (Test-Path $profile) -and [IO.File]::ReadAllText($profile) -match 'title = Your profile' -and [IO.File]::ReadAllText("$fixture\en.rmf2") -notmatch '(?m)^profile\b' } `
+        "Extract Group into a new folder lost the group (profile/en.rmf2: $(if (Test-Path $profile) { [IO.File]::ReadAllText($profile) } else { 'missing' }))." | Out-Null
+    Wait-Pane 'Runic Translations' { param($text) $text.Contains("Extract group 'profile' to profile/en.rmf2: created ") } 'DevKit did not create the folder of profile/en.rmf2.' | Out-Null
+    Passed "Extract Group into a new folder ('$title'): DevKit creates profile/, and after Save All the new file has the messages and en.rmf2 no longer does"
+
     Rename-At $document '\.input \{\$count' 9 'count' 'attempts'
     Wait-For { (Text $document) -match '\{\$attempts :integer\}' } 'F2 did not rename the input.' | Out-Null
     $dte.Documents.SaveAll()

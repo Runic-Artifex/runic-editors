@@ -62,10 +62,12 @@ try {
   await writeFile(join(app, '.vscode/settings.json'), JSON.stringify({ 'runic.dotnetPath': join(app, 'fake-dotnet.sh') }));
   // Inline Resource deletes a file; the test profile has no trash to move it to.
   await mkdir(join(temporary, 'profile', 'User'), { recursive: true });
-  await writeFile(join(temporary, 'profile', 'User', 'settings.json'), JSON.stringify({ 'files.enableTrash': false }));
+  // The language client's trace goes to the Runic Translations log, in the failure artifact (#40). vscode-languageclient
+  // traces only while that channel's level is Trace, which --log sets below.
+  await writeFile(join(temporary, 'profile', 'User', 'settings.json'), JSON.stringify({ 'files.enableTrash': false, 'runic.translations.trace.server': 'messages' }));
   const workspaceFile = join(temporary, 'runic.code-workspace');
   await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: workspace }, { path: app }, { path: second }] }));
-  const child = spawn(process.env.VSCODE_EXECUTABLE_PATH || 'code', ['--new-window', '--wait', '--no-sandbox', '--disable-gpu', '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--user-data-dir', join(temporary, 'profile'), '--extensions-dir', join(temporary, 'extensions'), `--extensionDevelopmentPath=${extension}`, `--extensionTestsPath=${join(extension, 'test/host.cjs')}`, workspaceFile], { stdio: 'inherit', env: environment });
+  const child = spawn(process.env.VSCODE_EXECUTABLE_PATH || 'code', ['--new-window', '--wait', '--no-sandbox', '--disable-gpu', '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--log', 'runic-artifex.runic-devkit:trace', '--user-data-dir', join(temporary, 'profile'), '--extensions-dir', join(temporary, 'extensions'), `--extensionDevelopmentPath=${extension}`, `--extensionTestsPath=${join(extension, 'test/host.cjs')}`, workspaceFile], { stdio: 'inherit', env: environment });
   const timeout = setTimeout(() => child.kill('SIGTERM'), 120000);
   const result = await new Promise((accept, reject) => { child.once('error', reject); child.once('exit', accept); });
   clearTimeout(timeout);
@@ -78,5 +80,7 @@ try {
 } finally {
   fakeDev.kill('SIGKILL');
   if (!passed) { await mkdir(join(extension, 'artifacts'), { recursive: true }); await cp(join(temporary, 'profile'), join(extension, 'artifacts/host-failure'), { recursive: true }).catch(() => {}); }
-  await rm(temporary, { recursive: true, force: true });
+  // RUNIC_HOST_KEEP=1 keeps the temporary workspace and profile (with the logs) of a passing run too.
+  if (process.env.RUNIC_HOST_KEEP) console.log(`Kept ${temporary}`);
+  else await rm(temporary, { recursive: true, force: true });
 }

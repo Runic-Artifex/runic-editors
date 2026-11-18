@@ -3,6 +3,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { detectToolVersion, devArguments, forceStop, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, type DevStop } from "./dev-process.js";
+import { DevProblems, LineSplitter } from "./dev-problems.js";
 import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type DoctorCheck, type DoctorReport } from "./doctor.js";
@@ -25,6 +26,8 @@ interface ProjectState {
   execution?: vscode.TaskExecution;
   /** The `dev` of a task this extension runs with its own terminal (dotnet-runic 0.22 and later), which it stops on its input. */
   devTerminal?: DevTerminal;
+  /** The Problems of that terminal's `dev`, kept after it ends until the next `dev` of the project starts. */
+  devProblems?: DevProblems;
 }
 
 interface RunicTaskDefinition extends vscode.TaskDefinition { type: "runic"; command: "dev" | "doctor" | "build"; noWindow?: boolean; project?: string }
@@ -67,6 +70,7 @@ export class RunicSdk implements vscode.Disposable {
   readonly kinds = new Map<string, WorkspaceKind>();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly doctorDiagnostics = vscode.languages.createDiagnosticCollection("runic-doctor");
+  private readonly devDiagnostics = vscode.languages.createDiagnosticCollection("runic-dev");
   private readonly statusItem = vscode.window.createStatusBarItem("runic.dev", vscode.StatusBarAlignment.Left, 99);
   private readonly devView = new Provider(() => this.devRoots());
   private readonly viewModelsView = new Provider(() => this.viewModelRoots());
@@ -86,7 +90,7 @@ export class RunicSdk implements vscode.Disposable {
     const refreshSessions = () => { void this.refreshSessions(); };
     const reloadSourceMaps = () => { if (this.sourceMapTimer) clearTimeout(this.sourceMapTimer); this.sourceMapTimer = setTimeout(() => { this.sourceMapTimer = undefined; this.loadSourceMaps(); }, 200); };
     const rescan = () => this.scheduleRescan();
-    this.disposables.push(this.log, this.doctorDiagnostics, this.statusItem, sessionWatcher, sourceMapWatcher, projectWatcher,
+    this.disposables.push(this.log, this.doctorDiagnostics, this.devDiagnostics, this.statusItem, sessionWatcher, sourceMapWatcher, projectWatcher,
       sessionWatcher.onDidCreate(refreshSessions), sessionWatcher.onDidChange(refreshSessions), sessionWatcher.onDidDelete(refreshSessions),
       sourceMapWatcher.onDidCreate(reloadSourceMaps), sourceMapWatcher.onDidChange(reloadSourceMaps), sourceMapWatcher.onDidDelete(reloadSourceMaps),
       projectWatcher.onDidCreate(rescan), projectWatcher.onDidDelete(rescan), projectWatcher.onDidChange(uri => { if (uri.path.endsWith(".csproj")) rescan(); }),
@@ -162,7 +166,7 @@ export class RunicSdk implements vscode.Disposable {
         }
       }
     }
-    for (const project of [...this.projects.keys()]) if (!seen.has(project)) { this.projects.delete(project); this.doctorDiagnostics.delete(vscode.Uri.file(project)); }
+    for (const project of [...this.projects.keys()]) if (!seen.has(project)) { this.projects.delete(project); this.doctorDiagnostics.delete(vscode.Uri.file(project)); this.publishDevProblems(); }
     const kinds = [...this.kinds.values()];
     void vscode.commands.executeCommand("setContext", "runic.sdkProject", this.projects.size > 0);
     void vscode.commands.executeCommand("setContext", "runic.translationsProject", kinds.some(kind => kind.translationsProjects.length > 0));
@@ -253,12 +257,19 @@ export class RunicSdk implements vscode.Disposable {
       const args = devArguments(state.project, noWindow, sdk022);
       const execution = sdk022
         ? new vscode.CustomExecution(async () => {
-          const terminal = new DevTerminal(dotnet, args, cwd, this.log, ended => { if (state.devTerminal === ended) state.devTerminal = undefined; });
+          const problems = new DevProblems(cwd, noWindow);
+          state.devProblems = problems;
+          this.publishDevProblems();
+          const terminal = new DevTerminal(dotnet, args, cwd, this.log, ended => { if (state.devTerminal === ended) state.devTerminal = undefined; },
+            line => { if (problems.add(line) && state.devProblems === problems) this.publishDevProblems(); });
           state.devTerminal = terminal;
           return terminal;
         })
         : new vscode.ProcessExecution(dotnet, args, { cwd });
-      task = new vscode.Task(definition, state.folder, noWindow ? `dev --no-window${suffix}` : `dev${suffix}`, "runic", execution, noWindow ? "$runic-dev-no-window" : "$runic-dev");
+      // The extension's terminal reports dev's problems itself (DevProblems: [dev] Ready drops a fixed build error, which
+      // a problem matcher cannot); its matchers only mark the task ready at [dev] Ready. A process task keeps $runic-dev.
+      const matcher = sdk022 ? (noWindow ? "$runic-dev-terminal-no-window" : "$runic-dev-terminal") : (noWindow ? "$runic-dev-no-window" : "$runic-dev");
+      task = new vscode.Task(definition, state.folder, noWindow ? `dev --no-window${suffix}` : `dev${suffix}`, "runic", execution, matcher);
       task.isBackground = true;
       task.detail = noWindow ? "dotnet runic dev --no-window: the frontend only; F5 starts the Window" : "dotnet runic dev: the development server and the Window";
     } else if (command === "build") {
@@ -476,6 +487,27 @@ export class RunicSdk implements vscode.Disposable {
     }));
   }
 
+  /** The Problems of every project's `dev` terminal (dotnet-runic 0.22 and later), as MSBuild's own lines name them. */
+  private publishDevProblems() {
+    const byFile = new Map<string, vscode.Diagnostic[]>();
+    for (const state of this.projects.values()) {
+      if (!state.devProblems) continue;
+      const version = projectRunicToolVersion(state.project);
+      for (const problem of state.devProblems.problems) {
+        const position = new vscode.Position(Math.max(0, problem.line - 1), Math.max(0, problem.column - 1));
+        const diagnostic = new vscode.Diagnostic(new vscode.Range(position, position), problem.message,
+          problem.severity === "error" ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning);
+        diagnostic.source = "runic";
+        diagnostic.code = isRunicCode(problem.code) ? { value: problem.code, target: vscode.Uri.parse(diagnosticHelpUri(problem.code, version)) } : problem.code;
+        const list = byFile.get(problem.file) ?? [];
+        list.push(diagnostic);
+        byFile.set(problem.file, list);
+      }
+    }
+    this.devDiagnostics.clear();
+    for (const [file, diagnostics] of byFile) this.devDiagnostics.set(vscode.Uri.file(file), diagnostics);
+  }
+
   // ---- Code actions -------------------------------------------------------------------------------------------------
 
   private codeActions(document: vscode.TextDocument, context: vscode.CodeActionContext): vscode.CodeAction[] {
@@ -597,6 +629,14 @@ export class RunicSdk implements vscode.Disposable {
       refreshSession: (project: string) => this.projects.get(project)?.follower.refresh(),
       devState: (project: string) => this.projects.get(project)?.follower.snapshot,
       devLabel: () => this.statusItem.text,
+      /** Reads lines as the project's dev terminal does (a new run's problems), without starting dev. */
+      devOutput: (project: string, lines: string[], noWindow = false) => {
+        const state = this.projects.get(project);
+        if (!state) return;
+        state.devProblems = new DevProblems(dirname(project), noWindow);
+        for (const line of lines) state.devProblems.add(line);
+        this.publishDevProblems();
+      },
       viewModels: (project: string) => { this.loadSourceMaps(); return this.projects.get(project)?.sourceTree; },
       runDoctor: (project: string) => this.runDoctor(project),
       codeActions: (document: vscode.TextDocument, diagnostics: vscode.Diagnostic[]) => this.codeActions(document, { diagnostics, triggerKind: vscode.CodeActionTriggerKind.Invoke, only: undefined }),
@@ -643,7 +683,8 @@ class DevTerminal implements vscode.Pseudoterminal {
   private stopping?: Promise<DevStop>;
   private ended = false;
 
-  constructor(private readonly dotnet: string, private readonly args: string[], private readonly cwd: string, private readonly log: vscode.LogOutputChannel, private readonly onEnd: (terminal: DevTerminal) => void) {}
+  constructor(private readonly dotnet: string, private readonly args: string[], private readonly cwd: string, private readonly log: vscode.LogOutputChannel, private readonly onEnd: (terminal: DevTerminal) => void,
+    private readonly onLine: (line: string) => void = () => {}) {}
 
   get running(): boolean { return !!this.child && !this.ended; }
 
@@ -652,8 +693,13 @@ class DevTerminal implements vscode.Pseudoterminal {
     const child = spawnDev(this.dotnet, this.args, this.cwd, true);
     this.child = child;
     const write = (data: string) => this.writeEmitter.fire(terminalText(data));
-    child.stdout?.setEncoding("utf8"); child.stdout?.on("data", write);
-    child.stderr?.setEncoding("utf8"); child.stderr?.on("data", write);
+    // Each stream's lines, for the Problems; the two streams interleave whole lines only.
+    const output = new LineSplitter(), errors = new LineSplitter();
+    const read = (lines: LineSplitter) => (data: string) => { write(data); for (const line of lines.push(data)) this.onLine(line); };
+    child.stdout?.setEncoding("utf8"); child.stdout?.on("data", read(output));
+    child.stderr?.setEncoding("utf8"); child.stderr?.on("data", read(errors));
+    child.stdout?.on("end", () => { for (const line of output.flush()) this.onLine(line); });
+    child.stderr?.on("end", () => { for (const line of errors.flush()) this.onLine(line); });
     child.on("error", error => { write(`\nCould not start ${this.dotnet}: ${error.message}\n`); this.end(1); });
     child.on("close", (code, signal) => { write(`\ndotnet runic dev exited with ${code ?? signal}.\n`); this.end(code ?? 1); });
   }

@@ -38,5 +38,9 @@ public static class ToolWindowSections
         new RunicSectionInfo(RunicSection.Translations, "Translations", sdkOnly: false, RunicSlice.Implemented),
     };
 
+    /// <summary>Whether the section shows, by <see cref="RunicActivation.ShowsSdkFeatures"/>.</summary>
+    public static bool IsVisible(RunicSectionInfo section, bool scanned, int sdkProjects)
+        => !section.SdkOnly || RunicActivation.ShowsSdkFeatures(scanned, sdkProjects);
+
     public static string Placeholder(RunicSectionInfo section) => $"{section.Title} is not available yet in this build of Runic DevKit.";
 }

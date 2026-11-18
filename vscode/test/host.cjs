@@ -190,12 +190,13 @@ async function protocol2(api, root, fs) {
   const account = vscode.Uri.joinPath(root, 'account', 'en.rmf2');
   const accountDocument = await vscode.workspace.openTextDocument(account);
   await vscode.window.showTextDocument(accountDocument, { preview: false });
-  const inline = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', account, new vscode.Range(1, 0, 1, 0), 'refactor.inline');
+  stage = 'protocol 2: inline resource code action (listing)';
+  const inline = await untilCodeActions(account, new vscode.Range(1, 0, 1, 0), 'refactor.inline', 'Inline into ../en.rmf2');
   assert.deepEqual(inline.map(action => action.title), ['Inline into ../en.rmf2']);
+  stage = 'protocol 2: inline resource code action (apply)';
   await untilApplied(api, async () => {
     await vscode.window.showTextDocument(accountDocument, { preview: false });
-    const inlined = await vscode.commands.executeCommand('runic.translations.inlineResource');
-    assert.equal(inlined.kind, 'refactor.inline');
+    ran(api, await vscode.commands.executeCommand('runic.translations.inlineResource'), 'refactor.inline');
   }, () => !fs.existsSync(account.fsPath) && /^account\b/m.test(document.getText()), () => `Inline Resource did not move account/en.rmf2 into en.rmf2 (account exists: ${fs.existsSync(account.fsPath)}): ${JSON.stringify(document.getText())}`);
   assert.ok(document.getText().includes('Your account'));
   // VS Code may already have saved the refactored file (files.refactoring.autoSave); save only what is still dirty,
@@ -207,22 +208,82 @@ async function protocol2(api, root, fs) {
   editor = await vscode.window.showTextDocument(document, { preview: false });
   const group = document.positionAt(/^account\b/m.exec(document.getText()).index);
   editor.selection = new vscode.Selection(group, group);
-  const extract = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', en, new vscode.Range(group, group.translate(0, 7)), 'refactor.extract');
+  stage = 'protocol 2: extract group code action (listing)';
+  const extract = await untilCodeActions(en, new vscode.Range(group, group.translate(0, 7)), 'refactor.extract', "Extract group 'account' to account/en.rmf2");
   assert.deepEqual(extract.map(action => action.title), ["Extract group 'account' to account/en.rmf2"]);
+  stage = 'protocol 2: extract group code action (apply)';
   // The created file is written through the workspace edit; VS Code need not open it as a document.
   const extractedText = () => vscode.workspace.textDocuments.find(item => item.uri.fsPath === account.fsPath)?.getText() ?? (fs.existsSync(account.fsPath) ? fs.readFileSync(account.fsPath, 'utf8') : '');
   await untilApplied(api, async () => {
     editor = await vscode.window.showTextDocument(document, { preview: false });
     editor.selection = new vscode.Selection(group, group);
-    const extracted = await vscode.commands.executeCommand('runic.translations.extractGroup');
-    assert.equal(extracted.kind, 'refactor.extract');
+    ran(api, await vscode.commands.executeCommand('runic.translations.extractGroup'), 'refactor.extract');
   }, () => extractedText().includes('heading = Your account') && !/^account\b/m.test(document.getText()),
     () => `Extract Group did not move the account group back (account/en.rmf2: ${JSON.stringify(extractedText())}): ${JSON.stringify(document.getText())}`);
   await saveIfDirty(document);
   await vscode.workspace.saveAll(false);
   assert.ok(fs.readFileSync(account.fsPath, 'utf8').includes('heading = Your account'));
   assert.ok(!fs.readFileSync(en.fsPath, 'utf8').includes('Your account'));
-  console.log('PASS protocol 2: F2 on an input, Inline Resource and Extract Group code actions, server-applied command edits.');
+  // Extract Group into a folder that does not exist yet: the client creates profile/ with the file,
+  // and the group's messages reach it instead of being lost.
+  stage = 'protocol 2: extract group into a new folder';
+  const profile = vscode.Uri.joinPath(root, 'profile', 'en.rmf2');
+  assert.ok(!fs.existsSync(path.dirname(profile.fsPath)), 'profile/ must not exist before the extract');
+  // The server extracts only from a catalog that compiles, so de.rmf2 translates the new group too.
+  const de = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(root, 'de.rmf2'));
+  const addGroup = async (target, title) => {
+    const shown = await vscode.window.showTextDocument(target, { preview: false });
+    assert.equal(await shown.edit(builder => builder.insert(target.positionAt(target.getText().length), `\nprofile {\n  title = ${title}\n}\n`)), true);
+    await saveIfDirty(target);
+  };
+  await addGroup(de, 'Ihr Profil');
+  await addGroup(document, 'Your profile');
+  const profileGroup = document.positionAt(/^profile\b/m.exec(document.getText()).index);
+  const profileText = () => vscode.workspace.textDocuments.find(item => item.uri.fsPath === profile.fsPath)?.getText() ?? (fs.existsSync(profile.fsPath) ? fs.readFileSync(profile.fsPath, 'utf8') : '');
+  await untilApplied(api, async () => {
+    editor = await vscode.window.showTextDocument(document, { preview: false });
+    editor.selection = new vscode.Selection(profileGroup, profileGroup);
+    ran(api, await vscode.commands.executeCommand('runic.translations.extractGroup'), 'refactor.extract');
+  }, () => profileText().includes('title = Your profile') && !/^profile\b/m.test(document.getText()),
+    () => `Extract Group into a new folder did not move the profile group (profile/en.rmf2: ${JSON.stringify(profileText())}): ${JSON.stringify(document.getText())}`);
+  await saveIfDirty(document);
+  await vscode.workspace.saveAll(false);
+  assert.ok(fs.readFileSync(profile.fsPath, 'utf8').includes('title = Your profile'), 'profile/en.rmf2 on disk lacks the extracted group');
+  assert.ok(!/^profile\b/m.test(fs.readFileSync(en.fsPath, 'utf8')), 'en.rmf2 on disk still has the profile group');
+  // A refactoring the server refuses on resolve (here: a group that de.rmf2 lacks) warns with its reason instead of
+  // applying nothing silently (#38).
+  stage = 'protocol 2: refused extract group warns';
+  editor = await vscode.window.showTextDocument(document, { preview: false });
+  assert.equal(await editor.edit(builder => builder.insert(document.positionAt(document.getText().length), '\norphan {\n  title = Only in English\n}\n')), true);
+  await saveIfDirty(document);
+  const orphan = () => /^orphan\b/m.exec(document.getText());
+  const refused = api.refusedActions().length;
+  editor = await vscode.window.showTextDocument(document, { preview: false });
+  const orphanGroup = document.positionAt(orphan().index);
+  const offered = await untilCodeActions(en, new vscode.Range(orphanGroup, orphanGroup.translate(0, 6)), 'refactor.extract', "Extract group 'orphan' to orphan/en.rmf2");
+  assert.deepEqual(offered.map(action => action.title), ["Extract group 'orphan' to orphan/en.rmf2"]);
+  await withinApplyLimit(api, async () => {
+    editor = await vscode.window.showTextDocument(document, { preview: false });
+    editor.selection = new vscode.Selection(orphanGroup, orphanGroup);
+    await vscode.commands.executeCommand('runic.translations.extractGroup');
+  }, () => api.refusedActions().length > refused, 'no refusal warning');
+  await waitFor(() => api.refusedActions().length > refused, () => `The refused Extract Group showed no warning (outdated: ${JSON.stringify(api.outdatedActions())}; en.rmf2: ${JSON.stringify(document.getText())})`);
+  assert.match(api.refusedActions().at(-1), /^Runic: "Extract group 'orphan' to orphan\/en\.rmf2" was not applied: \S/);
+  assert.ok(orphan(), 'A refused Extract Group must leave the group in en.rmf2');
+  editor = await vscode.window.showTextDocument(document, { preview: false });
+  const start = orphan().index;
+  assert.equal(await editor.edit(builder => builder.delete(new vscode.Range(document.positionAt(start - 1), document.positionAt(document.getText().indexOf('}', start) + 2)))), true);
+  await saveIfDirty(document);
+  console.log('PASS protocol 2: F2 on an input, Inline Resource and Extract Group code actions (also into a new folder), server-applied command edits.');
+}
+/**
+ * A palette refactoring's result: the path it took (`applied`, `menu`, `unlisted`, see codeActionAt) and, when the
+ * command returned nothing, the error it showed (#40).
+ */
+function ran(api, result, kind) {
+  assert.ok(result, `The refactoring command returned nothing; the error it showed: ${api.commandErrors().at(-1) ?? 'none recorded'}`);
+  assert.equal(result.kind, kind, `The refactoring command took another path: ${JSON.stringify(result)}`);
+  return result;
 }
 /** Saves a document that has unsaved changes; a clean one is on disk already. */
 async function saveIfDirty(document) {
@@ -249,6 +310,19 @@ async function runicSdk(api, fs) {
   const dev = tasks.find(task => task.name === 'dev --no-window');
   assert.deepEqual(dev.execution.args, ['runic', 'dev', '--no-window', '--project', project]);
   assert.equal(dev.isBackground, true);
+  stage = 'dev problems clear at [dev] Ready (#36)';
+  const counter = vscode.Uri.file(path.join(appFolder.uri.fsPath, 'CounterViewModel.cs'));
+  const devProblems = () => vscode.languages.getDiagnostics(counter).filter(item => item.source === 'runic').map(item => [item.code, item.severity, item.range.start.line, item.range.start.character]);
+  const broken = `[host] ${counter.fsPath}(7,17): error CS1002: ; expected [${project}]`;
+  const warned = `[host] ${counter.fsPath}(5,16): warning CS0168: The variable 'x' is declared but never used [${project}]`;
+  sdk.devOutput(project, ['[dev] Evaluating Views Window project...', warned, broken, '[host] dotnet watch ❌ Exited with error code 1']);
+  await waitFor(() => devProblems().length === 2, () => `dev's problems: ${JSON.stringify(devProblems())}`);
+  assert.deepEqual(devProblems(), [['CS0168', vscode.DiagnosticSeverity.Warning, 4, 15], ['CS1002', vscode.DiagnosticSeverity.Error, 6, 16]]);
+  sdk.devOutput(project, ['[dev] Evaluating Views Window project...', warned, broken, warned, '[dev] Window started: process 4120', '[dev] Ready']);
+  await waitFor(() => devProblems().length === 1, () => `[dev] Ready must drop the fixed error: ${JSON.stringify(devProblems())}`);
+  assert.deepEqual(devProblems(), [['CS0168', vscode.DiagnosticSeverity.Warning, 4, 15]]);
+  sdk.devOutput(project, []);
+  await waitFor(() => devProblems().length === 0, 'A new dev run must start without the previous run\'s problems');
   stage = 'session file follower';
   const pid = Number(process.env.RUNIC_FAKE_DEV_PID);
   const sessionFile = path.join(appFolder.uri.fsPath, 'obj', 'runic', 'dev-session.json');
@@ -316,6 +390,23 @@ async function retryModified(request, attempts = 20, also) {
   }
 }
 /**
+ * The code actions of a range once they include `title`, or the last ones at the deadline, which the caller's assertion
+ * then reports. Right after the previous step's saves the server can still be reading the changed files and list none
+ * yet (#39).
+ */
+async function untilCodeActions(uri, range, kind, title, timeout = 20000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    // A request the server leaves unanswered counts as an empty answer, so a stuck request reaches the assertion too.
+    const request = retryModified(() => vscode.commands.executeCommand('vscode.executeCodeActionProvider', uri, range, kind));
+    let timer;
+    const actions = await Promise.race([request, new Promise(resolve => { timer = setTimeout(() => resolve(undefined), 5000); })]).finally(() => clearTimeout(timer)) ?? [];
+    if (actions.some(action => action.title === title) || Date.now() >= deadline) return actions;
+    console.log(`${kind}: no '${title}' yet (${JSON.stringify(actions.map(action => action.title))}); asking again`);
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+}
+/**
  * Runs a light-bulb refactoring and waits for its edit. The extension resolves an action the server rejects as outdated
  * (ContentModified after a watched-file change from the previous step's saves, #9) once more by itself; if that is
  * outdated too it warns (#32). A run that applies nothing must therefore have warned, never fail silently; only then
@@ -324,7 +415,7 @@ async function retryModified(request, attempts = 20, also) {
 async function untilApplied(api, run, applied, message) {
   for (let attempt = 1; ; attempt++) {
     const warned = api.outdatedActions().length;
-    await run();
+    await withinApplyLimit(api, run, applied, message);
     try { return await waitFor(applied, message); }
     catch (error) {
       if (applied()) throw error;
@@ -334,6 +425,28 @@ async function untilApplied(api, run, applied, message) {
       console.log(`running the code action again after its warning: ${warnings.join(' ')}`);
     }
   }
+}
+/**
+ * Runs a refactoring's command, failing the stage with its state when the command has not finished after `limit`
+ * milliseconds, instead of the runner killing VS Code at 120 s with no report (#40). The state names the stage, the
+ * time, the code action resolves since the command started and how each ended, the Runic documents' versions and
+ * unsaved changes, and whether the expected change is there. The language client's trace is in the failure artifact
+ * (logs/…/runic-artifex.runic-devkit/Runic Translations.log).
+ */
+async function withinApplyLimit(api, run, applied, message, limit = 15000) {
+  const started = Date.now(), resolves = api.resolveLog().filter(entry => entry.started >= started - 1000).length;
+  const expired = Symbol('expired');
+  let timer;
+  try { if (await Promise.race([run(), new Promise(resolve => { timer = setTimeout(() => resolve(expired), limit); })]) !== expired) return; } finally { clearTimeout(timer); }
+  const documents = vscode.workspace.textDocuments.filter(document => /\.(rmf2|mf2)$|runic\.json$/.test(document.uri.fsPath))
+    .map(document => `${vscode.workspace.asRelativePath(document.uri)} v${document.version}${document.isDirty ? ' (unsaved)' : ''}`);
+  let expected;
+  try { expected = applied() ? 'applied' : `not applied: ${typeof message === 'function' ? message() : message}`; } catch (error) { expected = `could not read: ${error.message}`; }
+  assert.fail([`${stage}: the refactoring's command did not finish within ${Math.round((Date.now() - started) / 1000)} s (#40).`,
+    `Code action resolves: ${JSON.stringify(api.resolveLog().filter(entry => entry.started >= started - 1000).map(entry => ({ ...entry, started: entry.started - started })))} (${resolves} of them when the command started)`,
+    `Outdated or unlisted warnings: ${JSON.stringify(api.outdatedActions())}; refusals: ${JSON.stringify(api.refusedActions())}; command errors: ${JSON.stringify(api.commandErrors())}`,
+    `Documents: ${documents.join(', ')}; active editor: ${vscode.window.activeTextEditor ? vscode.workspace.asRelativePath(vscode.window.activeTextEditor.document.uri) : 'none'}`,
+    `Expected change: ${expected}`].join('\n'));
 }
 async function waitFor(predicate, message, timeout = 10000) {
   const deadline = Date.now() + timeout;

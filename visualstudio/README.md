@@ -100,8 +100,17 @@ process has exited as stopped. For such a killed `dev` it touches
 `obj/runic/dev-stopped` once, as `dev` does when it stops, so the next F5 builds
 and puts the production frontend back in `www/`. **Open the Development Server** opens the page in
 the browser; **Open the dev Session File** opens the file. `dev`'s failures
-(`RAPPDEV` codes) and the build's errors appear in the Error List; F1 on one
-opens its entry in the Runic diagnostics catalog.
+(`RAPPDEV` codes) and the build's errors and warnings (C#, `RUNICBRIDGE`)
+appear in the Error List; F1 on one opens its entry in the Runic diagnostics
+catalog. A build error leaves the Error List once `dev` reports `[dev] Ready`
+again after the fix, and all entries go at the next build cycle (`[dev]
+Evaluating`, with the Window also `Window exited` and `Reloading`).
+
+Frontend errors are not in the Error List. Vite reports a `.tsx` parse or
+transform error as several lines of formatted text, without a line in MSBuild's
+form, and `dev` passes them through as they are; they show in the **Runic SDK**
+pane and in the page's error overlay. `dev` runs no TypeScript type check, so
+type errors appear only in the editor.
 
 With `dotnet-runic` 0.22 and later:
 
@@ -264,7 +273,9 @@ through standard LSP, with no refactoring code in this extension (D070.1):
 
 - **F2** renames a resource, an MF2 local, a caller input (on `$name`, in every
   locale's resource) or a slot reference (on the value of `ref=`, also in the
-  `runic.json` slot contracts). When the solution also holds application
+  `runic.json` slot contracts). Visual Studio's LSP client applies a rename to
+  open documents in their buffers and writes the files that are not open
+  straight to disk, so those are saved at once. When the solution also holds application
   sources (C#, TypeScript, Svelte), a resource rename asks first in an InfoBar,
   **Rename in resource sources** or **Cancel** (the server's
   `window/showMessageRequest`): Runic renames the resource in resource sources
@@ -274,9 +285,14 @@ through standard LSP, with no refactoring code in this extension (D070.1):
   output**), the status bar and the **Runic Translations** Output pane
   (runic-editors#32).
 - **The light bulb** (Ctrl+.) on a group's name offers **Extract group 'x' to
-  x/en.rmf2**, which creates that file. In a feature-local resource it offers
-  **Inline into ../en.rmf2 (leaves en.rmf2 empty)**, one action per ancestor
-  resource of the same locale.
+  x/en.rmf2**, which creates that file. Visual Studio does not create a new
+  file's folder (it would drop the new file and keep only the removal from the
+  source), so **DevKit creates a missing `x/` folder first**, only inside the
+  solution or the Translations project, and notes it in the **Runic
+  Translations** Output pane. If it cannot, Visual Studio applies none of the
+  edit and DevKit says why in an InfoBar and the pane. In a feature-local
+  resource it offers **Inline into ../en.rmf2 (leaves en.rmf2 empty)**, one
+  action per ancestor resource of the same locale.
 
 Visual Studio cannot delete files through LSP (its client has no `delete`
 resource operation), so Inline Resource moves the resources into the ancestor
@@ -361,7 +377,7 @@ work when the settings are empty; set them before starting Visual Studio.
 | Pseudo-locales (`pseudoLocales`) in the preview | Locale selector in the preview window | Change Preview Locale |
 | Regional locale and time zone of the preview | Fields in the preview window | Commands |
 | Rename Input, Rename Slot, Rename Resource in Resource Sources | F2 with Translations 0.14 | F2 with Translations 0.14, commands |
-| Extract Group to Directory, Inline Resource into Ancestor | Light bulb with Translations 0.14; DevKit deletes the file Inline empties once it is saved | Light bulb with Translations 0.14, commands |
+| Extract Group to Directory, Inline Resource into Ancestor | Light bulb with Translations 0.14; DevKit creates the folder Extract Group needs and deletes the file Inline empties once it is saved | Light bulb with Translations 0.14, commands |
 | Restart Language Server | Tools → Runic menu | Command |
 | Export XLIFF, Import XLIFF (dry run) | Tools → Runic menu; folder or file picker, tool output in the "Runic Translations" Output pane | Commands |
 | Import .resx or i18next Catalog | Tools → Runic menu; dry run, then import after confirmation | Command |
@@ -380,7 +396,7 @@ work when the settings are empty; set them before starting Visual Studio.
 | Run dotnet runic doctor, doctor results | Tools → Runic, tool window toolbar, Error List context menu; Doctor section | Command, Doctor view |
 | Doctor findings as problems with help links | Error List on the project file; F1 opens the doctor documentation | Problems with a code link |
 | Start, start `--no-window` and stop `dotnet runic dev` | Tools → Runic, tool window toolbar; output in the "Runic SDK" Output pane. Stop works for the `dev` Visual Studio started (on its input with `dotnet-runic` 0.22, else by ending it); one started in a terminal stops there with Ctrl+C | Commands and tasks; outside `dev` stopped with SIGINT (not on Windows) |
-| `dev` diagnostics as problems | Error List, read as the `$runic-dev` matcher reads them; F1 opens the Runic diagnostics catalog | Problems through the `$runic-dev` problem matchers |
+| `dev` diagnostics as problems | Error List, read as the `$runic-dev` matcher reads them, and a fixed build error goes at `[dev] Ready`; F1 opens the Runic diagnostics catalog. Vite's frontend errors stay in the Output pane | Problems through the `$runic-dev` problem matchers |
 | Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time; a killed `dev` gets `obj/runic/dev-stopped` | Watcher and 2 s poll; process command line or image; the same `dev-stopped` touch |
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
 | Dev Session view: state, server, Window owner or process, pages, debug endpoints, generated clients | Runic tool window, Dev Session section; toolbar buttons enabled per state; state changes in the status bar text | Dev Session view; "Runic dev" status bar item |
@@ -404,6 +420,12 @@ work when the settings are empty; set them before starting Visual Studio.
 - **No palette-style refactoring commands.** Rename Input, Rename Slot, Extract
   Group and Inline Resource are F2 and the light bulb only (Translations 0.14);
   VS Code also has commands for them.
+- **Frontend errors stay in the Runic SDK pane.** A `.tsx` error while `dev`
+  runs is not an Error List row ([Dev Session](#dev-session-dotnet-runic-dev)).
+  For that, `dev` would have to print each Vite error also as one line in
+  MSBuild's form (`Frontend/src/App.tsx(30,5): error <code>: <message>`, as it
+  does for its own faults) and repeat a line it can match when the frontend
+  compiles again.
 - **No status bar item** for the language server's state, catalog and locale.
 - **F5 debugs .NET only.** Page breakpoints need Debug the Window or Attach to
   the Page; there is no Runic launch type for both (D070.19).

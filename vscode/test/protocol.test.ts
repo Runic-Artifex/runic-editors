@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { ServerCommands, advertisedCommands, commandSource, refactoringRoute, renameOffset, runicProtocol, type Refactoring } from "../src/protocol.js";
-import { isContentModified, outdatedActionMessage, resolveOutdatedOnce } from "../src/refactor-retry.js";
+import { isContentModified, outdatedActionMessage, refusedActionMessage, resolveOutdatedOnce, retryContentModified, unlistedActionMessage, untilFound, untilListed } from "../src/refactor-retry.js";
 
 // The initialize results of Translations 0.13 (no experimental.runic) and 0.14 with the opt-in, as the servers send them.
 const commands = ["runic.extractGroup", "runic.inlineResource", "runic.markReviewed", "runic.preview", "runic.renameInput", "runic.renameSlot", "runic.renameResource", "runic.renderPreview"];
@@ -127,10 +127,61 @@ test("a resolve that stays outdated warns with the action's title and applies no
   expect(h.warnings[0]).toContain('"Inline into ../en.rmf2" was not applied');
 });
 
-test("other resolve errors and first-time successes pass through unchanged", async () => {
+test("a refused resolve warns at once with the server's reason and applies nothing (#38)", async () => {
   const h = host(); let calls = 0;
-  const failure = new Error("Use an identifier.");
-  await expect(resolveOutdatedOnce(action, async () => { calls++; throw failure; }, h)).rejects.toBe(failure);
+  // vscode-languageclient rethrows the server's ResponseError (RequestFailed, -32803) of codeAction/resolve.
+  const refusal = Object.assign(new Error("Every locale must define the group 'orphan' before it can be extracted."), { code: -32803 });
+  const resolved = await resolveOutdatedOnce({ title: "Extract group 'orphan' to orphan/en.rmf2" }, async () => { calls++; throw refusal; }, h);
+  expect(resolved).toEqual({ title: "Extract group 'orphan' to orphan/en.rmf2" });
+  expect(calls).toBe(1);
+  expect(h.warnings).toEqual([`Runic: "Extract group 'orphan' to orphan/en.rmf2" was not applied: Every locale must define the group 'orphan' before it can be extracted.`]);
+  // A host with its own refusal channel gets the refusal there, and a plain JSON-RPC error object reads the same.
+  const refused: string[] = [];
+  await resolveOutdatedOnce(action, async () => { throw { code: -32602, message: "Use an identifier." }; }, { ...h, refused: message => { refused.push(message); } });
+  expect(refused).toEqual([refusedActionMessage(action.title, new Error("Use an identifier."))]);
+  expect(refused[0]).toBe('Runic: "Inline into ../en.rmf2" was not applied: Use an identifier.');
+  expect(refusedActionMessage(action.title, new Error(""))).toBe('Runic: "Inline into ../en.rmf2" was not applied.');
+});
+
+test("a read the server answers with ContentModified is sent again, other errors are not (#40)", async () => {
+  let calls = 0;
+  expect(await retryContentModified(async () => { if (++calls < 3) throw { code: -32801, message: "Document content changed while the request was pending." }; return "info"; }, 4, 1)).toBe("info");
+  expect(calls).toBe(3);
+  calls = 0;
+  // vscode-languageclient can also reject with an Error that carries only the server's message.
+  await expect(retryContentModified(async () => { calls++; throw new Error("Document content changed while the request was pending."); }, 3, 1)).rejects.toThrow("content changed");
+  expect(calls).toBe(3);
+  calls = 0;
+  const refusal = new Error("Place the cursor in a Runic MF2 resource.");
+  await expect(retryContentModified(async () => { calls++; throw refusal; }, 4, 1)).rejects.toBe(refusal);
+  expect(calls).toBe(1);
+});
+
+test("an empty code action listing is asked for again, briefly (#40)", async () => {
+  let calls = 0;
+  expect(await untilListed(async () => ++calls < 3 ? [] : ["Inline into ../en.rmf2"], 6, 1)).toEqual(["Inline into ../en.rmf2"]);
+  expect(calls).toBe(3);
+  calls = 0;
+  expect(await untilListed(async () => { calls++; return undefined; }, 4, 1)).toEqual([]);
+  expect(calls).toBe(4);
+});
+
+test("an outline read as empty after a save is read again, within its bound (#40)", async () => {
+  let calls = 0;
+  // CI: the documentSymbol answer was ContentModified, which the client reads as an empty outline.
+  const outline = async () => ++calls < 3 ? [] : [{ detail: "profile" }];
+  expect(await untilFound(async () => (await outline()).find(item => item.detail === "profile"), 12, 1)).toEqual({ detail: "profile" });
+  expect(calls).toBe(3);
+  calls = 0;
+  expect(await untilFound(async () => { calls++; return undefined; }, 5, 1)).toBeUndefined();
+  expect(calls).toBe(5);
+  expect(unlistedActionMessage("Extract Group")).toBe("Runic: Extract Group is not available here: the language server listed no such action at the cursor. Run it again once the server has read the file.");
+});
+
+test("a cancellation is rethrown without a message, and a first-time success passes through", async () => {
+  const h = host(); let calls = 0;
+  const cancellation = new Error("Canceled");
+  await expect(resolveOutdatedOnce(action, async () => { calls++; throw cancellation; }, { ...h, cancelled: error => error === cancellation })).rejects.toBe(cancellation);
   expect(calls).toBe(1);
   expect(await resolveOutdatedOnce(action, async () => undefined, h)).toBe(action);
   expect(h.warnings).toEqual([]);
