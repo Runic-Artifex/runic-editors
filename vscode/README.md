@@ -383,9 +383,10 @@ successful whole-application rename.
 
 ### Refactorings: F2 and the light bulb
 
-With Translations 0.14 (the language server's protocol 2), the Translations
+With Translations 0.14 (the language server's protocol 2, which the extension
+requests with `initializationOptions.runicProtocol: 2`), the Translations
 refactorings take the editor's standard paths, and the server applies their
-edits:
+edits. The host test runs them against `dotnet-runic-translations` 0.14.0:
 
 - **F2** renames a resource, an MF2 local, a caller input (on `$name`, in every
   locale's resource) or a slot reference (on the value of `ref=`, also in the
@@ -393,7 +394,14 @@ edits:
 - **The light bulb** (Ctrl+.) on a group's name offers **Extract group 'x' to
   x/en.rmf2**; in a feature-local resource it offers **Inline into
   ../en.rmf2**, one action per ancestor resource of the same locale (this
-  replaces the file dialog).
+  replaces the file dialog). VS Code deletes the inlined file as part of the
+  edit. Visual Studio cannot delete files through LSP, so there the server
+  empties the file and Runic DevKit for Visual Studio deletes it once it is
+  saved (see its
+  [README](../visualstudio/README.md#refactorings-f2-and-the-light-bulb)).
+- A resource rename in a workspace with application sources asks first, with
+  **Rename in resource sources** or **Cancel** (the server's
+  `window/showMessageRequest`).
 
 The palette commands remain: **Rename Input**, **Rename Slot** and **Rename
 Resource in Resource Sources** move the cursor to the symbol and open the F2
