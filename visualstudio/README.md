@@ -268,7 +268,11 @@ through standard LSP, with no refactoring code in this extension (D070.1):
   sources (C#, TypeScript, Svelte), a resource rename asks first in an InfoBar,
   **Rename in resource sources** or **Cancel** (the server's
   `window/showMessageRequest`): Runic renames the resource in resource sources
-  only and does not update call sites.
+  only and does not update call sites. When the server refuses a rename (an
+  invalid name, a catalog that does not compile), Visual Studio closes the
+  rename box, and DevKit shows the server's reason in an InfoBar (with **Show
+  output**), the status bar and the **Runic Translations** Output pane
+  (runic-editors#32).
 - **The light bulb** (Ctrl+.) on a group's name offers **Extract group 'x' to
   x/en.rmf2**, which creates that file. In a feature-local resource it offers
   **Inline into ../en.rmf2 (leaves en.rmf2 empty)**, one action per ancestor
@@ -400,10 +404,6 @@ work when the settings are empty; set them before starting Visual Studio.
 - **No palette-style refactoring commands.** Rename Input, Rename Slot, Extract
   Group and Inline Resource are F2 and the light bulb only (Translations 0.14);
   VS Code also has commands for them.
-- **A refused F2 shows no message.** When the server refuses a rename (for
-  example while the catalog does not compile), Visual Studio's rename box closes
-  without an error; the reason is in the Runic Translations pane with the trace
-  on (Tools → Options → Runic DevKit).
 - **No status bar item** for the language server's state, catalog and locale.
 - **F5 debugs .NET only.** Page breakpoints need Debug the Window or Attach to
   the Page; there is no Runic launch type for both (D070.19).

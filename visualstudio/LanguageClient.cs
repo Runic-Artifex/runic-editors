@@ -46,8 +46,9 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
     // The extension shows its own start-failure InfoBar, once per solution, with install help (ServerStartInfoBar).
     public bool ShowNotificationOnInitializeFailed => false;
     // Go to Definition into a library catalog opens a read-only copy of its runic-library: source (Translations/LibraryDocuments.cs),
-    // and the file Inline Resource empties is deleted once it is saved (Translations/InlineCleanup.cs).
-    public object? MiddleLayer => middleLayer ??= new Translations.MiddleLayers(new Translations.LibraryDocuments(RequestAsync), new Translations.InlineCleanup());
+    // the file Inline Resource empties is deleted once it is saved (Translations/InlineCleanup.cs), and a rename the
+    // server refuses says why (Translations/RenameRefusals.cs).
+    public object? MiddleLayer => middleLayer ??= new Translations.MiddleLayers(new Translations.LibraryDocuments(RequestAsync), new Translations.InlineCleanup(), new Translations.RenameRefusals());
     private Translations.MiddleLayers? middleLayer;
     public object? CustomMessageTarget => null;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StartAsync;

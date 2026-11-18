@@ -192,7 +192,7 @@ async function protocol2(api, root, fs) {
   await vscode.window.showTextDocument(accountDocument, { preview: false });
   const inline = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', account, new vscode.Range(1, 0, 1, 0), 'refactor.inline');
   assert.deepEqual(inline.map(action => action.title), ['Inline into ../en.rmf2']);
-  await untilApplied(async () => {
+  await untilApplied(api, async () => {
     await vscode.window.showTextDocument(accountDocument, { preview: false });
     const inlined = await vscode.commands.executeCommand('runic.translations.inlineResource');
     assert.equal(inlined.kind, 'refactor.inline');
@@ -211,7 +211,7 @@ async function protocol2(api, root, fs) {
   assert.deepEqual(extract.map(action => action.title), ["Extract group 'account' to account/en.rmf2"]);
   // The created file is written through the workspace edit; VS Code need not open it as a document.
   const extractedText = () => vscode.workspace.textDocuments.find(item => item.uri.fsPath === account.fsPath)?.getText() ?? (fs.existsSync(account.fsPath) ? fs.readFileSync(account.fsPath, 'utf8') : '');
-  await untilApplied(async () => {
+  await untilApplied(api, async () => {
     editor = await vscode.window.showTextDocument(document, { preview: false });
     editor.selection = new vscode.Selection(group, group);
     const extracted = await vscode.commands.executeCommand('runic.translations.extractGroup');
@@ -316,15 +316,23 @@ async function retryModified(request, attempts = 20, also) {
   }
 }
 /**
- * Runs a light-bulb refactoring until its edit is applied. editor.action.codeAction applies nothing when the server
- * answers the resolve with ContentModified, which a watched-file change from the previous step's saves can cause
- * (#9); a user runs the action again, and so does this, at most three times.
+ * Runs a light-bulb refactoring and waits for its edit. The extension resolves an action the server rejects as outdated
+ * (ContentModified after a watched-file change from the previous step's saves, #9) once more by itself; if that is
+ * outdated too it warns (#32). A run that applies nothing must therefore have warned, never fail silently; only then
+ * does this run the action again, as a user would, at most three times.
  */
-async function untilApplied(run, applied, message) {
+async function untilApplied(api, run, applied, message) {
   for (let attempt = 1; ; attempt++) {
+    const warned = api.outdatedActions().length;
     await run();
     try { return await waitFor(applied, message); }
-    catch (error) { if (attempt >= 3 || applied()) throw error; console.log(`retrying the code action after: ${error.message}`); }
+    catch (error) {
+      if (applied()) throw error;
+      const warnings = api.outdatedActions().slice(warned);
+      assert.ok(warnings.length > 0, `The code action applied nothing and showed no warning: ${error.message}`);
+      if (attempt >= 3) throw error;
+      console.log(`running the code action again after its warning: ${warnings.join(' ')}`);
+    }
   }
 }
 async function waitFor(predicate, message, timeout = 10000) {

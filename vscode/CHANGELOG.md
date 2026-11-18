@@ -25,6 +25,10 @@ Translations](README.md#moving-from-runic-or-runic-mf2-translations).
   sources asks first. The palette commands open the same rename box or code
   action; with 0.13.0 they work as in 0.21. The bundled `runic.json` schema is
   unchanged.
+- A light-bulb refactoring (Inline Resource, Extract Group) that the server
+  rejects as outdated, because files changed between the code action and its
+  resolve (a save's file-watcher event), is resolved once more; if it is still
+  outdated, a warning says so instead of nothing happening (runic-editors#32).
 
 ## 0.21.0
 
