@@ -23,6 +23,11 @@ public static class DevOutput
     private static readonly Regex BeginsNoWindow = new(@"^\[dev\] Evaluating", RegexOptions.CultureInvariant);
     private static readonly Regex Ends = new(@"^\[dev\] Ready$", RegexOptions.CultureInvariant);
     private static readonly Regex Escape = new(@"\x1B\[[0-9;?]*[ -/]*[@-~]", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// The label <c>dev</c> puts before each line of a process it runs (<c>[host] </c>, <c>[app] </c>, <c>[vite] </c>;
+    /// runic-sdk <c>RunningProcess</c>). Without it, a build line's file would read <c>[host] C:\…\App.cs</c>.
+    /// </summary>
+    private static readonly Regex ProcessLabel = new(@"^\[[A-Za-z][\w-]*\] ", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// The arguments of <c>dotnet runic dev</c> for a project, as VS Code's task runs it. <paramref name="debugEndpoint"/>
@@ -43,7 +48,7 @@ public static class DevOutput
     /// </summary>
     public static RunicErrorEntry? Parse(string line, string directory, string? toolVersion = null)
     {
-        var match = Diagnostic.Match(Plain(line));
+        var match = Diagnostic.Match(ProcessLabel.Replace(Plain(line), "", 1));
         if (!match.Success) return null;
         string file = match.Groups["file"].Value.Trim();
         try { if (!Path.IsPathRooted(file)) file = Path.GetFullPath(Path.Combine(directory, file)); }
@@ -67,6 +72,11 @@ public static class DevOutput
 /// <summary>
 /// The Error List entries of one running <c>dotnet runic dev</c>: <see cref="Add"/> each output line (standard output
 /// and error); it returns true when the entries changed. Not thread-safe; the caller serializes lines.
+/// <para>
+/// <c>[dev] Ready</c> also drops the errors read before it: <c>dev</c> is ready only after a build that succeeded, so
+/// they belong to a build that the fix replaced (after a failed build <c>dotnet watch</c> waits for a change, rebuilds
+/// and starts the Window again without a new <c>Window exited</c>). Warnings stay until the next cycle.
+/// </para>
 /// </summary>
 public sealed class DevProblems
 {
@@ -92,12 +102,22 @@ public sealed class DevProblems
             entries.Clear(); seen.Clear();
             return true;
         }
+        if (DevOutput.IsReady(line))
+        {
+            int removed = entries.RemoveAll(kept => kept.Severity == RunicErrorSeverity.Error);
+            if (removed == 0) return false;
+            seen.Clear();
+            foreach (var kept in entries) seen.Add(Key(kept));
+            return true;
+        }
         if (DevOutput.Parse(line, directory, toolVersion) is not { } entry) return false;
         // MSBuild repeats a build's diagnostics in its summary; one entry each.
-        if (!seen.Add($"{entry.Severity}|{entry.File}|{entry.Line}|{entry.Column}|{entry.Text}")) return false;
+        if (!seen.Add(Key(entry))) return false;
         entries.Add(entry);
         return true;
     }
+
+    private static string Key(RunicErrorEntry entry) => $"{entry.Severity}|{entry.File}|{entry.Line}|{entry.Column}|{entry.Text}";
 }
 
 /// <summary>What the pre-F5 guard does when F5 (or Ctrl+F5) starts a Runic startup project (D070.6).</summary>

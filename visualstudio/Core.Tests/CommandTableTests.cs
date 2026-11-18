@@ -83,7 +83,8 @@ public class CommandTableTests
             Check.Equal("." + (command.CanonicalName ?? "Runic." + command.Symbol), (string?)strings.Element(Vsct + "CanonicalName"), command.Symbol);
             var flags = button.Elements(Vsct + "CommandFlag").Select(flag => flag.Value).ToList();
             Check.True(flags.Contains("DynamicVisibility"), command.Symbol + " lacks DynamicVisibility");
-            Check.Equal(command.Slice != RunicSlice.Implemented, flags.Contains("DefaultInvisible"), command.Symbol + ": a stub is DefaultInvisible");
+            // Stubs and Runic SDK commands stay hidden until the package shows them.
+            Check.Equal(command.Slice != RunicSlice.Implemented || command.SdkOnly, flags.Contains("DefaultInvisible"), command.Symbol + ": a stub or SDK command is DefaultInvisible");
         }
         Check.Equal("Tools.RunicPreviewMessage", RunicCommandCatalog.Get(RunicCommandIds.PreviewMessage).CanonicalName);
         Check.Equal("Tools.RunicRestartLanguageServer", RunicCommandCatalog.Get(RunicCommandIds.RestartLanguageServer).CanonicalName);
@@ -105,9 +106,37 @@ public class CommandTableTests
             .Where(group => (string?)group.Element(Vsct + "Parent")?.Attribute("id") == "ToolWindowToolbar").Select(group => (string)group.Attribute("id")!).ToList();
         Check.Same(new[] { "ToolbarDevGroup", "ToolbarDebugGroup", "ToolbarDoctorGroup", "ToolbarViewModelsGroup", "ToolbarTranslationsGroup", "ToolbarOutputGroup" }, toolbarGroups);
         foreach (string group in toolbarGroups) Check.True(parents.Contains(group), group + " is empty");
-        // View > Other Windows > Runic opens the tool window.
+        // A group's parent is a menu: Visual Studio never shows a group placed in a group (IDG_…), as 0.22.0.1000's
+        // View > Other Windows group was.
+        foreach (var group in Table.Descendants(Vsct + "Group"))
+            Check.True(!((string)group.Element(Vsct + "Parent")!.Attribute("id")!).StartsWith("IDG_", StringComparison.Ordinal), (string)group.Attribute("id")! + " has a group as its parent");
+        // View > Other Windows > Runic opens the tool window: the button sits in that submenu's own group.
         var placements = Table.Descendants(Vsct + "CommandPlacement").Where(placement => (string?)placement.Attribute("id") == nameof(RunicCommandIds.ShowToolWindow));
-        Check.True(placements.Any(placement => (string?)placement.Element(Vsct + "Parent")!.Attribute("id") == "OtherWindowsGroup"), "ShowToolWindow is not in View > Other Windows");
+        Check.True(placements.Any(placement => placement.Element(Vsct + "Parent") is { } parent
+            && (string?)parent.Attribute("guid") == "guidSHLMainMenu" && (string?)parent.Attribute("id") == "IDG_VS_WNDO_OTRWNDWS1"), "ShowToolWindow is not in View > Other Windows");
+        Check.True(!Buttons().Single(element => (string)element.Attribute("id")! == nameof(RunicCommandIds.ShowToolWindow)).Elements(Vsct + "CommandFlag").Any(flag => flag.Value == "DefaultInvisible"),
+            "View > Other Windows > Runic shows before the package loads");
+    }
+
+    [Test]
+    public void The_runic_sdk_commands_show_only_with_a_runic_sdk_project()
+    {
+        Check.Same(new[]
+        {
+            nameof(RunicCommandIds.StartDev), nameof(RunicCommandIds.StartDevNoWindow), nameof(RunicCommandIds.StopDev),
+            nameof(RunicCommandIds.OpenDevServer), nameof(RunicCommandIds.OpenSessionFile), nameof(RunicCommandIds.ShowSdkOutput),
+            nameof(RunicCommandIds.RunDoctor), nameof(RunicCommandIds.RefreshViewModels), nameof(RunicCommandIds.DebugWindow),
+            nameof(RunicCommandIds.AttachToPage),
+        }, RunicCommandCatalog.All.Where(command => command.SdkOnly).Select(command => command.Symbol));
+        foreach (var command in RunicCommandCatalog.All)
+        {
+            Check.True(RunicCommandCatalog.IsVisible(command.Id, scanned: true, sdkProjects: 1), command.Symbol + " with an SDK project");
+            Check.Equal(!command.SdkOnly, RunicCommandCatalog.IsVisible(command.Id, scanned: true, sdkProjects: 0), command.Symbol + " in a Translations-only solution");
+            Check.Equal(!command.SdkOnly, RunicCommandCatalog.IsVisible(command.Id, scanned: false, sdkProjects: 0), command.Symbol + " before the scan");
+        }
+        // The registrar applies the rule after each handler's own status.
+        string registrar = File.ReadAllText(Path.Combine(Extension, "Commands", "CommandRegistrar.cs"));
+        Check.True(registrar.Contains("RunicCommandCatalog.IsVisible(handler.Id"), "CommandRegistrar applies RunicCommandCatalog.IsVisible");
     }
 
     [Test]
@@ -130,6 +159,10 @@ public class CommandTableTests
     {
         Check.Same(new[] { "Dev Session", "ViewModels", "Doctor", "Translations" }, ToolWindowSections.All.Select(section => section.Title));
         Check.Same(new[] { RunicSection.Translations }, ToolWindowSections.All.Where(section => !section.SdkOnly).Select(section => section.Section));
+        // A Translations-only solution, and any solution before its projects are read, sees the Translations section alone.
+        Check.Same(new[] { RunicSection.Translations }, ToolWindowSections.All.Where(section => ToolWindowSections.IsVisible(section, scanned: true, sdkProjects: 0)).Select(section => section.Section));
+        Check.Same(new[] { RunicSection.Translations }, ToolWindowSections.All.Where(section => ToolWindowSections.IsVisible(section, scanned: false, sdkProjects: 0)).Select(section => section.Section));
+        Check.Same(Enum.GetValues<RunicSection>(), ToolWindowSections.All.Where(section => ToolWindowSections.IsVisible(section, scanned: true, sdkProjects: 2)).Select(section => section.Section));
         Check.Same(Enum.GetValues<RunicSection>(), ToolWindowSections.All.Select(section => section.Section));
         var sections = Sources().SelectMany(source => Regex.Matches(source.Text, @"public override RunicSection Section => RunicSection\.(\w+);")
             .Select(match => (Section: match.Groups[1].Value, source.File))).ToList();
