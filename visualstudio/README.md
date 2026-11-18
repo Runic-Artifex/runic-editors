@@ -274,9 +274,14 @@ through standard LSP, with no refactoring code in this extension (D070.1):
   output**), the status bar and the **Runic Translations** Output pane
   (runic-editors#32).
 - **The light bulb** (Ctrl+.) on a group's name offers **Extract group 'x' to
-  x/en.rmf2**, which creates that file. In a feature-local resource it offers
-  **Inline into ../en.rmf2 (leaves en.rmf2 empty)**, one action per ancestor
-  resource of the same locale.
+  x/en.rmf2**, which creates that file. Visual Studio does not create a new
+  file's folder (it would drop the new file and keep only the removal from the
+  source), so **DevKit creates a missing `x/` folder first**, only inside the
+  solution or the Translations project, and notes it in the **Runic
+  Translations** Output pane. If it cannot, Visual Studio applies none of the
+  edit and DevKit says why in an InfoBar and the pane. In a feature-local
+  resource it offers **Inline into ../en.rmf2 (leaves en.rmf2 empty)**, one
+  action per ancestor resource of the same locale.
 
 Visual Studio cannot delete files through LSP (its client has no `delete`
 resource operation), so Inline Resource moves the resources into the ancestor
@@ -361,7 +366,7 @@ work when the settings are empty; set them before starting Visual Studio.
 | Pseudo-locales (`pseudoLocales`) in the preview | Locale selector in the preview window | Change Preview Locale |
 | Regional locale and time zone of the preview | Fields in the preview window | Commands |
 | Rename Input, Rename Slot, Rename Resource in Resource Sources | F2 with Translations 0.14 | F2 with Translations 0.14, commands |
-| Extract Group to Directory, Inline Resource into Ancestor | Light bulb with Translations 0.14; DevKit deletes the file Inline empties once it is saved | Light bulb with Translations 0.14, commands |
+| Extract Group to Directory, Inline Resource into Ancestor | Light bulb with Translations 0.14; DevKit creates the folder Extract Group needs and deletes the file Inline empties once it is saved | Light bulb with Translations 0.14, commands |
 | Restart Language Server | Tools → Runic menu | Command |
 | Export XLIFF, Import XLIFF (dry run) | Tools → Runic menu; folder or file picker, tool output in the "Runic Translations" Output pane | Commands |
 | Import .resx or i18next Catalog | Tools → Runic menu; dry run, then import after confirmation | Command |

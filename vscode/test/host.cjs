@@ -222,7 +222,34 @@ async function protocol2(api, root, fs) {
   await vscode.workspace.saveAll(false);
   assert.ok(fs.readFileSync(account.fsPath, 'utf8').includes('heading = Your account'));
   assert.ok(!fs.readFileSync(en.fsPath, 'utf8').includes('Your account'));
-  console.log('PASS protocol 2: F2 on an input, Inline Resource and Extract Group code actions, server-applied command edits.');
+  // Extract Group into a folder that does not exist yet: the client creates profile/ with the file,
+  // and the group's messages reach it instead of being lost.
+  stage = 'protocol 2: extract group into a new folder';
+  const profile = vscode.Uri.joinPath(root, 'profile', 'en.rmf2');
+  assert.ok(!fs.existsSync(path.dirname(profile.fsPath)), 'profile/ must not exist before the extract');
+  // The server extracts only from a catalog that compiles, so de.rmf2 translates the new group too.
+  const de = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(root, 'de.rmf2'));
+  const addGroup = async (target, title) => {
+    const shown = await vscode.window.showTextDocument(target, { preview: false });
+    assert.equal(await shown.edit(builder => builder.insert(target.positionAt(target.getText().length), `\nprofile {\n  title = ${title}\n}\n`)), true);
+    await saveIfDirty(target);
+  };
+  await addGroup(de, 'Ihr Profil');
+  await addGroup(document, 'Your profile');
+  const profileGroup = document.positionAt(/^profile\b/m.exec(document.getText()).index);
+  const profileText = () => vscode.workspace.textDocuments.find(item => item.uri.fsPath === profile.fsPath)?.getText() ?? (fs.existsSync(profile.fsPath) ? fs.readFileSync(profile.fsPath, 'utf8') : '');
+  await untilApplied(api, async () => {
+    editor = await vscode.window.showTextDocument(document, { preview: false });
+    editor.selection = new vscode.Selection(profileGroup, profileGroup);
+    const extracted = await vscode.commands.executeCommand('runic.translations.extractGroup');
+    assert.equal(extracted.kind, 'refactor.extract');
+  }, () => profileText().includes('title = Your profile') && !/^profile\b/m.test(document.getText()),
+    () => `Extract Group into a new folder did not move the profile group (profile/en.rmf2: ${JSON.stringify(profileText())}): ${JSON.stringify(document.getText())}`);
+  await saveIfDirty(document);
+  await vscode.workspace.saveAll(false);
+  assert.ok(fs.readFileSync(profile.fsPath, 'utf8').includes('title = Your profile'), 'profile/en.rmf2 on disk lacks the extracted group');
+  assert.ok(!/^profile\b/m.test(fs.readFileSync(en.fsPath, 'utf8')), 'en.rmf2 on disk still has the profile group');
+  console.log('PASS protocol 2: F2 on an input, Inline Resource and Extract Group code actions (also into a new folder), server-applied command edits.');
 }
 /** Saves a document that has unsaved changes; a clean one is on disk already. */
 async function saveIfDirty(document) {
