@@ -35,6 +35,9 @@ internal sealed class TranslationsSection : RunicToolWindowSection
         public TranslationsStatusView(string name)
         {
             AutomationProperties.SetName(this, name);
+            // A container, not a Tab stop (see SdkTreeView).
+            Focusable = false;
+            IsTabStop = false;
             Margin = new Thickness(12, 2, 2, 2);
             Loaded += (_, _) =>
             {
@@ -69,10 +72,7 @@ internal sealed class TranslationsSection : RunicToolWindowSection
                 Content = panel;
                 return;
             }
-            var tree = new TreeView { BorderThickness = new Thickness(0) };
-            tree.SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
-            tree.SetResourceReference(ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
-            AutomationProperties.SetName(tree, AutomationProperties.GetName(this));
+            var tree = ThemedTree.Create(AutomationProperties.GetName(this));
             foreach (var row in rows) tree.Items.Add(Item(row));
             Content = tree;
         }
@@ -80,20 +80,7 @@ internal sealed class TranslationsSection : RunicToolWindowSection
         private TreeViewItem Item(TreeRow row)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var header = new StackPanel { Orientation = Orientation.Horizontal };
-            var moniker = Moniker(row.Icon);
-            if (moniker.Guid != Guid.Empty) header.Children.Add(new CrispImage { Moniker = moniker, Width = 16, Height = 16, Margin = new Thickness(0, 0, 4, 0) });
-            var label = new TextBlock { Text = row.Label };
-            label.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
-            header.Children.Add(label);
-            if (row.Description != null)
-            {
-                var description = new TextBlock { Text = row.Description, Margin = new Thickness(8, 0, 0, 0) };
-                description.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
-                header.Children.Add(description);
-            }
-            var item = new TreeViewItem { Header = header, IsExpanded = row.Expanded, Tag = row };
-            item.SetResourceReference(ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            var item = new TreeViewItem { Header = ThemedTree.Header(Moniker(row.Icon), row.Label, row.Description), IsExpanded = row.Expanded, Tag = row };
             AutomationProperties.SetName(item, row.ToString());
             if (row.Tooltip != null) item.ToolTip = row.Tooltip;
             foreach (var child in row.Children) item.Items.Add(Item(child));
