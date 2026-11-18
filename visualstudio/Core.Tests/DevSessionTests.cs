@@ -350,8 +350,9 @@ public class DevSessionTests
         var lines = Fixture("dev-output.txt").Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var problems = new DevProblems("/app/App.csproj", noWindow: false);
         var changes = lines.Select(problems.Add).ToList();
-        Check.Same(new[] { "CS1002", "RUNICBRIDGE1003", "RAPPDEV1007" }, problems.Entries.Select(entry => entry.Code));
-        Check.Equal(3, changes.Count(changed => changed));
+        // "[dev] Ready" follows a build that succeeded, so it drops the errors read before it and keeps the warnings.
+        Check.Same(new[] { "RUNICBRIDGE1003", "RAPPDEV1007" }, problems.Entries.Select(entry => entry.Code));
+        Check.Equal(4, changes.Count(changed => changed));
         // With the Window, "Window exited" and "Reloading" start a cycle; without it, only "Evaluating" does.
         Check.True(problems.Add("[dev] Window exited: process 41377"), "window exited clears");
         Check.Equal(0, problems.Entries.Count);
@@ -360,8 +361,42 @@ public class DevSessionTests
         var noWindow = new DevProblems("/app/App.csproj", noWindow: true);
         foreach (string line in lines) noWindow.Add(line);
         Check.True(!noWindow.Add("[dev] Window exited: process 41377"), "--no-window keeps entries");
-        Check.Equal(3, noWindow.Entries.Count);
+        Check.Equal(2, noWindow.Entries.Count);
         Check.True(noWindow.Add("[dev] Evaluating Views Window project..."), "evaluating clears");
+    }
+
+    [Test]
+    public void A_fixed_build_error_leaves_the_error_list_when_dev_is_ready_again()
+    {
+        // Row 7 of the manual checklist (0.22.0.1000): dotnet watch restarts after the fix without "Window exited".
+        var problems = new DevProblems("/app/App.csproj", noWindow: false);
+        Check.True(problems.Add("[dev] Window exited: process 3928") == false, "nothing to clear yet");
+        Check.True(problems.Add("[host] /app/WorkspaceViewModel.cs(77,26): error CS1002: ; expected [/app/App.csproj]"), "the error");
+        Check.True(!problems.Add("[host] dotnet watch ❌ Exited with error code 1"), "no entry");
+        Check.True(!problems.Add("[host] dotnet watch ⌚ Waiting for changes"), "no entry");
+        Check.True(!problems.Add("[dev] Window started: process 12516"), "no change");
+        Check.True(problems.Add("[dev] Ready"), "ready clears the error");
+        Check.Equal(0, problems.Entries.Count);
+        Check.True(!problems.Add("[dev] Ready"), "nothing left to clear");
+        // The same error again is a new entry after the clear.
+        Check.True(problems.Add("[host] /app/WorkspaceViewModel.cs(77,26): error CS1002: ; expected [/app/App.csproj]"), "again");
+        Check.Equal(1, problems.Entries.Count);
+    }
+
+    [Test]
+    public void The_label_dev_puts_before_a_process_line_is_not_part_of_the_file()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "app");
+        string source = Path.Combine(directory, "WorkspaceViewModel.cs");
+        var entry = DevOutput.Parse($"[host] {source}(77,26): error CS1002: ; expected [{Path.Combine(directory, "App.csproj")}]", directory)!;
+        Check.Equal(source, entry.File);
+        Check.Equal(76, entry.Line);
+        Check.Equal(25, entry.Column);
+        Check.Equal("CS1002: ; expected", entry.Text);
+        Check.Equal(Path.Combine(directory, "Counter.cs"), DevOutput.Parse("\u001b[2m[app]\u001b[22m Counter.cs(3,1): warning CS0168: unused", directory)!.File);
+        // Vite's errors have no MSBuild form; they stay in the Runic SDK pane (README "dev errors").
+        Check.Equal(null, DevOutput.Parse("[vite] 21:16:18 [vite] (client) Internal server error: Transform failed with 1 error:", directory));
+        Check.Equal(null, DevOutput.Parse("[vite]   File: C:/app/Frontend/src/App.tsx:7581:23", directory));
     }
 
     [Test]

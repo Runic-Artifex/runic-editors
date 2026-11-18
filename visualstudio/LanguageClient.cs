@@ -47,9 +47,18 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
     public bool ShowNotificationOnInitializeFailed => false;
     // Go to Definition into a library catalog opens a read-only copy of its runic-library: source (Translations/LibraryDocuments.cs),
     // the file Inline Resource empties is deleted once it is saved (Translations/InlineCleanup.cs), and a rename the
-    // server refuses says why (Translations/RenameRefusals.cs).
-    public object? MiddleLayer => middleLayer ??= new Translations.MiddleLayers(new Translations.LibraryDocuments(RequestAsync), new Translations.InlineCleanup(), new Translations.RenameRefusals());
+    // server refuses says why (Translations/RenameRefusals.cs), and a refactoring that creates a file in a missing folder
+    // gets the folder first (Translations/NewFolders.cs; last, so the other layers see the edit it lets through).
+    public object? MiddleLayer => middleLayer ??= CreateMiddleLayer();
     private Translations.MiddleLayers? middleLayer;
+    private Translations.MiddleLayers CreateMiddleLayer()
+    {
+        var refusals = new Translations.RefusalReport();
+        return new Translations.MiddleLayers(new Translations.LibraryDocuments(RequestAsync), new Translations.InlineCleanup(),
+            new Translations.RenameRefusals(refusals), new Translations.NewFolders(() => solutionFolder, refusals));
+    }
+    // The open solution's folder at the server's start, a root inside which NewFolders may create folders.
+    private volatile string? solutionFolder;
     public object? CustomMessageTarget => null;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StartAsync;
     public event Microsoft.VisualStudio.Threading.AsyncEventHandler<EventArgs>? StopAsync;
@@ -68,6 +77,7 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
         var dte = (EnvDTE.DTE)ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE));
         string? solution = dte?.Solution?.FullName;
         string? solutionDirectory = string.IsNullOrEmpty(solution) ? null : Path.GetDirectoryName(solution);
+        solutionFolder = solutionDirectory;
         string? file = dte?.ActiveDocument?.FullName;
         if (string.IsNullOrEmpty(file)) file = solution;
         solutionKey = solution ?? file ?? "";

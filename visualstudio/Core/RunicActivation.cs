@@ -39,6 +39,14 @@ public static class RunicActivation
     public const string ProbePackage = "c8f4a2e6-3b71-4d95-8e0c-9a1b5d7f2c63";
 
     public const string SdkCapability = "RunicApplication";
+
+    /// <summary>
+    /// Whether the Runic SDK commands (Tools → Runic, the tool window's toolbar, the Error List's Run Doctor) and the
+    /// Dev Session, ViewModels and Doctor sections show: once the solution's projects have been read and one of them is a
+    /// Runic SDK project. Until then, and in a solution with only Runic Translations, they stay hidden, and the
+    /// Translations commands and section show alone (README "Where to find it").
+    /// </summary>
+    public static bool ShowsSdkFeatures(bool scanned, int sdkProjects) => scanned && sdkProjects > 0;
     public const string MessageContentType = "rmf2";
 }
 
