@@ -190,8 +190,10 @@ async function protocol2(api, root, fs) {
   const account = vscode.Uri.joinPath(root, 'account', 'en.rmf2');
   const accountDocument = await vscode.workspace.openTextDocument(account);
   await vscode.window.showTextDocument(accountDocument, { preview: false });
-  const inline = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', account, new vscode.Range(1, 0, 1, 0), 'refactor.inline');
+  stage = 'protocol 2: inline resource code action (listing)';
+  const inline = await untilCodeActions(account, new vscode.Range(1, 0, 1, 0), 'refactor.inline', 'Inline into ../en.rmf2');
   assert.deepEqual(inline.map(action => action.title), ['Inline into ../en.rmf2']);
+  stage = 'protocol 2: inline resource code action (apply)';
   await untilApplied(api, async () => {
     await vscode.window.showTextDocument(accountDocument, { preview: false });
     const inlined = await vscode.commands.executeCommand('runic.translations.inlineResource');
@@ -207,8 +209,10 @@ async function protocol2(api, root, fs) {
   editor = await vscode.window.showTextDocument(document, { preview: false });
   const group = document.positionAt(/^account\b/m.exec(document.getText()).index);
   editor.selection = new vscode.Selection(group, group);
-  const extract = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', en, new vscode.Range(group, group.translate(0, 7)), 'refactor.extract');
+  stage = 'protocol 2: extract group code action (listing)';
+  const extract = await untilCodeActions(en, new vscode.Range(group, group.translate(0, 7)), 'refactor.extract', "Extract group 'account' to account/en.rmf2");
   assert.deepEqual(extract.map(action => action.title), ["Extract group 'account' to account/en.rmf2"]);
+  stage = 'protocol 2: extract group code action (apply)';
   // The created file is written through the workspace edit; VS Code need not open it as a document.
   const extractedText = () => vscode.workspace.textDocuments.find(item => item.uri.fsPath === account.fsPath)?.getText() ?? (fs.existsSync(account.fsPath) ? fs.readFileSync(account.fsPath, 'utf8') : '');
   await untilApplied(api, async () => {
@@ -326,6 +330,23 @@ async function retryModified(request, attempts = 20, also) {
       console.log(`retrying after: ${message}`);
       await new Promise(resolve => setTimeout(resolve, 250));
     }
+  }
+}
+/**
+ * The code actions of a range once they include `title`, or the last ones at the deadline, which the caller's assertion
+ * then reports. Right after the previous step's saves the server can still be reading the changed files and list none
+ * yet (#39).
+ */
+async function untilCodeActions(uri, range, kind, title, timeout = 20000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    // A request the server leaves unanswered counts as an empty answer, so a stuck request reaches the assertion too.
+    const request = retryModified(() => vscode.commands.executeCommand('vscode.executeCodeActionProvider', uri, range, kind));
+    let timer;
+    const actions = await Promise.race([request, new Promise(resolve => { timer = setTimeout(() => resolve(undefined), 5000); })]).finally(() => clearTimeout(timer)) ?? [];
+    if (actions.some(action => action.title === title) || Date.now() >= deadline) return actions;
+    console.log(`${kind}: no '${title}' yet (${JSON.stringify(actions.map(action => action.title))}); asking again`);
+    await new Promise(resolve => setTimeout(resolve, 250));
   }
 }
 /**
