@@ -605,3 +605,58 @@ test("dev has ended when its process exits, even while a child it left behind ho
     child.stdout!.destroy(); child.stderr!.destroy();
   }
 }, 20000);
+
+test("the forced stop signals dev's process group off Windows, and the process alone when it leads none", () => {
+  const calls: [number, string][] = [];
+  const kill = (pid: number, signal: NodeJS.Signals) => { calls.push([pid, signal]); };
+  forceStop({ pid: 4242 } as never, 1, "linux", kill, 60_000);
+  forceStop({ pid: 4242 } as never, 2, "darwin", kill);
+  expect(calls).toEqual([[-4242, "SIGINT"], [-4242, "SIGKILL"]]);
+  const fallback: [number, string][] = [];
+  forceStop({ pid: 77 } as never, 2, "linux", (pid, signal) => { fallback.push([pid, signal]); if (pid < 0) throw new Error("ESRCH"); });
+  expect(fallback).toEqual([[-77, "SIGKILL"], [77, "SIGKILL"]]);
+});
+
+/** A `dotnet` launcher stand-in that runs `dev` as its child and forwards no signal; `dev` prints its PID. */
+function launcherWithDev(devScript: string) {
+  const child = spawnDev("/bin/sh", ["-c", `sh -c '${devScript}'; echo launcher-done`], tmpdir(), true);
+  let output = "";
+  child.stdout!.setEncoding("utf8"); child.stdout!.on("data", (text: string) => { output += text; });
+  const devPid = async () => {
+    while (!/dev=(\d+)/.test(output)) await new Promise(resolveWait => setTimeout(resolveWait, 50));
+    return Number(/dev=(\d+)/.exec(output)![1]);
+  };
+  return { child, devPid };
+}
+
+const isAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+async function gone(pid: number, within: number): Promise<boolean> {
+  const deadline = Date.now() + within;
+  while (Date.now() < deadline) { if (!isAlive(pid)) return true; await new Promise(resolveWait => setTimeout(resolveWait, 50)); }
+  return !isAlive(pid);
+}
+
+test("editors#53: the forced stop reaches dev behind the launcher; signalling the launcher alone left dev running", async () => {
+  if (process.platform === "win32") return;
+  // dev ignores its input (an older dev, or a hung one) and stops on SIGINT, as dotnet runic dev does on Ctrl+C.
+  const devScript = `trap "exit 130" INT; echo dev=$$; while :; do sleep 0.2; done`;
+  const before = launcherWithDev(devScript);
+  const oldDev = await before.devPid();
+  const launcherOnly = (child: { pid?: number }, attempt: 1 | 2) => { try { process.kill(child.pid!, attempt === 1 ? "SIGINT" : "SIGKILL"); } catch { /* gone */ } };
+  expect(await stopDevProcess(before.child, { stopOnInput: true, inputTimeout: 300, forceTimeout: 1500, force: launcherOnly })).toBe("forced");
+  expect(await gone(oldDev, 1000)).toBe(false); // the bug: dev outlives its launcher
+  process.kill(oldDev, "SIGKILL");
+
+  const now = launcherWithDev(devScript);
+  const dev = await now.devPid();
+  expect(await stopDevProcess(now.child, { stopOnInput: true, inputTimeout: 300, forceTimeout: 3000, force: (child, attempt) => forceStop(child, attempt, process.platform, undefined, 60_000) })).toBe("forced");
+  expect(await gone(dev, 3000)).toBe(true);
+}, 30000);
+
+test("editors#53: a dev that ignores SIGINT too is killed with its process group", async () => {
+  if (process.platform === "win32") return;
+  const { child, devPid } = launcherWithDev(`trap "" INT; echo dev=$$; while :; do sleep 0.2; done`);
+  const dev = await devPid();
+  expect(await stopDevProcess(child, { stopOnInput: true, inputTimeout: 300, forceTimeout: 1000, force: (target, attempt) => forceStop(target, attempt, process.platform, undefined, 1500) })).toBe("forced");
+  expect(await gone(dev, 4000)).toBe(true);
+}, 30000);

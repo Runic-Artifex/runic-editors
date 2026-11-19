@@ -144,7 +144,11 @@ in a terminal of its own. **Stop dotnet runic dev**, Ctrl+C in that terminal and
 closing it write `stop` to `dev`'s standard input and close it, so `dev` stops
 as on Ctrl+C on every platform, also on Windows: the session file says
 `"stopped"` and the development pages leave `www/`. Only when `dev` has not
-exited within 10 seconds is it ended by force. With an older tool, and for the
+exited within 10 seconds is it ended by force: on Windows its process tree; on
+Linux and macOS SIGINT, then SIGKILL, to the process group that holds the
+`dotnet` launcher, `dev` and the processes `dev` started, as Ctrl+C in a
+terminal does. The launcher forwards neither signal, so signalling it alone
+left `dev` running (runic-editors#53). With an older tool, and for the
 template's own `runic: dev` tasks, the task runs and stops as before.
 
 ### F5: debug the Window
