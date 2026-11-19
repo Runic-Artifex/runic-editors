@@ -178,9 +178,13 @@ the .NET code and the page in one session:
      keeps it).
    - **CS-WebUI**: the port `dev --no-window` names in the session
      (`RUNIC_WEBUI_REMOTE_DEBUGGING_PORT`, 9225, since runic-sdk 0.22).
-4. Once `http://127.0.0.1:<port>/json/version` answers and the page is listed,
-   it attaches Visual Studio's JavaScript debugger over the "JavaScript and
-   TypeScript (Chrome DevTools/V8 Inspector)" transport.
+4. Once `http://127.0.0.1:<port>/json/version` answers and the page is listed
+   on the "JavaScript and TypeScript (Chrome DevTools/V8 Inspector)" transport,
+   it attaches Visual Studio's JavaScript debugger (js-debug) to the page with
+   an attach configuration for that endpoint. Visual Studio starts that attach
+   without holding its main thread until it finishes, so Visual Studio stays
+   usable and can close even when the attach does not complete
+   (runic-editors#44).
 
 Breakpoints in C# and in `Frontend/src` then stop in the same session. The
 status bar shows each step.
@@ -230,12 +234,19 @@ in runic-sdk.
 
 - **The JavaScript debugger does not attach** ("Value cannot be null. Parameter
   name: source", or the attach never finishes). Visual Studio's own JavaScript
-  debug adapter can fail with a damaged `.vs` folder, for example after Visual
-  Studio was ended by force. Close Visual Studio, delete the solution's `.vs`
-  folder and open the solution again. DevKit stops waiting for an attach after
-  60 seconds, says so in the **Runic SDK** Output pane and enables **Debug the
-  Window** again; closing and reopening the solution also ends a run that is
-  still waiting (runic-editors#23).
+  debug adapter (`node.exe` running `vsDebugServer.js`) can fail with a damaged
+  `.vs` folder, for example after Visual Studio was ended by force. Close Visual
+  Studio, end any such `node.exe` that is left over, delete the solution's `.vs`
+  folder and open the solution again. When an attach has not finished after 60
+  seconds, or Visual Studio starts to close during one, DevKit ends the adapter
+  that attach started, says so in the **Runic SDK** Output pane and enables
+  **Debug the Window** again; closing and reopening the solution also ends a
+  run that is still waiting (runic-editors#23, #44). Before each attach, DevKit
+  ends the JavaScript debug adapters that a Visual Studio which has exited left
+  running, if they are yours and from this Visual Studio installation; it lists
+  others in the Output pane for you to end in Task Manager. Once Visual Studio
+  is closing, DevKit reports its errors in the Output pane only, never in a
+  message box that would keep Visual Studio open.
 - **Breakpoints in `.tsx` files stay hollow.** Update
   `@runic-artifex/vite-plugin-runic` to 0.22 or later, or check that the Window
   loads the page from the development server and not the production build
@@ -449,6 +460,11 @@ work when the settings are empty; set them before starting Visual Studio.
 - **No status bar item** for the language server's state, catalog and locale.
 - **F5 debugs .NET only.** Page breakpoints need Debug the Window or Attach to
   the Page; there is no Runic launch type for both (D070.19).
+- **A JavaScript debug adapter that stops answering while it starts** makes
+  Visual Studio itself stop responding (its own code waits for the adapter on
+  the main thread). DevKit ends that adapter after 60 seconds; Visual Studio
+  then shows its own error about the attach and responds again, and a close
+  you asked for meanwhile finishes (runic-editors#44).
 - **Debug → Break All while the page runs** stops the .NET Window, and WebView2
   with it, so the page's part of the break fails: Visual Studio may say "The
   script document cannot be opened". Continue, or stop debugging, to go on.

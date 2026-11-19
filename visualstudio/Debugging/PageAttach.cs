@@ -18,7 +18,8 @@ namespace RunicArtifex.DevKit.VisualStudio.Debugging;
 
 /// <summary>
 /// The CDP attach of SPIKE-VS-0 §3: <c>Debugger2.GetProcesses</c> on the "JavaScript and TypeScript (Chrome DevTools/V8
-/// Inspector)" transport with the endpoint as qualifier, then <c>Process2.Attach2</c> with its JavaScript engine. Also
+/// Inspector)" transport with the endpoint as qualifier, then a js-debug attach configuration for each page
+/// (<see cref="JsDebugAttach"/>, runic-editors#44; <c>Process2.Attach2</c> only as the fallback). Also
 /// remembers the endpoints of the Windows Debug the Window started, which the session file does not list.
 /// </summary>
 internal static class PageAttach
@@ -26,15 +27,15 @@ internal static class PageAttach
     /// <summary>How long a Window may take to open its endpoint and page. A paused .NET breakpoint extends it (see <see cref="WaitForPageAsync"/>).</summary>
     public static readonly TimeSpan PageTimeout = TimeSpan.FromMinutes(3);
     /// <summary>
-    /// How long one <c>Process2.Attach2</c> may take. A broken JavaScript adapter (a stale <c>.vs</c> folder) makes it
-    /// never return (runic-editors#23); DevKit then stops waiting and says so in the Runic SDK Output pane.
+    /// How long one page attach may take. A broken JavaScript adapter (a stale <c>.vs</c> folder) can keep it from ever
+    /// completing (runic-editors#23); DevKit then ends the adapter and says so in the Runic SDK Output pane (#44).
     /// </summary>
     public static readonly TimeSpan AttachTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>The Output pane's advice when Visual Studio's JavaScript debugger does not attach.</summary>
-    public static string HungAttachMessage(string page) =>
-        $"Visual Studio's JavaScript debugger did not finish attaching to {page} within {AttachTimeout.TotalSeconds:0} seconds; Runic DevKit stopped waiting, and Debug the Window can run again. "
-        + "If it happens again, close Visual Studio, delete the solution's .vs folder and reopen the solution (see Troubleshooting in the Runic DevKit README).";
+    public static string HungAttachMessage(string what) =>
+        $"Visual Studio's JavaScript debugger did not answer within {AttachTimeout.TotalSeconds:0} seconds while {what}; Runic DevKit stopped waiting and ends the JavaScript debug adapter that Visual Studio started for it, and Debug the Window can run again. "
+        + "If it happens again, close Visual Studio, end any node.exe running vsDebugServer.js that is left over, delete the solution's .vs folder and reopen the solution (see Troubleshooting in the Runic DevKit README).";
 
     private const int CallRejected = unchecked((int)0x80010001);
 
@@ -167,10 +168,18 @@ internal static class PageAttach
     /// One attempt: lists the endpoint's targets on the CDP transport and attaches to the pages; empty when none is listed
     /// yet. <paramref name="report"/> receives what each qualifier listed, for the Output pane.
     /// </summary>
-    /// <paramref name="attachHung"/> runs on the thread pool when an <c>Attach2</c> has not returned within
-    /// <see cref="AttachTimeout"/> (after the Output pane says so); the call itself cannot be cancelled.
+    /// <remarks>
+    /// <c>Debugger2.GetProcesses</c> (which starts Visual Studio's JavaScript debug adapter) and <c>Process2.Attach2</c>
+    /// block Visual Studio's UI thread until the adapter answers, and cannot be cancelled. When one has not returned within
+    /// <see cref="AttachTimeout"/>, or Visual Studio starts closing meanwhile, DevKit ends this Visual Studio's adapter so it
+    /// returns (<see cref="HungAttach"/>, runic-editors#23 and #44); <paramref name="attachHung"/> then runs on the thread
+    /// pool, after the Output pane says so.
+    /// </remarks>
     public static async Task<IReadOnlyList<string>> TryAttachAsync(string url, CancellationToken cancellationToken, Action<string>? report = null, Action? attachHung = null)
     {
+        // Adapters that an exited Visual Studio left running (runic-editors#44).
+        await TaskScheduler.Default;
+        JsAdapterProcesses.EndOrphansOnce("JavaScript debugger");
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is not EnvDTE80.DTE2 dte) throw new InvalidOperationException("Visual Studio automation (DTE) is unavailable.");
         var debugger = (EnvDTE80.Debugger2)dte.Debugger;
@@ -184,7 +193,7 @@ internal static class PageAttach
         foreach (string qualifier in CdpEndpoints.Qualifiers(url))
         {
             EnvDTE.Processes processes;
-            try { processes = await RetryAsync(() => { ThreadHelper.ThrowIfNotOnUIThread(); return debugger.GetProcesses(transport, qualifier); }, cancellationToken); }
+            try { processes = await GuardedAsync($"listing the targets of {qualifier}", () => { ThreadHelper.ThrowIfNotOnUIThread(); return debugger.GetProcesses(transport, qualifier); }, attachHung, cancellationToken); }
             catch (Exception error) when (error is COMException or ArgumentException) { listings.Add($"{qualifier}: {error.Message}"); continue; }
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             var all = processes.OfType<EnvDTE80.Process2>().ToList();
@@ -197,11 +206,7 @@ internal static class PageAttach
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
                 string name = page.Name;
                 SdkOutput.WriteLine($"Attaching the JavaScript debugger to {name} ({qualifier}).");
-                using (var watchdog = Watchdog.Start(AttachTimeout, () => { SdkOutput.WriteLine(HungAttachMessage(name)); attachHung?.Invoke(); }))
-                {
-                    await RetryAsync(() => { ThreadHelper.ThrowIfNotOnUIThread(); page.Attach2(DebugEngines.JavaScriptOverCdp); return true; }, cancellationToken);
-                    if (watchdog.Expired) SdkOutput.WriteLine($"The JavaScript debugger's attach to {name} returned after Runic DevKit stopped waiting.");
-                }
+                await AttachPageAsync(dte, page, name, qualifier, attachHung, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 attached.Add(name);
             }
@@ -209,6 +214,99 @@ internal static class PageAttach
         }
         report?.Invoke(string.Join("; ", listings));
         return attached;
+    }
+
+    /// <summary>
+    /// Attaches the JavaScript debugger to the page with a js-debug attach configuration (<see cref="JsDebugAttach"/>),
+    /// which <c>IVsDebugger4.LaunchDebugTargets4</c> starts without waiting for it, then waits off the UI thread until the
+    /// debugger lists the page. When the attach has not completed within <see cref="AttachTimeout"/>, or Visual Studio
+    /// starts closing meanwhile, DevKit ends the adapter it started (<see cref="HungAttach"/>). When Visual Studio refuses
+    /// that launch, it falls back to <c>Process2.Attach2</c>, which waits in a nested message loop.
+    /// </summary>
+    private static async Task AttachPageAsync(EnvDTE80.DTE2 dte, EnvDTE80.Process2 page, string name, string qualifier, Action? attachHung, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        if (await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(SVsShellDebugger)) is not IVsDebugger4 debugger)
+        {
+            await GuardedAsync($"attaching to {name}", () => { ThreadHelper.ThrowIfNotOnUIThread(); page.Attach2(DebugEngines.JavaScriptOverCdp); return true; }, attachHung, cancellationToken);
+            return;
+        }
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        int before = DebuggedCount(dte);
+        string what = $"attaching to {name}";
+        using (HungAttach.Begin(what, JsAdapterProcesses.NodeIdsNow()))
+        using (var watchdog = Watchdog.Start(AttachTimeout, () =>
+        {
+            // Recovery first: writing to the Output pane marshals to the UI thread, which a stuck adapter can block.
+            HungAttach.Recover($"No answer within {AttachTimeout.TotalSeconds:0} seconds");
+            attachHung?.Invoke();
+            SdkOutput.WriteLine(HungAttachMessage(what));
+        }))
+        {
+            var target = new VsDebugTargetInfo4
+            {
+                dlo = (uint)DEBUG_LAUNCH_OPERATION.DLO_CreateProcess,
+                bstrExe = name,
+                bstrCurDir = Path.GetTempPath(),
+                bstrOptions = JsDebugAttach.Options(qualifier, name),
+                guidLaunchDebugEngine = new Guid(DebugEngines.JavaScript),
+                fSendToOutputWindow = true,
+            };
+            try { await RetryAsync(() => { ThreadHelper.ThrowIfNotOnUIThread(); debugger.LaunchDebugTargets4(1, new[] { target }, new VsDebugTargetProcessInfo[1]); return true; }, cancellationToken); }
+            catch (Exception error) when (error is COMException or ArgumentException or NotImplementedException)
+            {
+                SdkOutput.WriteLine($"Visual Studio did not start the js-debug attach to {name} ({error.Message}); attaching through the debugger transport instead.");
+                watchdog.Dispose();
+                await GuardedAsync(what, () => { ThreadHelper.ThrowIfNotOnUIThread(); page.Attach2(DebugEngines.JavaScriptOverCdp); return true; }, attachHung, cancellationToken);
+                return;
+            }
+            // The debugger lists the page's program once js-debug has attached.
+            while (true)
+            {
+                await Task.Delay(250, cancellationToken);
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+                if (DebuggedCount(dte) > before) return;
+                if (watchdog.Expired || VsClosing.IsClosing)
+                    throw new HungAttachEndedException($"Visual Studio's JavaScript debugger did not attach to {name}; Runic DevKit ended its adapter. The .NET debugger stays attached; use Attach to the Page to try again.", new TimeoutException());
+            }
+        }
+    }
+
+    private static int DebuggedCount(EnvDTE80.DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try { return dte.Debugger.DebuggedProcesses.Count; }
+        catch (COMException) { return 0; }
+    }
+
+    /// <summary>
+    /// Runs a debugger call that can block the UI thread forever (<see cref="TryAttachAsync"/>) under the watchdog: after
+    /// <see cref="AttachTimeout"/>, or when Visual Studio starts closing, this Visual Studio's adapter is ended. A failure
+    /// after that is a <see cref="HungAttachEndedException"/>, which callers report in the Output pane only.
+    /// </summary>
+    private static async Task<T> GuardedAsync<T>(string what, Func<T> call, Action? attachHung, CancellationToken cancellationToken)
+    {
+        var before = JsAdapterProcesses.NodeIdsNow();
+        using (HungAttach.Begin(what, before))
+        using (var watchdog = Watchdog.Start(AttachTimeout, () =>
+        {
+            // Recovery first: writing to the Output pane marshals to the UI thread, which the hung call may block.
+            HungAttach.Recover($"No answer within {AttachTimeout.TotalSeconds:0} seconds");
+            attachHung?.Invoke();
+            SdkOutput.WriteLine(HungAttachMessage(what));
+        }))
+        {
+            try
+            {
+                var result = await RetryAsync(call, cancellationToken);
+                if (watchdog.Expired) SdkOutput.WriteLine($"Visual Studio's JavaScript debugger returned from {what} after Runic DevKit stopped waiting.");
+                return result;
+            }
+            catch (Exception error) when ((watchdog.Expired || VsClosing.IsClosing) && error is COMException or ArgumentException or InvalidOperationException)
+            {
+                throw new HungAttachEndedException($"Visual Studio's JavaScript debugger failed {what} after Runic DevKit ended its adapter ({error.Message}). The .NET debugger stays attached; use Attach to the Page to try again.", error);
+            }
+        }
     }
 
     /// <summary>The debugger rejects calls while it is busy (<c>RPC_E_CALL_REJECTED</c>); try again for a few seconds.</summary>

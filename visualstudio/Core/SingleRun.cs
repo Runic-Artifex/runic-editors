@@ -90,7 +90,7 @@ public sealed class SingleRun
 
 /// <summary>
 /// Calls <paramref name="expired"/> once on the thread pool when a call has not finished within a time, for a call
-/// that cannot be cancelled (<c>Process2.Attach2</c>, which can block forever, runic-editors#23). Dispose it when the
+/// that cannot be cancelled (a page attach that never completes, runic-editors#23 and #44). Dispose it when the
 /// call returns.
 /// </summary>
 public sealed class Watchdog : IDisposable

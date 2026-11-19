@@ -189,3 +189,29 @@ public class WindowDebugTests
         throw new InvalidOperationException("expected an exception");
     }
 }
+
+/// <summary>runic-editors#44: the page attach is a js-debug attach configuration, started without Attach2's nested wait.</summary>
+public class JsDebugAttachTests
+{
+    [Test]
+    public void The_options_attach_js_debug_to_the_page_of_the_endpoint()
+    {
+        string options = JsDebugAttach.Options("http://127.0.0.1:59449/", "http://127.0.0.1:59451/surface-87e3/index.html");
+        var parsed = Json.Object(Json.Parse(options));
+        Check.Equal("pwa-chrome", Json.String(parsed, "type"));
+        Check.Equal("attach", Json.String(parsed, "request"));
+        Check.Equal("127.0.0.1", Json.String(parsed, "address"));
+        Check.Equal<double?>(59449, Json.Number(parsed, "port"));
+        Check.Equal("http://127.0.0.1:59451/surface-87e3/index.html", Json.String(parsed, "url"));
+        Check.Equal<bool?>(true, Json.Boolean(parsed, "sourceMaps"));
+        Check.Equal<object?>(null, Json.Get(parsed, "webRoot"), "no webRoot, as the transport attach");
+    }
+
+    [Test]
+    public void Page_urls_are_escaped()
+    {
+        string options = JsDebugAttach.Options("http://localhost:9222/", "http://localhost:5173/a\"b\\c\u0001");
+        Check.Equal("http://localhost:5173/a\"b\\c\u0001", Json.String(Json.Object(Json.Parse(options)), "url"));
+        Check.Equal("localhost", Json.String(Json.Object(Json.Parse(options)), "address"));
+    }
+}

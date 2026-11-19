@@ -71,11 +71,12 @@ internal static class CommandRegistrar
         {
             try { await handler.ExecuteAsync(package, package.DisposalToken); }
             catch (OperationCanceledException) { }
+            catch (Debugging.HungAttachEndedException error) { SdkOutput.WriteLine(error.Message); }
             catch (Exception error)
             {
+                SdkOutput.WriteLine($"{RunicPackage.Title}: {error.GetType().Name}: {error.Message}");
                 await package.JoinableTaskFactory.SwitchToMainThreadAsync();
-                VsShellUtilities.ShowMessageBox(package, error.Message, RunicPackage.Title,
-                    OLEMSGICON.OLEMSGICON_CRITICAL, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                VsClosing.ShowMessage(package, error.Message, OLEMSGICON.OLEMSGICON_CRITICAL);
             }
         });
     }

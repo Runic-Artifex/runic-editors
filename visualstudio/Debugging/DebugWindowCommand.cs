@@ -137,9 +137,9 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         {
             // The .NET debugger keeps running; only the page part failed.
             SdkOutput.WriteLine("Debug the Window: " + error.Message);
+            if (error is HungAttachEndedException) return;
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider, error.Message, RunicPackage.Title,
-                OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+            VsClosing.ShowMessage(ServiceProvider.GlobalProvider, error.Message, OLEMSGICON.OLEMSGICON_WARNING);
         }
     }
 

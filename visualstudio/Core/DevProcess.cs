@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace RunicArtifex.DevKit.VisualStudio.Core;
@@ -136,14 +137,17 @@ public sealed class DevProcess : IDisposable
     /// With <see cref="StopOnInput"/>, writes <c>stop</c> and closes the input, then waits up to
     /// <paramref name="inputTimeout"/>; else, or after that, ends it by force as before and waits up to <paramref name="timeout"/>.
     /// The request is written before the first await, so a caller that cannot wait (Visual Studio closing) still sends it.
+    /// Cancelling <paramref name="cancellationToken"/> (Visual Studio closing, runic-editors#44) stops the waiting: it throws
+    /// <see cref="OperationCanceledException"/> before the next step, and the stop already requested goes on without it.
     /// </summary>
-    public async Task<DevStop> StopAsync(TimeSpan inputTimeout, TimeSpan timeout)
+    public async Task<DevStop> StopAsync(TimeSpan inputTimeout, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         if (HasExited) return DevStop.AlreadyExited;
         stopRequested = true;
         if (StopOnInput && RequestStop())
         {
-            if (await Task.WhenAny(Exited, Task.Delay(inputTimeout)).ConfigureAwait(false) == Exited) return DevStop.Input;
+            if (await Task.WhenAny(Exited, Task.Delay(inputTimeout, cancellationToken)).ConfigureAwait(false) == Exited) return DevStop.Input;
+            cancellationToken.ThrowIfCancellationRequested();
         }
         if (HasExited) return StopOnInput ? DevStop.Input : DevStop.AlreadyExited;
         try
@@ -158,7 +162,8 @@ public sealed class DevProcess : IDisposable
             else Run("kill", $"-INT {ProcessId}");
         }
         catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
-        if (await Task.WhenAny(Exited, Task.Delay(timeout)).ConfigureAwait(false) == Exited) return DevStop.Forced;
+        if (await Task.WhenAny(Exited, Task.Delay(timeout, cancellationToken)).ConfigureAwait(false) == Exited) return DevStop.Forced;
+        cancellationToken.ThrowIfCancellationRequested();
         tree?.EndAll();
         try { process.Kill(); } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
         await Task.WhenAny(Exited, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
