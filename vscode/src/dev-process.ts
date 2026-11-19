@@ -62,7 +62,7 @@ export interface StopOptions {
   stopOnInput: boolean;
   inputTimeout?: number;
   forceTimeout?: number;
-  /** The forced stop: on Windows the process tree, elsewhere SIGINT as Ctrl+C; a second call (after `forceTimeout`) is a kill. */
+  /** The forced stop: on Windows the process tree, elsewhere SIGINT to `dev`'s process group as Ctrl+C; a second call (after `forceTimeout`) is a kill. */
   force(child: StoppableProcess, attempt: 1 | 2): void;
 }
 
@@ -105,18 +105,41 @@ function requestStop(child: StoppableProcess): boolean {
   } catch { return false; }
 }
 
-/** The forced stop of today: `taskkill /T /F` on Windows (no console to send Ctrl+C to), SIGINT and then SIGKILL elsewhere. */
-export function forceStop(child: StoppableProcess, attempt: 1 | 2, platform: NodeJS.Platform = process.platform): void {
-  if (!child.pid) return;
-  if (platform === "win32") { execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => { /* gone already */ }); return; }
-  try { process.kill(child.pid, attempt === 1 ? "SIGINT" : "SIGKILL"); } catch { /* gone already */ }
+/** How long after the SIGINT of a forced stop {@link forceStop} kills what is left of `dev`'s process group. */
+export const groupKillDelay = 10_000;
+
+type Kill = (pid: number, signal: NodeJS.Signals) => void;
+
+/**
+ * The forced stop: `taskkill /T /F` on Windows (no console to send Ctrl+C to); elsewhere SIGINT and then SIGKILL to the
+ * process group that {@link spawnDev} starts the launcher in, as Ctrl+C in a terminal does (runic-editors#53).
+ * `dotnet runic dev` runs as a child of the `dotnet` launcher of the local tool, which forwards neither SIGINT nor, after
+ * a SIGKILL of its own, anything: signalling the launcher alone left `dev`, its frontend server and its Window running.
+ * The group holds `dev` and the processes it starts. After the SIGINT, whatever of the group is left after
+ * {@link groupKillDelay} is killed, also when the launcher itself has exited by then.
+ */
+export function forceStop(child: StoppableProcess, attempt: 1 | 2, platform: NodeJS.Platform = process.platform, kill: Kill = (pid, signal) => { process.kill(pid, signal); }, killDelay = groupKillDelay): void {
+  const pid = child.pid;
+  if (!pid) return;
+  if (platform === "win32") { execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => { /* gone already */ }); return; }
+  signalGroup(pid, attempt === 1 ? "SIGINT" : "SIGKILL", kill);
+  if (attempt === 1) setTimeout(() => signalGroup(pid, "SIGKILL", kill), killDelay).unref();
 }
 
-/** Starts `dev` with a piped standard input and, with `stopOnInput`, the variable set; without it the variable is removed. */
+/** Signals the process group `pid` leads; the process alone when it leads none (a `dev` not started by {@link spawnDev}). */
+function signalGroup(pid: number, signal: NodeJS.Signals, kill: Kill): void {
+  try { kill(-pid, signal); }
+  catch { try { kill(pid, signal); } catch { /* gone already */ } }
+}
+
+/**
+ * Starts `dev` with a piped standard input and, with `stopOnInput`, the variable set; without it the variable is removed.
+ * Off Windows the launcher leads a new process group, so {@link forceStop} reaches `dev` and its children.
+ */
 export function spawnDev(dotnet: string, args: string[], cwd: string, stopOnInput: boolean, env: NodeJS.ProcessEnv = process.env): ChildProcess {
   const childEnv: NodeJS.ProcessEnv = { ...env, DOTNET_NOLOGO: "1" };
   if (stopOnInput) childEnv[stopOnInputVariable] = "1"; else delete childEnv[stopOnInputVariable];
-  return spawn(dotnet, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  return spawn(dotnet, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32" });
 }
 
 /** How long the output's last lines are read after `dev` exits; processes it left behind can keep its pipes open. */

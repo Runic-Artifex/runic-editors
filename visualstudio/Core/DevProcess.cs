@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -16,7 +17,8 @@ namespace RunicArtifex.DevKit.VisualStudio.Core;
 /// <see cref="StopOnInput"/> (<c>dotnet-runic</c> 0.22, WIN-06) it first writes <c>stop</c> to <c>dev</c>'s standard input
 /// and closes it, so <c>dev</c> runs its own stop (the session file says <c>"stopped"</c>, the frontend marker and the
 /// development pages go). When that is off or <c>dev</c> has not exited in time: on Windows it ends the process tree
-/// (no console to send Ctrl+C to), elsewhere it sends SIGINT, as Ctrl+C would.
+/// (no console to send Ctrl+C to), elsewhere it sends SIGINT to the launcher and every process under it, as Ctrl+C in a
+/// terminal would (<see cref="PosixProcessTree"/>, runic-editors#53).
 /// <para>
 /// <c>dev</c> has exited when its process has, not when its output pipes close: a frontend server it leaves behind
 /// holds them open (the 0.22 checklist, row 6). On Windows <c>dev</c> runs in a Job object (<see cref="DevProcessTree"/>),
@@ -150,21 +152,36 @@ public sealed class DevProcess : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
         }
         if (HasExited) return StopOnInput ? DevStop.Input : DevStop.AlreadyExited;
+        bool windows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        // Off Windows: the launcher and dev under it (runic-editors#53), signalled together as Ctrl+C signals a terminal's group.
+        IReadOnlyList<int> posixTree = windows ? Array.Empty<int>() : PosixProcessTree.Of(ProcessId);
         try
         {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            if (windows)
             {
                 // The job holds the whole tree, also the processes whose parent has exited; taskkill covers a dev
                 // whose job could not be created.
                 tree?.EndAll();
                 Run("taskkill", $"/PID {ProcessId} /T /F");
             }
-            else Run("kill", $"-INT {ProcessId}");
+            else PosixProcessTree.Signal("INT", posixTree);
         }
         catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
-        if (await Task.WhenAny(Exited, Task.Delay(timeout, cancellationToken)).ConfigureAwait(false) == Exited) return DevStop.Forced;
+        var forceStarted = Stopwatch.StartNew();
+        bool exited = await Task.WhenAny(Exited, Task.Delay(timeout, cancellationToken)).ConfigureAwait(false) == Exited;
         cancellationToken.ThrowIfCancellationRequested();
+        if (exited)
+        {
+            // A launcher that ended at the signal can leave dev stopping, or ignoring it: kill what is left after the timeout.
+            if (posixTree.Count > 1)
+            {
+                var left = await PosixProcessTree.WaitForExitAsync(posixTree.Skip(1).ToList(), timeout - forceStarted.Elapsed, cancellationToken).ConfigureAwait(false);
+                PosixProcessTree.Signal("KILL", left);
+            }
+            return DevStop.Forced;
+        }
         tree?.EndAll();
+        PosixProcessTree.Signal("KILL", posixTree.Skip(1));
         try { process.Kill(); } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
         await Task.WhenAny(Exited, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
         return DevStop.Forced;
