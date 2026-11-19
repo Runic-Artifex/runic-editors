@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -24,6 +25,62 @@ public static class DebugEngines
     public const string CdpTransport = "{61D1E397-7AA6-4ED9-815A-0C5CA0E728B4}";
     /// <summary>The "JavaScript and TypeScript" engine of the CDP transport (js-debug's <c>pwa-chrome</c> attach).</summary>
     public const string JavaScriptOverCdp = "{394120B6-2FF9-4D0D-8953-913EF5CD0BCD}";
+    /// <summary>
+    /// "JavaScript and TypeScript" on the local transport: Visual Studio's js-debug engine, which runs the launch or attach
+    /// configuration it gets as options (as for the <c>jsWebView2Debugging</c> launch profile). DevKit attaches the page
+    /// through it (<see cref="JsDebugAttach"/>).
+    /// </summary>
+    public const string JavaScript = "{3FBCC828-6272-46D4-B5FA-B7E643672113}";
+}
+
+/// <summary>
+/// The page attach Debug the Window and Attach to the Page start (runic-editors#44): a js-debug <c>attach</c>
+/// configuration for the page's DevTools endpoint, run by the <see cref="DebugEngines.JavaScript"/> engine through
+/// <c>IVsDebugger4.LaunchDebugTargets4</c>. That call returns once the attach has started. <c>Process2.Attach2</c>, used
+/// before, waits for the attach in a nested message loop on Visual Studio's UI thread; when the attach never completed,
+/// it never returned, and a Visual Studio told to close handled the close inside that loop and could not exit.
+/// </summary>
+public static class JsDebugAttach
+{
+    /// <summary>The configuration's name, which Visual Studio shows for the debugged page.</summary>
+    public const string Name = "Runic page";
+
+    /// <summary>
+    /// The js-debug configuration (<c>type: pwa-chrome</c>, <c>request: attach</c>) for the page <paramref name="pageUrl"/>
+    /// of the endpoint <paramref name="qualifier"/> (<c>http://127.0.0.1:&lt;port&gt;/</c>, as <see cref="CdpEndpoints.Qualifiers"/>
+    /// lists it). Like the transport attach, it sets no <c>webRoot</c>: TSX breakpoints bind through the development
+    /// server's absolute source map sources.
+    /// </summary>
+    public static string Options(string qualifier, string pageUrl)
+    {
+        var endpoint = new Uri(qualifier);
+        var json = new StringBuilder("{");
+        json.Append("\"type\":\"pwa-chrome\",\"request\":\"attach\",");
+        json.Append("\"name\":").Append(Quote(Name)).Append(',');
+        json.Append("\"address\":").Append(Quote(endpoint.Host)).Append(',');
+        json.Append("\"port\":").Append(endpoint.Port.ToString(CultureInfo.InvariantCulture)).Append(',');
+        json.Append("\"url\":").Append(Quote(pageUrl)).Append(',');
+        json.Append("\"sourceMaps\":true}");
+        return json.ToString();
+    }
+
+    private static string Quote(string value)
+    {
+        var text = new StringBuilder("\"");
+        foreach (char c in value)
+        {
+            switch (c)
+            {
+                case '"': text.Append("\\\""); break;
+                case '\\': text.Append("\\\\"); break;
+                default:
+                    if (c < ' ') text.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                    else text.Append(c);
+                    break;
+            }
+        }
+        return text.Append('"').ToString();
+    }
 }
 
 /// <summary>The MSBuild properties <c>dotnet run</c> starts a project with (VS Code: <c>RunProperties</c>).</summary>

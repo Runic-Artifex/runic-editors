@@ -131,8 +131,8 @@ internal sealed class DevLaunchGuard : IOleCommandTarget
             SdkOutput.WriteLine("F5: " + error.Message);
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             await SetStatusAsync("");
-            VsShellUtilities.ShowMessageBox(package, error.Message, RunicPackage.Title,
-                OLEMSGICON.OLEMSGICON_CRITICAL, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            VsClosing.ShowMessage(package, error.Message, OLEMSGICON.OLEMSGICON_CRITICAL);
         }
     }
 

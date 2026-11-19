@@ -41,6 +41,7 @@
     <Content Include="media/icon.png" IncludeInVSIX="true" />
     <Content Include="media/preview.png" IncludeInVSIX="true" />
     <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Management" />
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />

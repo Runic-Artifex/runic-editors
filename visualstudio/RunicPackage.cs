@@ -48,5 +48,17 @@ public sealed class RunicPackage : AsyncPackage
         _ = JoinableTaskFactory.RunAsync(() => DevSession.DevSessionService.Instance.InitializeAsync(this, DisposalToken));
         // "Break all processes" that a Visual Studio ended with while a Runic debugging session had it off (Debugging/).
         _ = JoinableTaskFactory.RunAsync(Debugging.BreakAllProcesses.RecoverAsync);
+        await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        VsClosing.Advise(this);
+    }
+
+    /// <summary>
+    /// Visual Studio is closing: end a page attach that is still waiting (runic-editors#44) on the thread pool. DevKit
+    /// itself never refuses the close.
+    /// </summary>
+    protected override int QueryClose(out bool canClose)
+    {
+        VsClosing.Begin(VsClosing.Reason);
+        return base.QueryClose(out canClose);
     }
 }

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using TUnit.Core;
 
@@ -460,6 +461,24 @@ public class DevSessionTests
             Check.True(lines.Contains("input=stop"), "the stop line");
         }
         Check.Equal(DevStop.AlreadyExited, await dev.StopAsync(TimeSpan.FromSeconds(1)));
+    });
+
+    [Test]
+    public Task Cancelling_a_stop_ends_the_wait_and_not_the_stop() => WithRoot(async root =>
+    {
+        var lines = new List<string>();
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // runic-editors#44: Visual Studio closing while Stop waits for a dev that ignores its input.
+        using var dev = FakeDev(root, "trap '' INT; exec sleep 60", stopOnInput: true, lines, ready);
+        Check.True(ready.Task.Wait(TimeSpan.FromSeconds(20)), "Ready line");
+        using var closing = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        bool cancelled = false;
+        try { await dev.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), closing.Token); }
+        catch (OperationCanceledException) { cancelled = true; }
+        Check.True(cancelled, "the wait is cancelled");
+        Check.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"returned promptly ({watch.Elapsed})");
+        Check.Equal(DevStop.Forced, await dev.StopAsync(TimeSpan.Zero, TimeSpan.FromSeconds(10)));
     });
 
     [Test]

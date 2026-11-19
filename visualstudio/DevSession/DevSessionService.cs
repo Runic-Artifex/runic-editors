@@ -328,7 +328,7 @@ internal sealed class DevSessionService
         {
             SdkOutput.WriteLine($"Stopping dotnet runic dev (process {run.ProcessId}) for {Path.GetFileName(project)}.");
             lock (gate) if (ReferenceEquals(entry!.Run, run)) entry.Stopping = true;
-            var how = await run.StopAsync(DevProcess.DefaultInputStopTimeout, StopTimeout);
+            var how = await run.StopAsync(DevProcess.DefaultInputStopTimeout, StopTimeout, cancellationToken);
             if (run.StopOnInput && how == DevStop.Forced)
                 SdkOutput.WriteLine($"dotnet runic dev did not stop on its input within {DevProcess.DefaultInputStopTimeout.TotalSeconds:0} seconds; ended it by force.");
             Refresh(project);
