@@ -10,7 +10,7 @@ Translations resources through the Runic language server.
 | [`vscode/`](vscode/README.md) | **Runic DevKit** for VS Code: Runic SDK and Translations. Store ID `runic-artifex.runic-devkit` | `runic-devkit.vsix` |
 | [`visualstudio/`](visualstudio/README.md) | **Runic DevKit** for Visual Studio 2026 (Windows x64): Runic SDK and Translations. Store ID `runic-artifex.runic-devkit-vs`, VSIX identity `RunicArtifex.DevKit.VisualStudio` | `runic-devkit-vs.vsix` |
 
-Install them from the stores (from 0.22.0, once published) or from a VSIX file:
+Install them from the stores (since 0.22.0) or from a VSIX file:
 
 | Editor | Store | VSIX |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ with their history (`tools/vscode-runic-translations`,
 `tools/visualstudio-runic-translations`). Both are **previews**. Each release
 attaches both VSIX files to
 the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
-of this repository and, from 0.22.0, publishes them to the Marketplaces above
+of this repository and, since 0.22.0, publishes them to the Marketplaces above
 ([Stores](eng/release/README.md#stores)). Since 0.20 the VS Code
 extension is the one Runic extension for the Runic SDK and Translations; its Runic
 SDK views stay hidden in workspaces without a Runic SDK project. Since 0.22 the
