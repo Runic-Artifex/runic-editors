@@ -2,9 +2,13 @@
   <!--
     Restore-only: pins Microsoft.VSSDK.BuildTools for VsixPublisher.exe in the release workflow's Visual Studio
     Marketplace job (`dotnet restore eng/release/vsixpublisher` in locked mode; the exe is then at
-    .cache/nuget/microsoft.vssdk.buildtools/<version>/tools/vssdk/bin, release.mjs VSIXPUBLISHER). 18.12.1606 is the
-    first version whose VsixPublisher has `-oidc` (trusted publishing). The extension itself still builds with the
-    version in visualstudio/RunicArtifex.DevKit.VisualStudio.csproj, so publishing does not move the build toolchain.
+    .cache/nuget/microsoft.vssdk.buildtools/<version>/tools/vssdk/bin, release.mjs VSIXPUBLISHER). 18.11.1098, not the newer
+    18.12.1606: the VsixPublisher.exe.config of 18.12.1606 lacks the Microsoft.Identity.Client (MSAL) and
+    Microsoft.IdentityModel.* binding redirects (8 dependentAssembly entries instead of 44), so every authentication
+    fails with VsixPub0031 (Microsoft.Identity.Client 4.85.2.0 manifest mismatch). Both versions' `-oidc` exchange is
+    broken (VsixPub0047), so release.mjs exchanges the token and passes -personalAccessToken (eng/release/README.md,
+    "VsixPublisher OIDC workaround"). The extension itself still builds with the version in
+    visualstudio/RunicArtifex.DevKit.VisualStudio.csproj, so publishing does not move the build toolchain.
     Never built.
 
     Microsoft.NETFramework.ReferenceAssemblies is explicit because the SDK adds it implicitly only on a machine without
@@ -20,6 +24,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.12.1606" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.11.1098" PrivateAssets="all" />
   </ItemGroup>
 </Project>

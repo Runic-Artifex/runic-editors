@@ -251,7 +251,8 @@ jobs:
 
   # Final versions only: the Visual Studio Marketplace has no pre-release channel, and VsixPublisher overwrites a
   # listed version, so store-publish skips a version that is already listed. VsixPublisher.exe (.NET Framework) comes
-  # from the pinned Microsoft.VSSDK.BuildTools of eng/release/vsixpublisher, restored in locked mode. Its own -oidc
+  # from the pinned Microsoft.VSSDK.BuildTools of eng/release/vsixpublisher (18.11.1098; 18.12.1606 lacks the MSAL
+  # binding redirects, VsixPub0031), restored in locked mode. Its own -oidc
   # exchange fails (VsixPub0047, no api-version), so store-publish exchanges the job's GitHub OIDC token as vsce does
   # and hands VsixPublisher the masked short-lived token (D072.25); no stored secret.
   marketplace-visualstudio:

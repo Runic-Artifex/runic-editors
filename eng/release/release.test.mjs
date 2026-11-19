@@ -714,7 +714,7 @@ test("the listing files agree with the store identities and the store limits", (
   const tool = read("eng/release/vsixpublisher/VsixPublisher.csproj").toString();
   expect(VSIXPUBLISHER).toContain(`/microsoft.vssdk.buildtools/${/Include="Microsoft.VSSDK.BuildTools" Version="([^"]+)"/.exec(tool)[1]}/`);
   const lock = JSON.parse(read("eng/release/vsixpublisher/packages.lock.json")).dependencies[".NETFramework,Version=v4.7.2"];
-  expect(lock["Microsoft.VSSDK.BuildTools"].resolved).toBe("18.12.1606");
+  expect(lock["Microsoft.VSSDK.BuildTools"].resolved).toBe("18.11.1098");
   // Explicit, so the SDK never adds it implicitly on one platform only and locked-mode restore works on Linux and Windows.
   expect(tool).toContain('<PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />');
   expect(lock["Microsoft.NETFramework.ReferenceAssemblies"]).toMatchObject({ type: "Direct", requested: "[1.0.3, )", resolved: "1.0.3" });
