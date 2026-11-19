@@ -1,11 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
     Restore-only: pins Microsoft.VSSDK.BuildTools for VsixPublisher.exe in the release workflow's Visual Studio
-    Marketplace job (`dotnet restore eng/release/vsixpublisher locked-mode`; the exe is then at
+    Marketplace job (`dotnet restore eng/release/vsixpublisher` in locked mode; the exe is then at
     .cache/nuget/microsoft.vssdk.buildtools/<version>/tools/vssdk/bin, release.mjs VSIXPUBLISHER). 18.12.1606 is the
     first version whose VsixPublisher has `-oidc` (trusted publishing). The extension itself still builds with the
     version in visualstudio/RunicArtifex.DevKit.VisualStudio.csproj, so publishing does not move the build toolchain.
     Never built.
+
+    Microsoft.NETFramework.ReferenceAssemblies is explicit because the SDK adds it implicitly only on a machine without
+    the .NET Framework 4.7.2 targeting pack (Linux, not a Windows runner), and a lock file written on one would fail
+    locked-mode restore on the other (NU1004). With an explicit reference the SDK never adds it, so the restore graph is
+    the same everywhere; CI restores this project in locked mode on Windows ("Visual Studio extension").
   -->
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
@@ -14,6 +19,7 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.12.1606" PrivateAssets="all" />
   </ItemGroup>
 </Project>

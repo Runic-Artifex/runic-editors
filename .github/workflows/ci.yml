@@ -128,6 +128,10 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
+      # The release workflow's Visual Studio Marketplace job restores VsixPublisher like this on windows-2025; a lock
+      # file that only restores on Linux failed it once (NU1004).
+      - name: Restore VsixPublisher in locked mode
+        run: dotnet restore eng/release/vsixpublisher --locked-mode
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
       # The project stamps the VSIX version from eng/version.json; package.py checks it.
       - name: Build the VSIX with full-framework MSBuild
