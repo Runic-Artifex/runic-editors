@@ -183,7 +183,20 @@ the .NET code and the page in one session:
    TypeScript (Chrome DevTools/V8 Inspector)" transport.
 
 Breakpoints in C# and in `Frontend/src` then stop in the same session. The
-status bar shows each step. Debug the Window waits for the page up to three
+status bar shows each step.
+
+For a WebView2 page, DevKit turns off **Tools → Options → Debugging → General →
+Break all processes when one process breaks** while the session runs, and on
+again when debugging stops; the Runic SDK Output pane says so. With it on, a
+breakpoint in the page also stops the .NET Window. The Window's UI thread holds
+the window that WebView2's browser process draws into, so the browser process
+then waits for the stopped Window, stops answering the JavaScript debugger, and
+Visual Studio hangs on "a debugger operation is taking a long time". So a
+TSX breakpoint pauses the page while the .NET code runs on, and a C# breakpoint
+pauses the .NET code while the page's JavaScript runs on (its Bridge calls wait).
+Attach to the Page does the same for a WebView2 page. If Visual Studio ends while
+the option is off, DevKit turns it on again the next time it loads. If you have
+turned the option off yourself, it stays off. Debug the Window waits for the page up to three
 minutes of the Window running (time stopped at a .NET breakpoint does not
 count). If the page does not appear, it says so in the **Runic SDK** Output pane
 and the .NET debugger stays attached.
@@ -436,6 +449,10 @@ work when the settings are empty; set them before starting Visual Studio.
 - **No status bar item** for the language server's state, catalog and locale.
 - **F5 debugs .NET only.** Page breakpoints need Debug the Window or Attach to
   the Page; there is no Runic launch type for both (D070.19).
+- **Debug → Break All while the page runs** stops the .NET Window, and WebView2
+  with it, so the page's part of the break fails: Visual Studio may say "The
+  script document cannot be opened". Continue, or stop debugging, to go on.
+  Breakpoints in the page are not affected.
 
 ## Layout
 
@@ -457,7 +474,7 @@ not the `.vsct` or the package class.
 | `Output/`, `Settings/` | Show Translations Output, Show Runic SDK Output, Options |
 | `DevSession/` | Start `dotnet runic dev`, Start `--no-window`, Stop, Open the Development Server, Open the dev Session File |
 | `ToolWindow/` | Runic tool window, Run `dotnet runic doctor`, Refresh ViewModels |
-| `Debugging/` | Debug the Window, Attach to the Page (JavaScript) |
+| `Debugging/` | Debug the Window, Attach to the Page (JavaScript), and "Break all processes" off while they debug a WebView2 page |
 
 `Core/` (`RunicArtifex.DevKit.VisualStudio.Core`, netstandard2.0, no
 dependencies) holds the logic that needs no Visual Studio: the command and

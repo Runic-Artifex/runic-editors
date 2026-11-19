@@ -115,8 +115,13 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         SdkOutput.WriteLine($"Debugging {program.Program} {program.CommandLineArguments} in {program.WorkingDirectory} with {string.Join(" ", plan.Added.Select(pair => pair.Key + "=" + pair.Value))}");
         if (plan.Host == PageHost.WebView2 && PageAttach.IsElevated())
             SdkOutput.WriteLine("Visual Studio runs as administrator: WebView2 ignores WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in an elevated Window, so the page's debugger cannot attach.");
-        int processId = await LaunchAsync(program, plan, cancellationToken);
-        var endpoint = new PageEndpoint(plan.Host == PageHost.CsWebUi ? "chromium" : "webview2", plan.EndpointUrl, "Debug the Window");
+        // A page breakpoint with "Break all processes" on would also stop the Window, and WebView2 with it (checklist row 10).
+        string engine = plan.Host == PageHost.CsWebUi ? "chromium" : "webview2";
+        await BreakAllProcesses.SuspendForAsync(engine, "Debug the Window");
+        int processId;
+        try { processId = await LaunchAsync(program, plan, cancellationToken); }
+        catch { await BreakAllProcesses.RestoreIfNotDebuggingAsync(); throw; }
+        var endpoint = new PageEndpoint(engine, plan.EndpointUrl, "Debug the Window");
         PageAttach.Remember(project, endpoint, processId);
 
         // 4. The page: attach the JavaScript engine once the endpoint answers and lists the page.
