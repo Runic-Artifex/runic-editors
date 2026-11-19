@@ -385,6 +385,46 @@ public class DevSessionTests
     }
 
     [Test]
+    public void A_frontend_error_stays_until_dev_says_the_frontend_errors_are_cleared()
+    {
+        // runic-editors#52: dev's [vite] lines of runic-sdk 0.23 (runic-sdk#1212, recorded output around a .NET build).
+        var lines = Fixture("dev-output-vite.txt").Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var problems = new DevProblems("/tmp/t1160/App/App.csproj", noWindow: false, toolVersion: "0.23.0");
+        foreach (string line in lines.Take(5)) problems.Add(line);
+        var frontend = problems.Entries.Single();
+        Check.Equal("RUNICP008", frontend.Code);
+        Check.Equal("/tmp/t1160/App/Frontend/src/App.tsx", frontend.File, "the [vite] label is not part of the file");
+        Check.Equal(28, frontend.Line);
+        Check.Equal(49, frontend.Column);
+        Check.Equal("RUNICP008: [vite:oxc] [PARSE_ERROR] Expected corresponding JSX closing tag for 'p'.", frontend.Text);
+        Check.Equal("https://github.com/Runic-Artifex/runic-sdk/blob/v0.23.0/docs/diagnostics.md#runicp008", frontend.HelpUri);
+        // A .NET build error comes and goes at [dev] Ready; the frontend error stays.
+        Check.True(problems.Add(lines[5]), "build error");
+        Check.True(problems.Add(lines[6]), "ready drops the build error");
+        Check.Same(new[] { "RUNICP008" }, problems.Entries.Select(entry => entry.Code));
+        Check.True(!problems.Add(lines[7]), "Vite's own lines are no rows");
+        Check.True(problems.Add(lines[8]), "the clear line drops the frontend error");
+        Check.Equal(0, problems.Entries.Count);
+        Check.True(!problems.Add(lines[8]), "nothing left to clear");
+        Check.True(DevOutput.IsFrontendErrorsCleared("\x1B[2m[vite] [runic] Frontend errors cleared\x1B[0m\r"), "colour codes and CR");
+        Check.True(!DevOutput.IsFrontendErrorsCleared("[host] [runic] Frontend errors cleared"), "only dev's [vite] label");
+    }
+
+    [Test]
+    public void The_clear_line_drops_only_the_frontend_errors_and_the_same_error_comes_back()
+    {
+        var problems = new DevProblems("/app/App.csproj", noWindow: true);
+        Check.True(problems.Add("[vite] C:\\app\\Frontend\\src\\App.tsx(3,7): error RUNICP008: [vite:import-analysis] Failed to resolve import \"./Missing\""), "Windows path");
+        Check.True(problems.Add("/app/CounterViewModel.cs(18,5): error CS1002: ; expected [/app/App.csproj]"), "build error");
+        Check.True(problems.Add("3>CounterViewModel.cs(10,9,10,20): warning RUNICBRIDGE1003: The state Count has no setter. [/app/App.csproj]"), "warning");
+        Check.True(problems.Add("[vite] [runic] Frontend errors cleared"), "cleared");
+        Check.Same(new[] { "CS1002", "RUNICBRIDGE1003" }, problems.Entries.Select(entry => entry.Code), "C# rows stay");
+        Check.True(problems.Add("[vite] C:\\app\\Frontend\\src\\App.tsx(3,7): error RUNICP008: [vite:import-analysis] Failed to resolve import \"./Missing\""), "the same error is a new row after the clear");
+        Check.True(problems.Add("[dev] Evaluating Views Window project..."), "a new cycle drops everything");
+        Check.Equal(0, problems.Entries.Count);
+    }
+
+    [Test]
     public void The_label_dev_puts_before_a_process_line_is_not_part_of_the_file()
     {
         string directory = Path.Combine(Path.GetTempPath(), "app");

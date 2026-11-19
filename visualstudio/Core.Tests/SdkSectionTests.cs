@@ -253,8 +253,8 @@ public class SdkSectionTests
             Check.Equal(null, RunicSdkProjects.ProjectToolVersion(project), "a root manifest without the tool stops the search");
         }
         finally { Directory.Delete(root, recursive: true); }
-        foreach (string code in new[] { "RUNICBRIDGE013", "RAPPDEV1007", "RAPPCLI1009", "RAPPPKG1001", "RCLI8101" }) Check.True(RunicHelpLinks.IsRunicCode(code), code);
-        foreach (string code in new[] { "CS1002", "RTR0090", "RUNICBRIDGE", "MSB3073" }) Check.True(!RunicHelpLinks.IsRunicCode(code), code);
+        foreach (string code in new[] { "RUNICBRIDGE013", "RAPPDEV1007", "RAPPCLI1009", "RAPPPKG1001", "RCLI8101", "RUNICP008" }) Check.True(RunicHelpLinks.IsRunicCode(code), code);
+        foreach (string code in new[] { "CS1002", "RTR0090", "RUNICBRIDGE", "MSB3073", "RUNICPA001" }) Check.True(!RunicHelpLinks.IsRunicCode(code), code);
         Check.Equal("https://github.com/Runic-Artifex/runic-sdk/blob/v0.20.0/docs/diagnostics.md#runicbridge013", RunicHelpLinks.Diagnostic("RUNICBRIDGE013", "0.20.0"));
         Check.Equal("https://github.com/Runic-Artifex/runic-sdk/blob/main/docs/diagnostics.md#rappdev1007", RunicHelpLinks.Diagnostic("RAPPDEV1007"));
         Check.True(RunicHelpLinks.Diagnostic("RAPPDEV1007", "../../evil").Contains("/blob/main/"), "an unsafe version is not a tag");

@@ -97,9 +97,9 @@ public static class RunicSdkProjects
 /// <summary>Links to runic-sdk's documentation for Runic diagnostics and doctor checks (VS Code: <c>vscode/src/diagnostics.ts</c>).</summary>
 public static class RunicHelpLinks
 {
-    private static readonly Regex RunicCode = new(@"^(?:RUNICBRIDGE|RAPPCLI|RAPPDEV|RAPPPKG|RCLI)\d{3,4}$");
+    private static readonly Regex RunicCode = new(@"^(?:RUNICBRIDGE|RAPPCLI|RAPPDEV|RAPPPKG|RCLI|RUNICP)\d{3,4}$");
 
-    /// <summary>Runic diagnostic codes from <c>dotnet runic</c>, the Bridge generator and the build targets.</summary>
+    /// <summary>Runic diagnostic codes from <c>dotnet runic</c>, the Bridge generator, the build targets and the Vite plugin (<c>RUNICP</c>).</summary>
     public static bool IsRunicCode(string code) => RunicCode.IsMatch(code);
 
     /// <summary>

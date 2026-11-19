@@ -106,11 +106,16 @@ catalog. A build error leaves the Error List once `dev` reports `[dev] Ready`
 again after the fix, and all entries go at the next build cycle (`[dev]
 Evaluating`, with the Window also `Window exited` and `Reloading`).
 
-Frontend errors are not in the Error List. Vite reports a `.tsx` parse or
-transform error as several lines of formatted text, without a line in MSBuild's
-form, and `dev` passes them through as they are; they show in the **Runic SDK**
-pane and in the page's error overlay. `dev` runs no TypeScript type check, so
-type errors appear only in the editor.
+Frontend errors are in the Error List from `dotnet-runic` 0.23 on. `dev` prints
+each Vite error as one line in MSBuild's form after its `[vite] ` label, with
+code `RUNICP008` (`[vite] /…/Frontend/src/App.tsx(29,50): error RUNICP008:
+[vite:oxc] …`), and `[vite] [runic] Frontend errors cleared` once the files
+compile again (runic-sdk#1212). DevKit adds those rows and removes them, and
+only them, at the clear line; `[dev] Ready` leaves them in place, and a new
+build cycle removes them with the rest (runic-editors#52). With `dotnet-runic`
+0.22, Vite's errors show only in the **Runic SDK** pane and in the page's error
+overlay. `dev` runs no TypeScript type check, so type errors appear only in the
+editor.
 
 With `dotnet-runic` 0.22 and later:
 
@@ -428,7 +433,7 @@ work when the settings are empty; set them before starting Visual Studio.
 | Run dotnet runic doctor, doctor results | Tools → Runic, tool window toolbar, Error List context menu; Doctor section | Command, Doctor view |
 | Doctor findings as problems with help links | Error List on the project file; F1 opens the doctor documentation | Problems with a code link |
 | Start, start `--no-window` and stop `dotnet runic dev` | Tools → Runic, tool window toolbar; output in the "Runic SDK" Output pane. Stop works for the `dev` Visual Studio started (on its input with `dotnet-runic` 0.22, else by ending it); one started in a terminal stops there with Ctrl+C | Commands and tasks; outside `dev` stopped with SIGINT (not on Windows) |
-| `dev` diagnostics as problems | Error List, read as the `$runic-dev` matcher reads them, and a fixed build error goes at `[dev] Ready`; F1 opens the Runic diagnostics catalog. Vite's frontend errors stay in the Output pane | Problems through the `$runic-dev` problem matchers |
+| `dev` diagnostics as problems | Error List, read as the `$runic-dev` matcher reads them, and a fixed build error goes at `[dev] Ready`; F1 opens the Runic diagnostics catalog. Vite's frontend errors (`RUNICP008`, `dotnet-runic` 0.23) are rows until `[vite] [runic] Frontend errors cleared` | Problems through the `$runic-dev` problem matchers |
 | Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time; a killed `dev` gets `obj/runic/dev-stopped` | Watcher and 2 s poll; process command line or image; the same `dev-stopped` touch |
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
 | Dev Session view: state, server, Window owner or process, pages, debug endpoints, generated clients | Runic tool window, Dev Session section; toolbar buttons enabled per state; state changes in the status bar text | Dev Session view; "Runic dev" status bar item |
@@ -452,12 +457,9 @@ work when the settings are empty; set them before starting Visual Studio.
 - **No palette-style refactoring commands.** Rename Input, Rename Slot, Extract
   Group and Inline Resource are F2 and the light bulb only (Translations 0.14);
   VS Code also has commands for them.
-- **Frontend errors stay in the Runic SDK pane.** A `.tsx` error while `dev`
-  runs is not an Error List row ([Dev Session](#dev-session-dotnet-runic-dev)).
-  For that, `dev` would have to print each Vite error also as one line in
-  MSBuild's form (`Frontend/src/App.tsx(30,5): error <code>: <message>`, as it
-  does for its own faults) and repeat a line it can match when the frontend
-  compiles again.
+- **Frontend errors need `dotnet-runic` 0.23.** With 0.22, a `.tsx` error
+  while `dev` runs is not an Error List row and stays in the Runic SDK pane
+  ([Dev Session](#dev-session-dotnet-runic-dev)).
 - **No status bar item** for the language server's state, catalog and locale.
 - **F5 debugs .NET only.** Page breakpoints need Debug the Window or Attach to
   the Page; there is no Runic launch type for both (D070.19).

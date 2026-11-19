@@ -345,8 +345,8 @@ test("doctor reads a successful envelope, a failed envelope's fault data, and re
 });
 
 test("Runic codes link to the diagnostics catalog at the tool's release tag", () => {
-  for (const code of ["RUNICBRIDGE013", "RAPPDEV1007", "RAPPCLI1009", "RAPPPKG1001", "RCLI8101"]) expect(isRunicCode(code)).toBe(true);
-  for (const code of ["CS1002", "RTR0090", "RUNICBRIDGE", "MSB3073"]) expect(isRunicCode(code)).toBe(false);
+  for (const code of ["RUNICBRIDGE013", "RAPPDEV1007", "RAPPCLI1009", "RAPPPKG1001", "RCLI8101", "RUNICP008"]) expect(isRunicCode(code)).toBe(true);
+  for (const code of ["CS1002", "RTR0090", "RUNICBRIDGE", "MSB3073", "RUNICPA001"]) expect(isRunicCode(code)).toBe(false);
   expect(diagnosticHelpUri("RUNICBRIDGE013", "0.20.0")).toBe("https://github.com/Runic-Artifex/runic-sdk/blob/v0.20.0/docs/diagnostics.md#runicbridge013");
   expect(diagnosticHelpUri("RAPPDEV1007")).toBe("https://github.com/Runic-Artifex/runic-sdk/blob/main/docs/diagnostics.md#rappdev1007");
   expect(diagnosticHelpUri("RAPPDEV1007", "../../evil")).toContain("/blob/main/");
@@ -484,6 +484,58 @@ test("[dev] Ready drops a fixed build error and keeps the warnings; a new cycle 
   frontend.add("/app/App.csproj : error RAPPDEV1007: The vite development server exited unexpectedly with code 1.");
   expect(frontend.add("[dev] Window exited: process 1")).toBe(false);
   expect(frontend.add("[dev] Evaluating Views Window project...")).toBe(true);
+});
+
+/** dev's output with runic-sdk 0.23's frontend errors (runic-sdk#1212, recorded), around a .NET build error. */
+const viteOutput = [
+  "[dev] Evaluating Views Window project...",
+  "[host] /tmp/t1160/App/WorkspaceViewModel.cs(77,26): error CS1002: ; expected [/tmp/t1160/App/App.csproj]",
+  "[dev] Ready",
+  "[vite] 1:11:03 PM [vite] (client) hmr update /src/App.tsx",
+  "[vite] /tmp/t1160/App/Frontend/src/App.tsx(29,50): error RUNICP008: [vite:oxc] [PARSE_ERROR] Expected corresponding JSX closing tag for 'p'.",
+  "[host] /tmp/t1160/App/WorkspaceViewModel.cs(77,26): error CS1002: ; expected [/tmp/t1160/App/App.csproj]",
+  "[dev] Ready",
+  "[vite] 1:11:06 PM [vite] (client) hmr update /src/App.tsx",
+  "[vite] [runic] Frontend errors cleared",
+];
+
+test("editors#52: a frontend error from dev's [vite] label stays until the frontend errors are cleared", () => {
+  const problems = new DevProblems("/tmp/t1160/App", false);
+  const codes = () => problems.problems.map(item => item.code);
+  for (const line of viteOutput.slice(0, 5)) problems.add(line);
+  expect(problems.problems).toEqual([{ file: "/tmp/t1160/App/Frontend/src/App.tsx", line: 29, column: 50, severity: "error", code: "RUNICP008",
+    message: "[vite:oxc] [PARSE_ERROR] Expected corresponding JSX closing tag for 'p'." }]);
+  expect(problems.add(viteOutput[5])).toBe(true);
+  // [dev] Ready ends the .NET build error, not the frontend's.
+  expect(problems.add(viteOutput[6])).toBe(true);
+  expect(codes()).toEqual(["RUNICP008"]);
+  expect(problems.add(viteOutput[7])).toBe(false);
+  expect(problems.add(`\u001b[2m${viteOutput[8]}\u001b[22m\r`)).toBe(true);
+  expect(problems.problems).toEqual([]);
+  expect(problems.add(viteOutput[8])).toBe(false);
+  expect(problems.add("[host] [runic] Frontend errors cleared")).toBe(false);
+});
+
+test("editors#52: the clear line drops only the frontend errors, and the same error comes back after it", () => {
+  const problems = new DevProblems("/app", true);
+  const frontendError = "[vite] C:\\app\\Frontend\\src\\App.tsx(3,7): error RUNICP008: [vite:import-analysis] Failed to resolve import \"./Missing\" from \"src/App.tsx\".";
+  expect(problems.add(frontendError)).toBe(true);
+  expect(problems.problems[0]!.file).toBe("C:\\app\\Frontend\\src\\App.tsx");
+  expect(problems.add("/app/B.cs(77,26): error CS1002: ; expected [/app/App.csproj]")).toBe(true);
+  expect(problems.add("3>A.cs(10,9,10,20): warning RUNICBRIDGE1003: The state Count has no setter. [/app/App.csproj]")).toBe(true);
+  expect(problems.add("[vite] [runic] Frontend errors cleared")).toBe(true);
+  expect(problems.problems.map(item => item.code)).toEqual(["CS1002", "RUNICBRIDGE1003"]);
+  expect(problems.add(frontendError)).toBe(true);
+  expect(problems.add("[dev] Evaluating Views Window project...")).toBe(true);
+  expect(problems.problems).toEqual([]);
+});
+
+test("editors#52: the $runic-dev problem pattern of a process task reads a [vite] RUNICP008 line", async () => {
+  const manifest = JSON.parse(await Bun.file(join(import.meta.dir, "..", "package.json")).text());
+  const pattern = manifest.contributes.problemPatterns.find((item: { name: string }) => item.name === "runic-dev");
+  const match = new RegExp(pattern.regexp).exec(viteOutput[4]);
+  expect(match?.[1]).toBe("/tmp/t1160/App/Frontend/src/App.tsx");
+  expect(match?.[5]).toBe("RUNICP008");
 });
 
 test("dev's output splits into lines across chunks", () => {
