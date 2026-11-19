@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { detectToolVersion, devArguments, forceStop, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
+import { detectToolVersion, devArguments, forceStop, onDevEnd, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
 import { DevSessionFollower, devSessionPath, devSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
 import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, readyPattern } from "../src/dev-problems.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
@@ -585,3 +585,23 @@ test("spawnDev passes RUNIC_DEV_STOP_ON_INPUT only when asked, and a real child 
   expect(older.output).toContain("variable=unset");
   expect(older.how).toBe("forced");
 }, 30000);
+
+test("dev has ended when its process exits, even while a child it left behind holds its output", async () => {
+  if (process.platform === "win32") return;
+  // The 0.22 checklist, row 6: dev stops on its input and exits, but its frontend server keeps dev's output pipe open.
+  const child = spawnDev("/bin/sh", ["-c", "sleep 60 & echo \"child=$!\"; read line; exit 130"], tmpdir(), true);
+  let output = "";
+  child.stdout!.setEncoding("utf8"); child.stdout!.on("data", (text: string) => { output += text; });
+  const ended = new Promise<number | null>(resolveEnd => onDevEnd(child, code => resolveEnd(code), 300));
+  while (!/child=(\d+)/.test(output)) await new Promise(resolveWait => setTimeout(resolveWait, 50));
+  const orphan = Number(/child=(\d+)/.exec(output)![1]);
+  try {
+    const started = Date.now();
+    expect(await stopDevProcess(child, { stopOnInput: true, inputTimeout: 5000, force: forceStop })).toBe("input");
+    expect(await ended).toBe(130);
+    expect(Date.now() - started).toBeLessThan(3000);
+  } finally {
+    try { process.kill(orphan, "SIGKILL"); } catch { /* gone already */ }
+    child.stdout!.destroy(); child.stderr!.destroy();
+  }
+}, 20000);

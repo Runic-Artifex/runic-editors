@@ -46,5 +46,7 @@ public sealed class RunicPackage : AsyncPackage
         await CommandRegistrar.RegisterAsync(this, cancellationToken);
         // Follows the dev session files and advises the pre-F5 guard (DevSession/).
         _ = JoinableTaskFactory.RunAsync(() => DevSession.DevSessionService.Instance.InitializeAsync(this, DisposalToken));
+        // "Break all processes" that a Visual Studio ended with while a Runic debugging session had it off (Debugging/).
+        _ = JoinableTaskFactory.RunAsync(Debugging.BreakAllProcesses.RecoverAsync);
     }
 }
