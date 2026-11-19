@@ -251,7 +251,9 @@ jobs:
 
   # Final versions only: the Visual Studio Marketplace has no pre-release channel, and VsixPublisher overwrites a
   # listed version, so store-publish skips a version that is already listed. VsixPublisher.exe (.NET Framework) comes
-  # from the pinned Microsoft.VSSDK.BuildTools of eng/release/vsixpublisher, restored in locked mode.
+  # from the pinned Microsoft.VSSDK.BuildTools of eng/release/vsixpublisher, restored in locked mode. Its own -oidc
+  # exchange fails (VsixPub0047, no api-version), so store-publish exchanges the job's GitHub OIDC token as vsce does
+  # and hands VsixPublisher the masked short-lived token (D072.25); no stored secret.
   marketplace-visualstudio:
     needs: [candidate, publish]
     if: >-
@@ -291,7 +293,9 @@ jobs:
           mkdir -p artifacts
           printf '%s\n' "$CANDIDATE_SHA256SUMS" > artifacts/candidate-SHA256SUMS
           bun eng/release/release.mjs fetch-release "$VERSION" "$RELEASE_COMMIT" artifacts/vsix artifacts/release artifacts/candidate-SHA256SUMS
-      # VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -oidc
+      # GitHub OIDC token (audience marketplace.visualstudio.com) -> POST marketplace.visualstudio.com/_apis/gallery/token
+      # ?api-version=7.2-preview.1 -> VsixPublisher.exe publish -payload <vsix> -publishManifest
+      # visualstudio/publishManifest.json with that token (eng/release/README.md, "Publishing to the Visual Studio Marketplace").
       - name: Publish to the Visual Studio Marketplace
         run: bun eng/release/release.mjs store-publish visualstudio "$VERSION" artifacts/vsix
       - name: Check the Visual Studio Marketplace listing

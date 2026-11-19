@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, PUBLISH_MANIFEST, RELEASE_WORKFLOW, REPOSITORY, STORES, VSCE, VSIX, VSIXPUBLISHER, assertNewVersion,
-  createRelease, fetchRelease, findCiArtifacts, galleryListing, githubPrerelease, isAncestor, parseSums, prepare, publishCommand, releaseCheck, releaseNotes,
+import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, MARKETPLACE_URL, OIDC_AUDIENCE, PUBLISH_MANIFEST, RELEASE_WORKFLOW, REPOSITORY, STORES,
+  TOKEN_EXCHANGE, TOKEN_PLACEHOLDER, VSCE, VSIX, VSIXPUBLISHER, VSIXPUBLISHER_NATIVE_OIDC, assertNewVersion, createRelease, fetchRelease, findCiArtifacts,
+  galleryListing, githubPrerelease, isAncestor, marketplaceToken, parseSums, prepare, publishCommand, releaseCheck, releaseNotes,
   releasePlan, root, scanVsix, selectArtifact, selectCiRun, selectStores, sha256Sums, storeCheck, storePackage, storePublish, storeVerify, verify } from "./release.mjs";
 import { MAX_KEYWORDS, checkVscodeListing, listingBaseUrls, markdownProblems, pngSize } from "./listing.mjs";
 import { writeVsixFixtures } from "./vsix-fixtures.mjs";
@@ -344,13 +345,21 @@ test("a store-only dry run shows the release's file and the exact publish comman
   });
   try {
     const log = [], calls = [];
-    await storePublish("visualstudio", fetched, "0.22.0", { fetchImpl: fakeStores({ visualstudio: [] }).fetchImpl, log: line => log.push(line),
+    const { fetchImpl, requests } = fakeExchange(fakeStores({ visualstudio: [] }).fetchImpl);
+    await storePublish("visualstudio", fetched, "0.22.0", { fetchImpl, log: line => log.push(line), env: OIDC_ENV,
       spawn: (...args) => { calls.push(args); return { status: 0 }; } });
+    // A dry run neither requests an OIDC token nor exchanges one, and shows only the placeholder.
     expect(calls).toEqual([]);
+    expect(requests).toEqual([]);
     const local = storePackage("visualstudio", fetched, "0.22.0");
     expect(log).toEqual([
       "Visual Studio Marketplace: runic-artifex.runic-devkit-vs 0.22.0.1000 is not listed (newest none); it would be published.",
-      `Dry run, would run: ${resolve(root, VSIXPUBLISHER)} publish -payload ${local.path} -publishManifest ${resolve(root, PUBLISH_MANIFEST)} -oidc`]);
+      "Dry run, would exchange the job's GitHub OIDC token (audience marketplace.visualstudio.com) for a short-lived Marketplace token at POST "
+        + "https://marketplace.visualstudio.com/_apis/gallery/token?api-version=7.2-preview.1 and pass it as <marketplace-token-from-github-oidc> "
+        + "(VsixPublisher -oidc fails with VsixPub0047).",
+      `Dry run, would run: ${resolve(root, VSIXPUBLISHER)} publish -payload ${local.path} -publishManifest ${resolve(root, PUBLISH_MANIFEST)} `
+        + "-personalAccessToken <marketplace-token-from-github-oidc>"]);
+    expect(log.join("\n")).not.toContain("add-mask");
   } finally { rmSync(fetched, { recursive: true, force: true }); }
 });
 
@@ -467,6 +476,19 @@ const withVsix = async (version, body) => {
   } finally { rmSync(directory, { recursive: true, force: true }); }
 };
 
+// GitHub's OIDC token endpoint and the Marketplace token exchange in front of `next` (the gallery). Records each request.
+const OIDC = "eyJhbGciOiJSUzI1NiJ9.github-oidc.signature", CREDENTIAL = "marketplace-session-credential";
+const OIDC_ENV = { ACTIONS_ID_TOKEN_REQUEST_URL: "https://pipelines.actions.example/idtoken?api-version=2.0", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token" };
+const fakeExchange = (next = fakeStores().fetchImpl, { oidc = () => Response.json({ value: OIDC }), exchange = () => Response.json({ credential: CREDENTIAL }) } = {}) => {
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    if (url.startsWith("https://pipelines.actions.example/")) { requests.push({ url, ...init }); return oidc(); }
+    if (url.startsWith(`${MARKETPLACE_URL}/_apis/gallery/token`)) { requests.push({ url, ...init }); return exchange(); }
+    return next(url, init);
+  };
+  return { fetchImpl, requests };
+};
+
 test("the stores are the VS Code and Visual Studio Marketplaces; Visual Studio gets final versions only", () => {
   expect(Object.keys(STORES)).toEqual(["vscode", "visualstudio"]);
   expect(STORES.vscode.itemName).toBe(MARKETPLACE.vscode.itemName);
@@ -536,7 +558,13 @@ test("store-publish prints the exact trusted-publishing commands and runs them o
   });
   await withVsix("0.22.0", async (vsix, bytes) => {
     const vs = storePackage("visualstudio", vsix, "0.22.0");
-    expect(publishCommand("visualstudio", vs)).toEqual([resolve(root, VSIXPUBLISHER), "publish", "-payload", vs.path, "-publishManifest", resolve(root, PUBLISH_MANIFEST), "-oidc"]);
+    // VsixPublisher gets the token exchanged by release.mjs (VsixPub0047); -oidc stays behind VSIXPUBLISHER_NATIVE_OIDC.
+    expect(VSIXPUBLISHER_NATIVE_OIDC).toBe(false);
+    expect(publishCommand("visualstudio", vs)).toEqual([resolve(root, VSIXPUBLISHER), "publish", "-payload", vs.path, "-publishManifest", resolve(root, PUBLISH_MANIFEST),
+      "-personalAccessToken", TOKEN_PLACEHOLDER]);
+    expect(publishCommand("visualstudio", vs, { token: CREDENTIAL }).slice(-2)).toEqual(["-personalAccessToken", CREDENTIAL]);
+    expect(publishCommand("visualstudio", vs, { nativeOidc: true })).toEqual([resolve(root, VSIXPUBLISHER), "publish", "-payload", vs.path, "-publishManifest",
+      resolve(root, PUBLISH_MANIFEST), "-oidc"]);
     expect(publishCommand("vscode", storePackage("vscode", vsix, "0.22.0"))).not.toContain("--pre-release");
     const calls = [];
     const spawn = (command, args, options) => { calls.push([command, ...args, options.env]); return { status: 0 }; };
@@ -554,6 +582,98 @@ test("store-publish prints the exact trusted-publishing commands and runs them o
       vsixPublisher: join(vsix, "missing", "VsixPublisher.exe") })).rejects.toThrow("VsixPublisher.exe not found");
     await expect(storePublish("vscode", vsix, "0.22.0", { dryRun: false, env, log: () => {}, fetchImpl: fakeStores().fetchImpl,
       spawn: () => ({ status: 1 }) })).rejects.toThrow("VS Code Marketplace publish failed (exit 1)");
+  });
+});
+
+test("the Visual Studio job exchanges the GitHub OIDC token as vsce 4.1.1 does and masks both tokens", async () => {
+  expect([OIDC_AUDIENCE, TOKEN_EXCHANGE]).toEqual(["marketplace.visualstudio.com", "https://marketplace.visualstudio.com/_apis/gallery/token?api-version=7.2-preview.1"]);
+  const { fetchImpl, requests } = fakeExchange();
+  const log = [];
+  expect(await marketplaceToken({ env: OIDC_ENV, fetchImpl, log: line => log.push(line) })).toBe(CREDENTIAL);
+  expect(requests).toEqual([
+    { url: "https://pipelines.actions.example/idtoken?api-version=2.0&audience=marketplace.visualstudio.com", method: "GET",
+      headers: { Accept: "application/json", Authorization: "Bearer request-token" } },
+    { url: "https://marketplace.visualstudio.com/_apis/gallery/token?api-version=7.2-preview.1", method: "POST",
+      headers: { Accept: "application/json", Authorization: `FederatedToken ${OIDC}`, "Content-Type": "application/json", "User-Agent": "release.mjs" },
+      body: JSON.stringify({ publisherName: "runic-artifex" }) }]);
+  // Both tokens are masked before anything else is logged; the rest of the log names neither.
+  expect(log.slice(0, 2)).toEqual([`::add-mask::${OIDC}`, `::add-mask::${CREDENTIAL}`]);
+  expect(log.slice(2)).toEqual([`Exchanged the job's GitHub OIDC token (audience marketplace.visualstudio.com) for a short-lived runic-artifex Marketplace token: POST ${TOKEN_EXCHANGE}.`]);
+  // The exchange mirrors the vsce version vscode/bun.lock pins (its out/oidc.js, when installed).
+  expect(readFileSync(resolve(root, "vscode/bun.lock"), "utf8")).toContain('"@vscode/vsce": ["@vscode/vsce@4.1.1"');
+  const vsceOidc = resolve(root, "vscode/node_modules/@vscode/vsce/out/oidc.js");
+  if (existsSync(vsceOidc)) {
+    const source = readFileSync(vsceOidc, "utf8");
+    for (const part of ["OIDC_AUDIENCE = 'marketplace.visualstudio.com'", "/_apis/gallery/token?api-version=7.2-preview.1", "Authorization: `FederatedToken ${oidcToken}`",
+      "body: JSON.stringify({ publisherName })", "result.credential", "result.value", "searchParams.set('audience', audience)"]) expect(source).toContain(part);
+  }
+});
+
+test("the token exchange fails clearly without leaking a token", async () => {
+  const exchange = async (options, env = OIDC_ENV) => {
+    const log = [];
+    const error = await marketplaceToken({ env, fetchImpl: fakeExchange(undefined, options).fetchImpl, log: line => log.push(line) }).then(() => undefined, error => error);
+    expect(error).toBeInstanceOf(Error);
+    for (const secret of [CREDENTIAL, "request-token"]) expect(error.message).not.toContain(secret);
+    return { message: error.message, log };
+  };
+  expect((await exchange({}, {})).message).toBe("GitHub Actions provides no OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL, ACTIONS_ID_TOKEN_REQUEST_TOKEN); the job needs `permissions: id-token: write`.");
+  expect((await exchange({}, { ...OIDC_ENV, ACTIONS_ID_TOKEN_REQUEST_URL: "not a url" })).message).toBe("GitHub Actions provides an invalid ACTIONS_ID_TOKEN_REQUEST_URL.");
+  expect((await exchange({ oidc: () => Response.json({ message: "Can't issue ID_TOKEN" }, { status: 403, statusText: "Forbidden" }) })).message)
+    .toBe("GitHub Actions OIDC token request failed with 403 Forbidden: Can't issue ID_TOKEN");
+  expect((await exchange({ oidc: () => Response.json({}) })).message).toBe("GitHub Actions OIDC token request returned no token.");
+  const refused = await exchange({ exchange: () => Response.json({ message: "No trusted publishing policy matches this token.", typeName: "x" }, { status: 401 }) });
+  expect(refused.message).toBe("Marketplace OIDC token exchange failed with 401: No trusted publishing policy matches this token.");
+  // The OIDC token was masked before the exchange; the credential never appears.
+  expect(refused.log).toEqual([`::add-mask::${OIDC}`]);
+  expect((await exchange({ exchange: () => new Response("Service Unavailable", { status: 503 }) })).message).toBe("Marketplace OIDC token exchange failed with 503: Service Unavailable");
+  expect((await exchange({ exchange: () => new Response("<html>", { status: 200 }) })).message).toBe("Marketplace OIDC token exchange returned no JSON.");
+  expect((await exchange({ exchange: () => Response.json({ token: CREDENTIAL }) })).message).toBe("Marketplace OIDC token exchange returned no credential.");
+  expect((await exchange({ exchange: () => Response.json({ credential: "two\nlines" }) })).message).toBe("Marketplace OIDC token exchange returned no credential.");
+  expect((await exchange({ exchange: () => { throw new Error("connect ECONNREFUSED"); } })).message).toBe("Marketplace OIDC token exchange failed: connect ECONNREFUSED");
+});
+
+test("the Visual Studio publish hands VsixPublisher the exchanged token and never logs it", async () => {
+  await withVsix("0.22.0", async (vsix, bytes) => {
+    const vsixPublisher = join(vsix, "VsixPublisher.exe");
+    writeFileSync(vsixPublisher, "");
+    const env = { PATH: "/bin", VSCE_PAT: "secret", ...OIDC_ENV };
+    const run = async ({ listed = [], status = 0, exchangeOptions, nativeOidc } = {}) => {
+      const log = [], calls = [];
+      const { fetchImpl, requests } = fakeExchange(fakeStores({ visualstudio: listed }).fetchImpl, exchangeOptions);
+      const spawn = (command, args, options) => { calls.push({ command, args, env: options.env }); return { status }; };
+      const result = await storePublish("visualstudio", vsix, "0.22.0", { dryRun: false, fetchImpl, spawn, env, log: line => log.push(line), vsixPublisher, nativeOidc })
+        .then(() => undefined, error => error);
+      return { log, calls, requests, error: result };
+    };
+    const local = storePackage("visualstudio", vsix, "0.22.0");
+    const published = await run();
+    expect(published.error).toBeUndefined();
+    expect(published.requests.map(request => request.url)).toEqual([`${OIDC_ENV.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=marketplace.visualstudio.com`, TOKEN_EXCHANGE]);
+    expect(published.calls).toEqual([{ command: vsixPublisher, args: ["publish", "-payload", local.path, "-publishManifest", resolve(root, PUBLISH_MANIFEST),
+      "-personalAccessToken", CREDENTIAL], env: { PATH: "/bin" } }]);
+    // Masked first; the command is shown with the placeholder.
+    const running = published.log.findIndex(line => line.startsWith("Running: "));
+    expect(published.log.indexOf(`::add-mask::${CREDENTIAL}`)).toBeLessThan(running);
+    expect(published.log[running]).toBe(`Running: ${vsixPublisher} publish -payload ${local.path} -publishManifest ${resolve(root, PUBLISH_MANIFEST)} -personalAccessToken ${TOKEN_PLACEHOLDER}`);
+    expect(published.log.filter(line => line.includes(CREDENTIAL))).toEqual([`::add-mask::${CREDENTIAL}`]);
+    // Already listed with these bytes: no token is requested and nothing runs.
+    const skipped = await run({ listed: [{ version: "0.22.0.1000", bytes: bytes.visualstudio }] });
+    expect([skipped.error, skipped.requests, skipped.calls]).toEqual([undefined, [], []]);
+    // A failed exchange runs nothing.
+    const refused = await run({ exchangeOptions: { exchange: () => Response.json({ message: "denied" }, { status: 401 }) } });
+    expect(refused.error.message).toBe("Marketplace OIDC token exchange failed with 401: denied");
+    expect(refused.calls).toEqual([]);
+    // VsixPublisher refusing the token says which credential it had.
+    const rejected = await run({ status: 1 });
+    expect(rejected.error.message).toBe("Visual Studio Marketplace publish failed (exit 1); VsixPublisher had the Marketplace token exchanged from the job's GitHub OIDC token "
+      + '(eng/release/README.md, "Publishing to the Visual Studio Marketplace").');
+    expect(rejected.error.message).not.toContain(CREDENTIAL);
+    // With nativeOidc, VsixPublisher exchanges the token itself again (-oidc) and keeps the OIDC request variables.
+    const native = await run({ nativeOidc: true });
+    expect(native.requests).toEqual([]);
+    expect(native.calls).toEqual([{ command: vsixPublisher, args: ["publish", "-payload", local.path, "-publishManifest", resolve(root, PUBLISH_MANIFEST), "-oidc"],
+      env: { PATH: "/bin", ...OIDC_ENV } }]);
   });
 });
 
