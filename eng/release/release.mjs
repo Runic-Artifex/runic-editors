@@ -56,7 +56,7 @@ export const STORES = {
 export const PUBLISH_MANIFEST = "visualstudio/publishManifest.json";
 export const VSCE = "vscode/node_modules/@vscode/vsce/vsce";
 // Microsoft.VSSDK.BuildTools as restored by eng/release/vsixpublisher (NuGet.config keeps packages in .cache/nuget).
-export const VSIXPUBLISHER = ".cache/nuget/microsoft.vssdk.buildtools/18.12.1606/tools/vssdk/bin/VsixPublisher.exe";
+export const VSIXPUBLISHER = ".cache/nuget/microsoft.vssdk.buildtools/18.11.1098/tools/vssdk/bin/VsixPublisher.exe";
 // Runic Translations attached both extensions to its own releases up to this version (the VS Code extension as
 // 0.11.1000, the Visual Studio one as 0.11.0.1000), so a release from this repository must map above it.
 export const LAST_TRANSLATIONS_RELEASE = "0.11.0";
@@ -432,12 +432,14 @@ export async function storeCheck(name, vsixDirectory, version, { fetchImpl = fet
   return { action: "publish", message: `${store.title}: ${store.itemName} ${local.version} is not listed (newest ${newest ?? "none"}); it would be published.` };
 }
 
-// Trusted publishing for VsixPublisher (D072.25). The `-oidc` exchange of VsixPublisher 18.12.1606 POSTs the GitHub
-// OIDC token to _apis/gallery/token without an api-version, and the Marketplace refuses it (VsixPub0047,
-// VssVersionNotSpecifiedException). So the Visual Studio job exchanges the token itself, exactly as @vscode/vsce 4.1.1
+// Trusted publishing for VsixPublisher (D072.25). The `-oidc` exchange of VsixPublisher (Microsoft.VSSDK.BuildTools
+// 18.11.1098 and 18.12.1606, the same code) POSTs the GitHub OIDC token to _apis/gallery/token without an api-version,
+// and the Marketplace refuses it (VsixPub0047, VssVersionNotSpecifiedException). So the Visual Studio job exchanges the token itself, exactly as @vscode/vsce 4.1.1
 // does for `vsce publish --oidc` (out/oidc.js), and hands the short-lived credential to VsixPublisher through
 // -personalAccessToken, its only token input: its own -oidc path puts the exchanged credential into the same
-// VssBasicCredential. Set this to true once Microsoft fixes -oidc, to let VsixPublisher exchange the token again.
+// VssBasicCredential. Set this to true only together with a Microsoft.VSSDK.BuildTools newer than 18.12.1606 whose -oidc
+// is fixed (eng/release/vsixpublisher pins 18.11.1098, because 18.12.1606 also fails every authentication with
+// VsixPub0031: its VsixPublisher.exe.config lacks the MSAL binding redirects).
 export const VSIXPUBLISHER_NATIVE_OIDC = false;
 export const MARKETPLACE_URL = "https://marketplace.visualstudio.com";
 // The audience, endpoint, api-version and headers of vsce 4.1.1's exchange.

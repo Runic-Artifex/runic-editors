@@ -144,7 +144,7 @@ The publish jobs follow D070.11–D070.14. Open VSX is deferred.
 | Store | Job | Identity | Versions | Tool |
 | --- | --- | --- | --- | --- |
 | VS Code Marketplace | `marketplace-vscode` (ubuntu) | `runic-artifex.runic-devkit` | every release; `x.y.z-rc.N`/`-preview.N` with `--pre-release` | `@vscode/vsce` 4.1.1 (`vscode/bun.lock`): `vsce publish --packagePath <vsix> --oidc --skip-duplicate [--pre-release]` |
-| Visual Studio Marketplace | `marketplace-visualstudio` (windows-2025) | `runic-artifex.runic-devkit-vs` | final versions only | `release.mjs` exchanges the job's GitHub OIDC token as vsce does, then `VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -personalAccessToken <exchanged token>` from `Microsoft.VSSDK.BuildTools` 18.12.1606 ([VsixPub0047](#vsixpublisher-oidc-workaround-vsixpub0047)) |
+| Visual Studio Marketplace | `marketplace-visualstudio` (windows-2025) | `runic-artifex.runic-devkit-vs` | final versions only | `release.mjs` exchanges the job's GitHub OIDC token as vsce does, then `VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -personalAccessToken <exchanged token>` from `Microsoft.VSSDK.BuildTools` 18.11.1098 ([VsixPub0047](#vsixpublisher-oidc-workaround-vsixpub0047), [VsixPub0031](#vsixpublisher-oidc-workaround-vsixpub0047)) |
 
 The version mapping is the one in [IDE extension versions](#ide-extension-versions):
 0.22.0 is VS Code `0.22.1000` (a normal Marketplace release with the Preview label)
@@ -239,8 +239,9 @@ Q&A is off on both stores; questions go to GitHub issues (D070.14).
 
 **VsixPublisher.** The extension still builds with `Microsoft.VSSDK.BuildTools`
 18.9.820 (`visualstudio/RunicArtifex.DevKit.VisualStudio.csproj`). The publish job
-restores 18.12.1606, the first version whose VsixPublisher has `-oidc` (which is
-broken, [VsixPub0047](#vsixpublisher-oidc-workaround-vsixpub0047)), from the
+restores 18.11.1098, not the newer 18.12.1606, whose VsixPublisher cannot
+authenticate at all (VsixPub0031, see
+[the workaround](#vsixpublisher-oidc-workaround-vsixpub0047)), from the
 restore-only project [`vsixpublisher/`](vsixpublisher/VsixPublisher.csproj) in
 locked mode, so publishing does not move the build toolchain. The project
 references `Microsoft.NETFramework.ReferenceAssemblies` explicitly: the .NET SDK
@@ -330,7 +331,8 @@ publish on their own):
 #### VsixPublisher OIDC workaround (VsixPub0047)
 
 `VsixPublisher.exe publish -oidc` of `Microsoft.VSSDK.BuildTools` 18.12.1606, the
-newest on nuget.org, cannot publish: its exchange POSTs the GitHub OIDC token to
+newest on nuget.org, and of 18.11.1098 (the same VsixPublisher code) cannot
+publish: its exchange POSTs the GitHub OIDC token to
 `https://marketplace.visualstudio.com/_apis/gallery/token` without an
 `api-version` (and with `Authorization: Bearer`), and the Marketplace refuses it
 with `VsixPub0047: Could not exchange the OIDC token for a Marketplace session
@@ -363,8 +365,33 @@ So `store-publish visualstudio` exchanges the token itself, exactly as
 and the failure messages, and compares the exchange with the installed vsce. When
 Microsoft fixes `-oidc`, set `VSIXPUBLISHER_NATIVE_OIDC` in `release.mjs` to
 `true` and `store-publish` runs `VsixPublisher.exe publish … -oidc` again.
-Report or follow the bug in the Marketplace's issue tracker,
-<https://github.com/microsoft/vsmarketplace/issues>.
+That needs a `Microsoft.VSSDK.BuildTools` newer than 18.12.1606 with both bugs
+fixed: 18.11.1098 has the same broken `-oidc`.
+
+**VsixPub0031 in 18.12.1606.** The job therefore pins 18.11.1098
+([`vsixpublisher/`](vsixpublisher/VsixPublisher.csproj)). With 18.12.1606 the
+exchange above succeeded (run 44480434131), and VsixPublisher then failed every
+authentication with `VSSDK: error VsixPub0031 : An error occurred while
+attempting to authenticate: Could not load file or assembly
+'Microsoft.Identity.Client, Version=4.85.2.0, …' … The located assembly's
+manifest definition does not match the assembly reference.` Its
+`tools/vssdk/bin/VsixPublisher.exe.config` has 8 `dependentAssembly` binding
+redirects; 18.11.1098's has 44, including `Microsoft.Identity.Client` and
+`Microsoft.Identity.Client.Extensions.Msal` → 4.87.0.0 (the bundled
+`lib/Microsoft.Identity.Client.dll`) and `Microsoft.IdentityModel.*` → 8.15.0.0.
+18.11.1098's VsixPublisher has the same `publish` arguments (`-payload`,
+`-publishManifest`, `-personalAccessToken`, `-oidc`) and publish-manifest model.
+
+Report or follow both bugs in the Marketplace's issue tracker,
+<https://github.com/microsoft/vsmarketplace/issues>:
+
+1. `-oidc` POSTs to `_apis/gallery/token` without `api-version` (VsixPub0047,
+   18.11.1098 and 18.12.1606).
+2. 18.12.1606's `VsixPublisher.exe.config` lacks the `Microsoft.Identity.Client`,
+   `Microsoft.Identity.Client.Extensions.Msal` and `Microsoft.IdentityModel.*`
+   binding redirects that 18.11.1098 has, so authentication fails with
+   VsixPub0031 (`Microsoft.Identity.Client, Version=4.85.2.0` manifest
+   mismatch).
 
 If VsixPublisher rejects the exchanged token (the publish step fails after the
 `Exchanged the job's GitHub OIDC token …` line), the maintainer decides again
