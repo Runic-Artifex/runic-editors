@@ -21,16 +21,16 @@ One extension for the Runic SDK and Runic Translations, as
 
 ## Install
 
-- **Visual Studio Marketplace** (final versions, from 0.22.0 once it is
-  published, D070.11): in **Extensions > Manage Extensions**, search for
+- **Visual Studio Marketplace** (final versions since 0.22.0, D070.11): in
+  **Extensions > Manage Extensions**, search for
   **Runic DevKit**, or open
   [runic-artifex.runic-devkit-vs](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit-vs).
   The Marketplace has no pre-release channel, so release candidates are not
   published there.
 - **VSIX file:** download `runic-devkit-vs.vsix` from the
   [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
-  (release candidates included) and open it to install. Until the Marketplace
-  listing exists, this is the way to install it.
+  (release candidates included) and open it to install. Release candidates and
+  offline machines install this way.
 
 Restart Visual Studio after installing. The extension loads only in a solution
 with a Runic project: one with the `RunicApplication` project capability (Runic
