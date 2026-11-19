@@ -123,6 +123,13 @@ With `dotnet-runic` 0.22 and later:
   not exited within 10 seconds, and with an older tool, Visual Studio ends the
   process tree (WIN-06).
 
+`dev` runs in a Windows Job object. After **Stop dotnet runic dev**, whatever
+`dev` left running (its Vite server, `runic-translations serve`) is ended when
+`dev` exits, and a forced stop ends all of it, also processes whose parent has
+already exited. Visual Studio counts `dev` as stopped when its process exits, not
+when its output closes. **Start dotnet runic dev** during a stop waits up to 30
+seconds for it to finish, and otherwise says which process is still running.
+
 ### F5 asks to start `dotnet runic dev --no-window`
 
 When F5 or Ctrl+F5 starts a Runic SDK startup project and no `dotnet runic dev

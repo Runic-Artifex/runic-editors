@@ -119,6 +119,24 @@ export function spawnDev(dotnet: string, args: string[], cwd: string, stopOnInpu
   return spawn(dotnet, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
 }
 
+/** How long the output's last lines are read after `dev` exits; processes it left behind can keep its pipes open. */
+export const outputDrainTimeout = 2000;
+
+/**
+ * Calls `onEnd` once `dev`'s process has exited and its output pipes have closed, or `drainTimeout` after the exit: a
+ * frontend server `dev` left behind holds the pipes open, so `close` alone can come much later or never (the 0.22
+ * checklist, row 6), and `dev` would count as running until then.
+ */
+export function onDevEnd(child: Pick<ChildProcess, "once">, onEnd: (code: number | null, signal: NodeJS.Signals | null) => void, drainTimeout = outputDrainTimeout): void {
+  let closed = false;
+  child.once("close", () => { closed = true; });
+  child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    if (closed) { onEnd(code, signal); return; }
+    const timer = setTimeout(() => onEnd(code, signal), drainTimeout);
+    child.once("close", () => { clearTimeout(timer); onEnd(code, signal); });
+  });
+}
+
 /** Text for a terminal: bare line feeds become CR LF. */
 export function terminalText(text: string): string {
   return text.replace(/\r?\n/g, "\r\n");

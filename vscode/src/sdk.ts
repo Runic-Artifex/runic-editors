@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { execFile, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { detectToolVersion, devArguments, forceStop, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, type DevStop } from "./dev-process.js";
+import { detectToolVersion, devArguments, forceStop, onDevEnd, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, type DevStop } from "./dev-process.js";
 import { DevProblems, LineSplitter } from "./dev-problems.js";
 import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
@@ -701,7 +701,8 @@ class DevTerminal implements vscode.Pseudoterminal {
     child.stdout?.on("end", () => { for (const line of output.flush()) this.onLine(line); });
     child.stderr?.on("end", () => { for (const line of errors.flush()) this.onLine(line); });
     child.on("error", error => { write(`\nCould not start ${this.dotnet}: ${error.message}\n`); this.end(1); });
-    child.on("close", (code, signal) => { write(`\ndotnet runic dev exited with ${code ?? signal}.\n`); this.end(code ?? 1); });
+    // dev has ended when its process has (its output read for a short while), not when its pipes close.
+    onDevEnd(child, (code, signal) => { write(`\ndotnet runic dev exited with ${code ?? signal}.\n`); this.end(code ?? 1); });
   }
 
   /** Ctrl+C in the terminal stops dev as the Stop command does. */
