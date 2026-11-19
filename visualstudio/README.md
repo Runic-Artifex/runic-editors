@@ -293,9 +293,9 @@ through standard LSP, with no refactoring code in this extension (D070.1):
 
 - **F2** renames a resource, an MF2 local, a caller input (on `$name`, in every
   locale's resource) or a slot reference (on the value of `ref=`, also in the
-  `runic.json` slot contracts). Visual Studio's LSP client applies a rename to
-  open documents in their buffers and writes the files that are not open
-  straight to disk, so those are saved at once. When the solution also holds application
+  `runic.json` slot contracts). Visual Studio's LSP client saves a rename at
+  once: it writes every renamed file to disk, open documents included (their
+  buffers show the new names and stay unmodified). When the solution also holds application
   sources (C#, TypeScript, Svelte), a resource rename asks first in an InfoBar,
   **Rename in resource sources** or **Cancel** (the server's
   `window/showMessageRequest`): Runic renames the resource in resource sources

@@ -5,6 +5,23 @@
 preview product until the production language server: its commands, environment
 variables and the language server protocol it uses may change in a minor release.
 
+## Runic SDK
+
+In a solution with a Runic SDK project, **Tools → Runic** and the **Runic** tool
+window (**View → Other Windows → Runic**) bring the Runic SDK's development loop:
+
+- start and stop `dotnet runic dev` (with or without its Window), follow its
+  session in the tool window's **Dev Session** section and the status bar, and
+  read its diagnostics in the Error List;
+- F5 and Ctrl+F5 of a Runic startup project offer to start `dev --no-window`
+  first;
+- **Debug the Window**: the Window's C# code and its page in one debugging
+  session, and **Attach to the Page (JavaScript)** for a running page;
+- **Run dotnet runic doctor**: the checks in the tool window, failing and
+  warning checks in the Error List;
+- the **ViewModels** tree of the development source map, which opens the C#
+  members.
+
 ## Runic Translations
 
 Direct `.mf2` and grouped `.rmf2` translation resources get the Runic language
@@ -13,10 +30,18 @@ server's features in the editor:
 - highlighting, diagnostics for every file of the project, completion, hover with
   the base-locale text, symbols, folding and formatting;
 - go to definition, Find All References, quick fixes and F2 rename of resources
-  and MF2 locals;
+  and MF2 locals, and with Translations 0.14 of inputs and slot references;
+- **Extract group** and **Inline into the ancestor resource** in the light bulb
+  (Translations 0.14);
 - **Tools → Runic → Preview Message**: a native message preview with locale,
   pseudo-locale, sample-value, regional-locale and time-zone selectors;
+- XLIFF export and import, .resx and i18next catalog import, library message
+  overrides, and each locale's coverage in the tool window's **Translations**
+  section;
 - unsaved `runic.json` edits take part in diagnostics, preview and refactorings.
+
+Settings are in **Tools → Options → Runic DevKit**; the tools' output goes to the
+**Runic SDK** and **Runic Translations** Output panes.
 
 ## Requirements
 

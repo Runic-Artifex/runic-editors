@@ -29,6 +29,19 @@ Translations](README.md#moving-from-runic-or-runic-mf2-translations).
   rejects as outdated, because files changed between the code action and its
   resolve (a save's file-watcher event), is resolved once more; if it is still
   outdated, a warning says so instead of nothing happening (runic-editors#32).
+- In a multi-root workspace, each folder's language server starts even when
+  several folders hold Translations projects.
+- With `dotnet-runic` 0.22, the extension's `dev` task passes `--debug-endpoint`
+  to a `dev` with its Window, so a CS-WebUI Window opens its DevTools Protocol
+  port, and **Stop dotnet runic dev** asks `dev` to stop on its standard input,
+  so it marks its session stopped and removes its development pages, on Windows
+  too; after 10 seconds it is ended by force. Older tools run as in 0.21. The
+  `dev` terminal ends when the `dev` process exits, even while a child it
+  started still holds its output (runic-editors#41).
+- When a `dev` was killed (its session file still says starting or ready, but
+  the process is gone), the extension touches `obj/runic/dev-stopped` once, as
+  `dev` does when it stops, so the next build restores the production frontend
+  in `www/` (runic-editors#29).
 - A light-bulb refactoring that the server refuses for another reason, such as
   Extract Group from a catalog where a locale lacks the group, shows the server's
   reason as a warning instead of applying nothing without a message; only an
