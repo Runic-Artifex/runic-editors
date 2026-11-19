@@ -107,17 +107,27 @@ dispatch-only, runs only from `main` and is a **dry run by default**.
 2. Dispatch **Release** from `main` with that exact version, first with
    **dry-run** checked (the default).
 
-The `candidate` job (`contents: read`, `actions: read`) validates the version
-against `eng/version.json`, finds the newest successful `ci.yml` push run on `main`
-for the dispatched commit (`release.mjs find-ci`), downloads its `vscode-vsix`
-and `visualstudio-vsix` artifacts by id, checks both files' identities and
-mapped versions (`prepare`), writes `candidate.json` and `SHA256SUMS`, and
-checks that neither the tag `v<version>` nor a release exists for another commit
-(`release-check`). It then checks each store selected by the **stores** input and
-prints its exact publish command (`store-publish <stores> <version> <vsix>
---dry-run`, see [Stores](#stores)). A dry run ends there.
+The `candidate` job (`contents: read`, `actions: read`, `attestations: read`)
+first decides what the dispatch does (`release.mjs release-check <version>
+<stores>`, read-only):
 
-Without dry-run, the `publish` job, the only job with `contents: write`,
+- **Release** (the normal case): the version must be the one in
+  `eng/version.json`, and neither the tag `v<version>` nor a release may exist for
+  another commit. The job finds the newest successful `ci.yml` push run on `main`
+  for the dispatched commit (`find-ci`), downloads its `vscode-vsix` and
+  `visualstudio-vsix` artifacts by id, checks both files' identities and mapped
+  versions (`prepare`), and writes `candidate.json` and `SHA256SUMS`.
+- **Store-only** ([Retrying a store](#retrying-a-store)): **stores** is
+  `vscode` or `visualstudio`, the GitHub release `v<version>` is published, and
+  its tag commit is the dispatched commit or an ancestor of it. The job downloads
+  the release's files and checks them (`fetch-release`); no GitHub release is
+  created.
+
+It then checks each store selected by the **stores** input and prints its exact
+publish command (`store-publish <stores> <version> <vsix> --dry-run`, see
+[Stores](#stores)). A dry run ends there.
+
+Without dry-run, the `publish` job (release only), the only job with `contents: write`,
 `id-token: write` and `attestations: write`, runs in the `release` environment
 (create it with required reviewers before the first real release). It downloads
 the same artifacts, checks the candidate files by hash and the VSIX files against
@@ -143,12 +153,21 @@ Marketplace pre-release, which only users who opt in receive, and is not publish
 to Visual Studio, which has no pre-release channel and would offer it to everyone.
 `1.0.0` (`1.0.1000`) then sorts above every release candidate.
 
-**How a store job runs.** Both jobs need `publish` (the GitHub release), so they
-run only without dry-run, after the release exists. Each runs in the
-`marketplace` environment with `contents: read`, `id-token: write` and
-`actions: read`, downloads the same CI artifacts by id, checks them against the
-candidate job's hashes and inventory (`verify`), then runs `release.mjs
-store-publish <store>`:
+**How a store job runs.** Both jobs run only without dry-run, after the GitHub
+release exists: after the `publish` job of a release, or right after the
+candidate job for store-only. Each runs in the `marketplace` environment with
+`contents: read`, `id-token: write` and `attestations: read` and publishes
+exactly the files of the GitHub release: `release.mjs fetch-release` downloads
+both VSIX files and `SHA256SUMS` from the published release `v<version>`, checks
+that the tag is at the candidate job's release commit, that the files match the
+release's `SHA256SUMS` and the hashes the candidate job checked, and that each
+file has a build-provenance attestation by this repository's `release.yml`, run on
+`main` at the tag commit on a GitHub-hosted runner (`gh attestation verify
+--repo Runic-Artifex/runic-editors --signer-workflow
+Runic-Artifex/runic-editors/.github/workflows/release.yml --source-ref
+refs/heads/main --source-digest <tag commit> --deny-self-hosted-runners`), and
+checks the VSIX identities and versions. Then it runs `release.mjs store-publish
+<store>`:
 
 1. `store-check`: reads the store's public listing. A version listed with the same
    bytes and pre-release flag is skipped (so reruns are safe, and VsixPublisher,
@@ -162,9 +181,36 @@ store-publish <store>`:
    bytes.
 
 The **stores** input (`all`, `vscode`, `visualstudio`, `none`) selects the stores;
-after a partial failure, dispatch again with the failed store: the GitHub release
-and a store that already lists the version are kept. Use `none` while the store
-accounts do not exist.
+after a partial failure, dispatch again with the failed store
+([Retrying a store](#retrying-a-store)): the GitHub release and a store that
+already lists the version are kept. Use `none` while the store accounts do not
+exist.
+
+### Retrying a store
+
+A store job that failed after the GitHub release is retried with a **store-only**
+dispatch, also after a fix to the release tooling has landed on `main`:
+
+1. Merge the fix to `main` (eng/version.json may already name the next version).
+2. Dispatch **Release** from `main` with the released **version**, **stores**
+   `visualstudio` (or `vscode`), and **dry-run** checked. The candidate job's log
+   must show `release-check`'s `Store-only: GitHub release v<version> (…) is
+   published at <tag commit>, an ancestor of <dispatched commit>; …`, then
+   `fetch-release`'s line that the files of `v<version>` were downloaded, match
+   its `SHA256SUMS` and are attested by `release.yml` on main at the tag commit,
+   with the two `sha256sum` lines, then the store check and the exact publish
+   command.
+3. Dispatch again without dry-run with the same inputs. The `publish` job is
+   skipped (no `release` approval, no new release or attestation); the store job
+   waits for the `marketplace` reviewers and publishes the release's files with the
+   dispatched commit's workflow code.
+
+Store-only is refused unless the release is published (not a draft) and its tag
+commit is the dispatched commit or an ancestor of it; `all` and `none` are never
+store-only, so a full release still refuses a tag at another commit. The store
+job refuses files whose hashes differ from `SHA256SUMS` or the candidate job's, or
+that lack the release workflow's attestation for the tag commit. A version the
+store already lists with other bytes still fails `store-check`.
 
 **Dry run.** The candidate job runs `store-publish <stores> <version> <vsix>
 --dry-run` in every run: it checks the VSIX identities (the VS Code VSIX against
@@ -189,7 +235,12 @@ Q&A is off on both stores; questions go to GitHub issues (D070.14).
 18.9.820 (`visualstudio/RunicArtifex.DevKit.VisualStudio.csproj`). The publish job
 restores 18.12.1606, the first version whose VsixPublisher has `-oidc`, from the
 restore-only project [`vsixpublisher/`](vsixpublisher/VsixPublisher.csproj) in
-locked mode, so publishing does not move the build toolchain.
+locked mode, so publishing does not move the build toolchain. The project
+references `Microsoft.NETFramework.ReferenceAssemblies` explicitly: the .NET SDK
+adds it implicitly only where the .NET Framework targeting pack is missing (Linux,
+not the Windows runner), so a lock file written on Linux failed the first Visual
+Studio publish of 0.22.0 with `NU1004`. CI's "Visual Studio extension" job
+(windows-2025) restores the project in locked mode on every change.
 
 **One-time setup (maintainer).** Before the first publish:
 
@@ -259,9 +310,11 @@ publish on their own):
    microsoft/vsmarketplace#905), the icon, the overview and no Q&A tab. Then install
    it in Visual Studio 2026 through Extensions > Manage Extensions and check that
    Tools > Runic appears in a Runic solution.
-6. If the job failed after the GitHub release, fix the cause and dispatch with
-   **stores** `visualstudio`: the GitHub release and a VS Code listing stay as they
-   are.
+6. If the job failed after the GitHub release, fix the cause on `main` and
+   retry the store with a store-only dispatch ([Retrying a store](#retrying-a-store)):
+   **stores** `visualstudio`, dry run first. It publishes the GitHub release's own
+   `runic-devkit-vs.vsix` (checked against `SHA256SUMS` and its attestation), not a
+   new build; the GitHub release and the VS Code listing stay as they are.
 
 To withdraw a broken version, publish a fixed patch release (D026: patches only for
 security and severe regressions); unlisting on the publisher's manage page is the
@@ -276,6 +329,7 @@ gh attestation verify runic-devkit.vsix -R Runic-Artifex/runic-editors \
 ```
 
 The attestation shows that the release workflow of this repository, which runs
-only on `main`, released those bytes. The workflow does not build them: it takes
+only on `main`, released those bytes; the store jobs run this check, pinned to the
+tag commit, before publishing. The workflow does not build them: it takes
 them from the successful CI run of the same commit and checks them by hash first.
 After publishing, `store-verify` checks that each Marketplace serves the same bytes.

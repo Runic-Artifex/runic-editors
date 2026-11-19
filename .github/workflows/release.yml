@@ -4,7 +4,9 @@ name: Release
 # build-provenance attestations, then publishes the same files to the VS Code Marketplace and (final versions only)
 # the Visual Studio Marketplace through trusted publishing (D070.11-D070.14; Open VSX is deferred). Dispatch-only and
 # a dry run by default: a dry run checks the stores' public listings and prints the publish commands, and never
-# publishes. See eng/release/README.md ("Stores").
+# publishes. A dispatch with a single store for a version whose GitHub release is already published at an ancestor
+# commit is store-only: no new release, and the store job publishes that release's own files, checked against its
+# SHA256SUMS and attestations, with this commit's workflow code. See eng/release/README.md ("Stores").
 on:
   workflow_dispatch:
     inputs:
@@ -32,8 +34,10 @@ permissions:
   contents: read
 
 jobs:
-  # Read-only: finds the successful CI push run for this commit, verifies both VSIX files and checks tag and release.
-  # A dry run ends here; this job never holds OIDC, attestation or write permissions.
+  # Read-only: checks tag and release and picks the mode (release-check). A release: finds the successful CI push run
+  # for this commit and verifies both VSIX files. Store-only: downloads the published release's files and verifies
+  # them against its SHA256SUMS and attestations. A dry run ends here; this job never holds OIDC, attestation-write or
+  # repository-write permissions.
   candidate:
     if: github.repository == 'Runic-Artifex/runic-editors' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -41,11 +45,18 @@ jobs:
     permissions:
       contents: read
       actions: read
+      attestations: read
     outputs:
+      # release: a GitHub release of this commit, then the stores; store-only: one store for an existing release.
+      mode: ${{ steps.plan.outputs.mode }}
+      # The commit of the release tag (this commit for a release).
+      release-commit: ${{ steps.plan.outputs.release-commit }}
       ci-run-id: ${{ steps.ci.outputs.run-id }}
       vsix-artifact-ids: ${{ steps.ci.outputs.vsix-artifact-ids }}
       # sha256sum lines of the candidate files; publish checks its download against them.
       release-sha256: ${{ steps.prepare.outputs.sha256 }}
+      # SHA256SUMS of the VSIX files the store jobs publish; they check the GitHub release's files against it.
+      vsix-sha256sums: ${{ steps.sums.outputs.sha256sums }}
     env:
       # Pass the dispatch input through the environment, never into script text.
       VERSION: ${{ inputs.version }}
@@ -69,20 +80,30 @@ jobs:
           fi
           # Also enforces the 65534 component limit and prints the IDE versions this release maps to.
           bun eng/release/ide-versions.mjs "$version"
-          test "$version" = "$(jq -r .version eng/version.json)"
+      # A release needs the version of eng/version.json and no tag or release of another commit. Store-only needs a
+      # single store and a published release whose tag commit is this commit or an ancestor of it.
+      - name: Check tag and release without creating them
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STORES: ${{ inputs.stores }}
+        run: bun eng/release/release.mjs release-check "$VERSION" "$STORES"
       - name: Find the successful CI run for this commit
+        if: steps.plan.outputs.mode == 'release'
         id: ci
         env:
           GH_TOKEN: ${{ github.token }}
         run: bun eng/release/release.mjs find-ci
       # Each VSIX artifact is extracted into artifacts/vsix/<artifact name>.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.plan.outputs.mode == 'release'
         with:
           artifact-ids: ${{ steps.ci.outputs.vsix-artifact-ids }}
           path: artifacts/vsix
           run-id: ${{ steps.ci.outputs.run-id }}
           github-token: ${{ github.token }}
       - name: Verify the VSIX files against the version and write SHA256SUMS
+        if: steps.plan.outputs.mode == 'release'
         id: prepare
         env:
           CI_RUN_ID: ${{ steps.ci.outputs.run-id }}
@@ -95,16 +116,27 @@ jobs:
             echo SHA256
           } >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.plan.outputs.mode == 'release'
         with:
           name: release-candidate-${{ github.run_id }}
           path: artifacts/release
           if-no-files-found: error
           retention-days: 30
           overwrite: true
-      - name: Check tag and release without creating them
+      - name: Download the GitHub release's files and verify their hashes and attestations (store-only)
+        if: steps.plan.outputs.mode == 'store-only'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bun eng/release/release.mjs release-check "$VERSION"
+          RELEASE_COMMIT: ${{ steps.plan.outputs.release-commit }}
+        run: bun eng/release/release.mjs fetch-release "$VERSION" "$RELEASE_COMMIT" artifacts/vsix artifacts/release
+      - name: Record the VSIX hashes for the store jobs
+        id: sums
+        run: |
+          {
+            echo 'sha256sums<<SHA256SUMS'
+            cat artifacts/release/SHA256SUMS
+            echo SHA256SUMS
+          } >> "$GITHUB_OUTPUT"
       # Read-only: the stores' public listings and the exact publish commands; no credentials, no publish endpoint.
       - name: Check the stores and print the publish commands (dry run)
         env:
@@ -113,7 +145,7 @@ jobs:
 
   publish:
     needs: candidate
-    if: ${{ !inputs.dry-run }}
+    if: ${{ !inputs.dry-run && needs.candidate.outputs.mode == 'release' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # Create this environment (with required reviewers) before the first real release.
@@ -166,21 +198,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bun eng/release/release.mjs release "$VERSION" artifacts/vsix artifacts/release/SHA256SUMS
 
-  # The store jobs run after the GitHub release, in the `marketplace` environment (required reviewers, main only, no
-  # stored secrets), and publish exactly the files the release has: the same CI artifacts, checked by hash and
-  # against the candidate inventory. Each publishes through GitHub OIDC trusted publishing, skips a version the store
-  # already lists with these bytes (store-check), and waits until the store lists it (store-verify). A rerun with a
-  # single `stores` value retries one store.
+  # The store jobs run after the GitHub release (publish, or none for store-only), in the `marketplace` environment
+  # (required reviewers, main only, no stored secrets), and publish exactly the files of the GitHub release: each
+  # downloads them from the release and checks them against its SHA256SUMS, the candidate job's hashes and their
+  # build-provenance attestations (fetch-release). Each publishes through GitHub OIDC trusted publishing, skips a
+  # version the store already lists with these bytes (store-check), and waits until the store lists it (store-verify).
+  # A dispatch with a single `stores` value retries one store, also from a newer main commit (store-only).
   marketplace-vscode:
     needs: [candidate, publish]
-    if: ${{ !inputs.dry-run && (inputs.stores == 'all' || inputs.stores == 'vscode') }}
+    if: >-
+      ${{ !cancelled() && !inputs.dry-run && needs.candidate.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.candidate.outputs.mode == 'store-only'))
+      && (inputs.stores == 'all' || inputs.stores == 'vscode') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: marketplace
     permissions:
       contents: read
       id-token: write
-      actions: read
+      attestations: read
     env:
       VERSION: ${{ inputs.version }}
     steps:
@@ -198,27 +233,16 @@ jobs:
       - name: Install vsce
         working-directory: vscode
         run: bun install --frozen-lockfile --ignore-scripts
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.candidate.outputs.vsix-artifact-ids }}
-          path: artifacts/vsix
-          run-id: ${{ needs.candidate.outputs.ci-run-id }}
-          github-token: ${{ github.token }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-candidate-${{ github.run_id }}
-          path: artifacts/release
-      - name: Check the candidate files against the candidate job
-        working-directory: artifacts/release
+      - name: Download the GitHub release's files and verify their hashes and attestations
         env:
-          RELEASE_SHA256: ${{ needs.candidate.outputs.release-sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.candidate.outputs.release-commit }}
+          CANDIDATE_SHA256SUMS: ${{ needs.candidate.outputs.vsix-sha256sums }}
         run: |
-          test -n "$RELEASE_SHA256"
-          printf '%s\n' "$RELEASE_SHA256" | sha256sum --check --strict
-      - name: Verify the VSIX files against the candidate inventory
-        env:
-          CI_RUN_ID: ${{ needs.candidate.outputs.ci-run-id }}
-        run: bun eng/release/release.mjs verify artifacts/vsix artifacts/release/candidate.json "$VERSION" "$CI_RUN_ID"
+          test -n "$CANDIDATE_SHA256SUMS"
+          mkdir -p artifacts
+          printf '%s\n' "$CANDIDATE_SHA256SUMS" > artifacts/candidate-SHA256SUMS
+          bun eng/release/release.mjs fetch-release "$VERSION" "$RELEASE_COMMIT" artifacts/vsix artifacts/release artifacts/candidate-SHA256SUMS
       # vsce publish --packagePath <vsix> --oidc --skip-duplicate, with --pre-release exactly for x.y.z-rc.N/-preview.N.
       - name: Publish to the VS Code Marketplace
         run: bun eng/release/release.mjs store-publish vscode "$VERSION" artifacts/vsix
@@ -230,14 +254,16 @@ jobs:
   # from the pinned Microsoft.VSSDK.BuildTools of eng/release/vsixpublisher, restored in locked mode.
   marketplace-visualstudio:
     needs: [candidate, publish]
-    if: ${{ !inputs.dry-run && (inputs.stores == 'all' || inputs.stores == 'visualstudio') && !contains(inputs.version, '-') }}
+    if: >-
+      ${{ !cancelled() && !inputs.dry-run && needs.candidate.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.candidate.outputs.mode == 'store-only'))
+      && (inputs.stores == 'all' || inputs.stores == 'visualstudio') && !contains(inputs.version, '-') }}
     runs-on: windows-2025
     timeout-minutes: 40
     environment: marketplace
     permissions:
       contents: read
       id-token: write
-      actions: read
+      attestations: read
     env:
       VERSION: ${{ inputs.version }}
     defaults:
@@ -255,27 +281,16 @@ jobs:
           global-json-file: global.json
       - name: Restore VsixPublisher
         run: dotnet restore eng/release/vsixpublisher --locked-mode
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.candidate.outputs.vsix-artifact-ids }}
-          path: artifacts/vsix
-          run-id: ${{ needs.candidate.outputs.ci-run-id }}
-          github-token: ${{ github.token }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-candidate-${{ github.run_id }}
-          path: artifacts/release
-      - name: Check the candidate files against the candidate job
-        working-directory: artifacts/release
+      - name: Download the GitHub release's files and verify their hashes and attestations
         env:
-          RELEASE_SHA256: ${{ needs.candidate.outputs.release-sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.candidate.outputs.release-commit }}
+          CANDIDATE_SHA256SUMS: ${{ needs.candidate.outputs.vsix-sha256sums }}
         run: |
-          test -n "$RELEASE_SHA256"
-          printf '%s\n' "$RELEASE_SHA256" | sha256sum --check --strict
-      - name: Verify the VSIX files against the candidate inventory
-        env:
-          CI_RUN_ID: ${{ needs.candidate.outputs.ci-run-id }}
-        run: bun eng/release/release.mjs verify artifacts/vsix artifacts/release/candidate.json "$VERSION" "$CI_RUN_ID"
+          test -n "$CANDIDATE_SHA256SUMS"
+          mkdir -p artifacts
+          printf '%s\n' "$CANDIDATE_SHA256SUMS" > artifacts/candidate-SHA256SUMS
+          bun eng/release/release.mjs fetch-release "$VERSION" "$RELEASE_COMMIT" artifacts/vsix artifacts/release artifacts/candidate-SHA256SUMS
       # VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -oidc
       - name: Publish to the Visual Studio Marketplace
         run: bun eng/release/release.mjs store-publish visualstudio "$VERSION" artifacts/vsix

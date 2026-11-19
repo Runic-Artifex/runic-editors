@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, PUBLISH_MANIFEST, REPOSITORY, STORES, VSCE, VSIX, VSIXPUBLISHER, assertNewVersion, createRelease,
-  findCiArtifacts, galleryListing, githubPrerelease, prepare, publishCommand, releaseCheck, releaseNotes, root, scanVsix, selectArtifact, selectCiRun,
-  selectStores, sha256Sums, storeCheck, storePackage, storePublish, storeVerify, verify } from "./release.mjs";
+import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, PUBLISH_MANIFEST, RELEASE_WORKFLOW, REPOSITORY, STORES, VSCE, VSIX, VSIXPUBLISHER, assertNewVersion,
+  createRelease, fetchRelease, findCiArtifacts, galleryListing, githubPrerelease, isAncestor, parseSums, prepare, publishCommand, releaseCheck, releaseNotes,
+  releasePlan, root, scanVsix, selectArtifact, selectCiRun, selectStores, sha256Sums, storeCheck, storePackage, storePublish, storeVerify, verify } from "./release.mjs";
 import { MAX_KEYWORDS, checkVscodeListing, listingBaseUrls, markdownProblems, pngSize } from "./listing.mjs";
 import { writeVsixFixtures } from "./vsix-fixtures.mjs";
 
@@ -114,10 +114,28 @@ test("a release must map above the versions Runic Translations already released 
   expect(() => releaseCheck("0.11.0", sha, fakeGh().spawn)).toThrow("is not above 0.11.0");
 });
 
-const fakeGh = ({ release = false, tag, draft = false, assets = [], target = sha, annotated = false, tagError = false, releaseError = false } = {}) => {
+// A fake gh: a release (published or draft) with assets, a tag, the compare status of two commits, the files
+// `gh release download` writes, and the files whose attestation verifies.
+const fakeGh = ({ release = false, tag, draft = false, assets = [], target = sha, annotated = false, tagError = false, releaseError = false,
+  compare = "ahead", compareError = false, downloads = {}, attested } = {}) => {
   const calls = [];
   const spawn = (command, args) => {
     calls.push([command, ...args]);
+    if (args[0] === "api" && args[1].includes("/compare/")) {
+      if (compareError) return { status: 1, stdout: "", stderr: "gh: Server Error (HTTP 502)" };
+      return { status: 0, stdout: `${compare}\n` };
+    }
+    if (args[0] === "release" && args[1] === "download") {
+      const directory = args[args.indexOf("--dir") + 1];
+      const patterns = args.flatMap((arg, index) => (args[index - 1] === "--pattern" ? [arg] : []));
+      for (const name of patterns) if (downloads[name] !== undefined) writeFileSync(join(directory, name), downloads[name]);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "attestation") {
+      const name = args[2].split(/[\\/]/).at(-1);
+      return attested === undefined || attested.includes(name) ? { status: 0, stdout: "Verification succeeded!", stderr: "" }
+        : { status: 1, stdout: "", stderr: `Error: failed to fetch attestations for subject: ${name}: no attestations found` };
+    }
     if (args[0] === "release" && args[1] === "view") {
       if (releaseError) return { status: 1, stdout: "", stderr: "HTTP 502: Bad Gateway" };
       return release ? { status: 0, stdout: JSON.stringify({ url: "u", isDraft: draft, targetCommitish: target, assets: assets.map(name => ({ name })) }) }
@@ -192,6 +210,150 @@ test("hand-written release notes are used only when the version has a notes file
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+// --- Store-only dispatch -------------------------------------------------------------------------------------------
+
+const head = "d".repeat(40);
+const released = "b".repeat(40);
+const releaseAssets = [...VSIX.map(entry => entry.file), "SHA256SUMS"];
+
+test("a single-store dispatch for a published release at an ancestor commit is store-only", () => {
+  const plan = (stores, options, projectVersion = "0.23.0") => releasePlan("0.22.0", stores, head, { spawn: fakeGh(options).spawn, projectVersion });
+  const published = { release: true, tag: released, assets: releaseAssets };
+  for (const store of ["visualstudio", "vscode"]) {
+    const { spawn, calls } = fakeGh(published);
+    // main has moved on to the next version: store-only does not need eng/version.json to name the release.
+    const result = releasePlan("0.22.0", store, head, { spawn, projectVersion: "0.23.0" });
+    expect(result).toMatchObject({ mode: "store-only", commit: released });
+    expect(result.message).toContain(`Store-only: GitHub release v0.22.0 (u) is published at ${released}, an ancestor of ${head}`);
+    expect(result.message).toContain(`the ${STORES[store].title} job would publish that release's files`);
+    expect(result.message).toContain("no GitHub release is created");
+    expect(calls.map(call => call.slice(1, 3))).toEqual([["release", "view"], ["api", `repos/${REPOSITORY}/git/ref/tags/v0.22.0`],
+      ["api", `repos/${REPOSITORY}/compare/${released}...${head}?per_page=1`]]);
+    expect(writes(calls)).toBe(false);
+  }
+  expect(plan("vscode", { ...published, compare: "identical" })).toMatchObject({ mode: "store-only" });
+  // The release commit itself: no comparison needed.
+  expect(releasePlan("0.22.0", "visualstudio", released, { spawn: fakeGh(published).spawn, projectVersion: "0.22.0" })).toMatchObject({ mode: "store-only", commit: released });
+});
+
+test("store-only refuses an unpublished release, a tag that is not an ancestor and a release without a tag", () => {
+  const plan = (stores, options, projectVersion = "0.22.0") => () => releasePlan("0.22.0", stores, head, { spawn: fakeGh(options).spawn, projectVersion });
+  const published = { release: true, tag: released, assets: releaseAssets };
+  for (const compare of ["behind", "diverged"])
+    expect(plan("visualstudio", { ...published, compare })).toThrow(`Tag v0.22.0 is at ${released}, which is not an ancestor of ${head}`);
+  expect(plan("visualstudio", { ...published, compareError: true })).toThrow(`Comparing ${released}...${head} failed`);
+  expect(plan("visualstudio", { ...published, compare: "" })).toThrow("returned nothing");
+  expect(plan("visualstudio", { release: true, draft: true, target: released })).toThrow(`is a draft for ${released}, not published`);
+  expect(plan("visualstudio", { release: true })).toThrow("has no tag");
+  // Without a published release a single store is a release as before: a tag at another commit still fails.
+  expect(plan("visualstudio", { tag: released })).toThrow(`Tag v0.22.0 belongs to ${released}, not ${head}`);
+});
+
+test("a full release still refuses a tag at another commit and needs the version of eng/version.json", () => {
+  const published = { release: true, tag: released, assets: releaseAssets };
+  for (const stores of ["all", "none"]) {
+    const { spawn, calls } = fakeGh(published);
+    expect(() => releasePlan("0.22.0", stores, head, { spawn, projectVersion: "0.22.0" })).toThrow(`Tag v0.22.0 belongs to ${released}, not ${head}`);
+    expect(calls.some(call => call[2]?.includes("/compare/"))).toBe(false);
+  }
+  expect(releasePlan("0.22.0", "all", head, { spawn: fakeGh().spawn, projectVersion: "0.22.0" })).toEqual({ mode: "release", commit: head,
+    message: `Would create the prerelease v0.22.0 at ${head}.` });
+  expect(releasePlan("0.22.0", "visualstudio", head, { spawn: fakeGh().spawn, projectVersion: "0.22.0" })).toMatchObject({ mode: "release", commit: head });
+  // A draft of this commit is resumed as before, whatever the stores.
+  expect(releasePlan("0.22.0", "vscode", head, { spawn: fakeGh({ release: true, draft: true, target: head }).spawn, projectVersion: "0.22.0" }).message).toContain("resume the draft");
+  expect(releasePlan("0.22.0", "all", head, { spawn: fakeGh({ release: true, tag: head }).spawn, projectVersion: "0.22.0" })).toMatchObject({ mode: "release" });
+  expect(() => releasePlan("0.22.0", "all", head, { spawn: fakeGh().spawn, projectVersion: "0.23.0" })).toThrow("0.22.0 is not the version in eng/version.json (0.23.0)");
+  expect(() => releasePlan("0.22.0", "openvsx", head, { spawn: fakeGh().spawn, projectVersion: "0.22.0" })).toThrow("Unknown store openvsx");
+  expect(() => releasePlan("0.11.0", "visualstudio", head, { spawn: fakeGh(published).spawn, projectVersion: "0.11.0" })).toThrow("is not above 0.11.0");
+  expect(isAncestor(head, head, () => { throw new Error("no lookup"); })).toBe(true);
+});
+
+const withRelease = (body, version = "0.22.0") => {
+  const directory = mkdtempSync(join(tmpdir(), "runic-editors-fetch-"));
+  try {
+    writeVsixFixtures(join(directory, "fixtures"), version);
+    const bytes = Object.fromEntries(VSIX.map(entry => [entry.file, readFileSync(join(directory, "fixtures", entry.artifact, entry.file))]));
+    const sums = VSIX.map(entry => `${hash(bytes[entry.file])}  ${entry.file}\n`).join("");
+    const fetch = (options = {}, { expectedSums, log = () => {} } = {}) => {
+      const target = mkdtempSync(join(directory, "run-"));
+      const gh = fakeGh({ release: true, tag: released, assets: releaseAssets, downloads: { ...bytes, SHA256SUMS: sums }, ...options });
+      const vsix = join(target, "vsix"), download = join(target, "release");
+      const run = () => fetchRelease(version, released, vsix, download, { spawn: gh.spawn, expectedSums, log });
+      return { run, vsix, download, calls: gh.calls };
+    };
+    body({ fetch, bytes, sums });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+};
+
+test("fetch-release takes exactly the published release's files, checked against SHA256SUMS and their attestations", () => withRelease(({ fetch, bytes, sums }) => {
+  const log = [];
+  const { run, vsix, download, calls } = fetch({}, { expectedSums: sums, log: line => log.push(line) });
+  expect(run()).toMatchObject({ tag: "v0.22.0", url: "u", sums: parseSums(sums) });
+  expect(readdirSync(download).sort()).toEqual([...releaseAssets].sort());
+  for (const entry of VSIX) expect(readFileSync(join(vsix, entry.artifact, entry.file))).toEqual(bytes[entry.file]);
+  expect(scanVsix(vsix, "0.22.0").map(entry => entry.sha256)).toEqual(VSIX.map(entry => hash(bytes[entry.file])));
+  const downloadCall = calls.find(call => call[2] === "download");
+  expect(downloadCall.slice(1, 6)).toEqual(["release", "download", "v0.22.0", "--repo", REPOSITORY]);
+  expect(downloadCall.filter((_, index) => downloadCall[index - 1] === "--pattern")).toEqual(releaseAssets);
+  // Every downloaded file must be attested by this repository's release workflow, run on main at the tag commit.
+  const attestations = calls.filter(call => call[1] === "attestation");
+  expect(attestations.map(call => call[3].split(/[\\/]/).at(-1))).toEqual(releaseAssets);
+  for (const call of attestations) expect(call.slice(4)).toEqual(["--repo", REPOSITORY, "--signer-workflow", `${REPOSITORY}/${RELEASE_WORKFLOW}`,
+    "--source-ref", "refs/heads/main", "--source-digest", released, "--deny-self-hosted-runners"]);
+  expect(log[0]).toContain(`GitHub release v0.22.0 (u) at ${released}: runic-devkit.vsix, runic-devkit-vs.vsix, SHA256SUMS downloaded`);
+  expect(log[0]).toContain("match its SHA256SUMS and the candidate job's");
+  expect(log.slice(1)).toEqual(sums.trimEnd().split("\n"));
+  expect(writes(calls)).toBe(false);
+}));
+
+test("fetch-release refuses a mismatched hash, a missing attestation, an unpublished release and a tag at another commit", () => withRelease(({ fetch, bytes, sums }) => {
+  const other = sums.replace(/^[0-9a-f]{64}/, "0".repeat(64));
+  expect(fetch({ downloads: { ...bytes, SHA256SUMS: other } }).run).toThrow(`runic-devkit.vsix of v0.22.0 has sha256 ${hash(bytes["runic-devkit.vsix"])}, but its SHA256SUMS lists ${"0".repeat(64)}`);
+  expect(fetch({ downloads: { ...bytes, "runic-devkit-vs.vsix": "tampered", SHA256SUMS: sums } }).run).toThrow("runic-devkit-vs.vsix of v0.22.0 has sha256");
+  expect(fetch({}, { expectedSums: other }).run).toThrow(`but the candidate job checked ${"0".repeat(64)}`);
+  expect(fetch({ downloads: { ...bytes, SHA256SUMS: `${sums}${"1".repeat(64)}  extra.vsix\n` } }).run).toThrow("must list exactly runic-devkit.vsix and runic-devkit-vs.vsix");
+  expect(fetch({ downloads: { ...bytes, SHA256SUMS: "not a sum\n" } }).run).toThrow("malformed line");
+  const unattested = fetch({ attested: ["runic-devkit.vsix", "SHA256SUMS"] });
+  expect(unattested.run).toThrow(`Verifying the build-provenance attestation of runic-devkit-vs.vsix of v0.22.0 (${RELEASE_WORKFLOW} on main at ${released}) failed: Error: failed to fetch attestations`);
+  // Nothing reaches the store-publish directory before every check has passed.
+  expect(existsSync(unattested.vsix)).toBe(false);
+  expect(fetch({ draft: true }).run).toThrow("v0.22.0 (u) is not published");
+  expect(fetch({ release: false }).run).toThrow("GitHub release v0.22.0 does not exist");
+  expect(fetch({ tag: head }).run).toThrow(`Tag v0.22.0 is at ${head}, not ${released}`);
+  expect(fetch({ tag: undefined }).run).toThrow(`Tag v0.22.0 is at no commit, not ${released}`);
+  expect(fetch({ assets: VSIX.map(entry => entry.file) }).run).toThrow("v0.22.0 (u) has no SHA256SUMS");
+  expect(fetch({ downloads: { ...bytes } }).run).toThrow("The download of v0.22.0 must be exactly");
+  const used = fetch();
+  mkdirSync(used.download, { recursive: true });
+  writeFileSync(join(used.download, "stale"), "");
+  expect(used.run).toThrow("must be empty");
+  expect(() => fetchRelease("0.22.0", "main", "v", "d", { spawn: fakeGh().spawn })).toThrow("full commit SHA");
+}));
+
+test("a store-only dry run shows the release's file and the exact publish command", async () => {
+  let fetched;
+  withRelease(({ fetch }) => {
+    const { run, vsix } = fetch();
+    run();
+    // Keep a copy outside the fixture directory for the async part.
+    fetched = mkdtempSync(join(tmpdir(), "runic-editors-fetched-"));
+    for (const entry of VSIX) {
+      mkdirSync(join(fetched, entry.artifact));
+      writeFileSync(join(fetched, entry.artifact, entry.file), readFileSync(join(vsix, entry.artifact, entry.file)));
+    }
+  });
+  try {
+    const log = [], calls = [];
+    await storePublish("visualstudio", fetched, "0.22.0", { fetchImpl: fakeStores({ visualstudio: [] }).fetchImpl, log: line => log.push(line),
+      spawn: (...args) => { calls.push(args); return { status: 0 }; } });
+    expect(calls).toEqual([]);
+    const local = storePackage("visualstudio", fetched, "0.22.0");
+    expect(log).toEqual([
+      "Visual Studio Marketplace: runic-artifex.runic-devkit-vs 0.22.0.1000 is not listed (newest none); it would be published.",
+      `Dry run, would run: ${resolve(root, VSIXPUBLISHER)} publish -payload ${local.path} -publishManifest ${resolve(root, PUBLISH_MANIFEST)} -oidc`]);
+  } finally { rmSync(fetched, { recursive: true, force: true }); }
+});
+
 test("CI uploads both VSIX artifacts for the release and requires every job in verify", () => {
   const { jobs } = workflow("ci.yml");
   for (const { artifact, file } of VSIX) {
@@ -208,6 +370,9 @@ test("CI uploads both VSIX artifacts for the release and requires every job in v
   const visualStudio = jobs.visualstudio.steps.map(step => step.run ?? "");
   expect(visualStudio.findIndex(run => run.startsWith("msbuild visualstudio/"))).toBeLessThan(visualStudio.indexOf("python visualstudio/package.py --configuration Release"));
   expect(visualStudio.join("\n")).not.toContain("RunicIdeReleaseVersion");
+  // The release workflow's Visual Studio Marketplace job restores VsixPublisher in locked mode on Windows.
+  expect(jobs.visualstudio["runs-on"]).toBe(workflow("release.yml").jobs["marketplace-visualstudio"]["runs-on"]);
+  expect(visualStudio).toContain("dotnet restore eng/release/vsixpublisher --locked-mode");
 });
 
 test("the release is dispatch-only, a dry run by default, and only the publish job can write, attest or release", () => {
@@ -217,9 +382,10 @@ test("the release is dispatch-only, a dry run by default, and only the publish j
   expect(release.permissions).toEqual({ contents: "read" });
   const { candidate, publish } = release.jobs;
   expect(candidate.if).toContain("github.ref == 'refs/heads/main'");
-  expect(candidate.permissions).toEqual({ contents: "read", actions: "read" });
+  expect(candidate.permissions).toEqual({ contents: "read", actions: "read", attestations: "read" });
   expect(candidate.steps.some(step => step.uses?.startsWith("actions/attest") || / release "\$VERSION"/.test(step.run ?? ""))).toBe(false);
-  expect(publish.if).toBe("${{ !inputs.dry-run }}");
+  // Store-only creates no GitHub release.
+  expect(publish.if).toBe("${{ !inputs.dry-run && needs.candidate.outputs.mode == 'release' }}");
   expect(publish.permissions).toEqual({ contents: "write", "id-token": "write", attestations: "write", actions: "read" });
   for (const permission of ["attestations", "contents"])
     expect(Object.entries(release.jobs).filter(([, job]) => job.permissions?.[permission] === "write").map(([name]) => name)).toEqual(["publish"]);
@@ -239,6 +405,31 @@ test("the release is dispatch-only, a dry run by default, and only the publish j
   expect(index(step => step.run?.includes("sha256sum --check --strict"))).toBeLessThan(index(step => step.run?.includes("release.mjs verify")));
   expect(index(step => step.run?.includes("release.mjs verify"))).toBeLessThan(attest);
   expect(index(step => step.run === 'bun eng/release/release.mjs release "$VERSION" artifacts/vsix artifacts/release/SHA256SUMS')).toBeGreaterThan(attest);
+});
+
+test("the candidate job picks release or store-only first and takes the files from CI or from the published release", () => {
+  const { candidate } = workflow("release.yml").jobs;
+  const steps = candidate.steps;
+  const index = predicate => steps.findIndex(predicate);
+  const plan = steps.find(step => step.id === "plan");
+  expect(plan.run).toBe('bun eng/release/release.mjs release-check "$VERSION" "$STORES"');
+  expect(plan.env).toMatchObject({ GH_TOKEN: "${{ github.token }}", STORES: "${{ inputs.stores }}" });
+  expect(candidate.outputs).toMatchObject({ mode: "${{ steps.plan.outputs.mode }}", "release-commit": "${{ steps.plan.outputs.release-commit }}",
+    "vsix-sha256sums": "${{ steps.sums.outputs.sha256sums }}" });
+  const release = "steps.plan.outputs.mode == 'release'";
+  const ci = [index(step => step.id === "ci"), index(step => step.with?.["artifact-ids"]), index(step => step.id === "prepare"), index(step => step.uses?.startsWith("actions/upload-artifact@"))];
+  expect(Math.min(...ci)).toBeGreaterThan(index(step => step.id === "plan"));
+  for (const step of ci) expect([steps[step].name ?? steps[step].uses, steps[step].if]).toEqual([steps[step].name ?? steps[step].uses, release]);
+  const fetch = index(step => step.run?.includes("release.mjs fetch-release"));
+  expect(steps[fetch]).toMatchObject({ if: "steps.plan.outputs.mode == 'store-only'", env: { RELEASE_COMMIT: "${{ steps.plan.outputs.release-commit }}" },
+    run: 'bun eng/release/release.mjs fetch-release "$VERSION" "$RELEASE_COMMIT" artifacts/vsix artifacts/release' });
+  // Both modes record SHA256SUMS for the store jobs and show the dry run on the files the store jobs would publish.
+  const sums = index(step => step.id === "sums");
+  expect(steps[sums].if).toBeUndefined();
+  expect(steps[sums].run).toContain("cat artifacts/release/SHA256SUMS");
+  const dryRun = index(step => step.run?.includes("store-publish"));
+  expect(steps[dryRun].if).toBeUndefined();
+  expect(Math.min(sums, dryRun)).toBeGreaterThan(Math.max(fetch, ...ci));
 });
 
 // --- Stores ---------------------------------------------------------------------------------------------------------
@@ -402,7 +593,11 @@ test("the listing files agree with the store identities and the store limits", (
     .toEqual([{ width: 256, height: 256 }, { width: 32, height: 32 }, { width: 200, height: 200 }]);
   const tool = read("eng/release/vsixpublisher/VsixPublisher.csproj").toString();
   expect(VSIXPUBLISHER).toContain(`/microsoft.vssdk.buildtools/${/Include="Microsoft.VSSDK.BuildTools" Version="([^"]+)"/.exec(tool)[1]}/`);
-  expect(JSON.parse(read("eng/release/vsixpublisher/packages.lock.json")).dependencies[".NETFramework,Version=v4.7.2"]["Microsoft.VSSDK.BuildTools"].resolved).toBe("18.12.1606");
+  const lock = JSON.parse(read("eng/release/vsixpublisher/packages.lock.json")).dependencies[".NETFramework,Version=v4.7.2"];
+  expect(lock["Microsoft.VSSDK.BuildTools"].resolved).toBe("18.12.1606");
+  // Explicit, so the SDK never adds it implicitly on one platform only and locked-mode restore works on Linux and Windows.
+  expect(tool).toContain('<PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />');
+  expect(lock["Microsoft.NETFramework.ReferenceAssemblies"]).toMatchObject({ type: "Direct", requested: "[1.0.3, )", resolved: "1.0.3" });
 });
 
 test("the listing checks reject SVG images, plain http, missing icons and too many keywords", () => {
@@ -436,17 +631,24 @@ test("the store jobs publish the released files from the marketplace environment
     expect(job.needs).toEqual(["candidate", "publish"]);
     expect(job.environment).toBe("marketplace");
     expect(job["runs-on"]).toBe(runner);
-    expect(job.permissions).toEqual({ contents: "read", "id-token": "write", actions: "read" });
-    expect(job.if).toContain("!inputs.dry-run");
+    expect(job.permissions).toEqual({ contents: "read", "id-token": "write", attestations: "read" });
+    expect(job.if).toStartWith("${{ !cancelled() && !inputs.dry-run && needs.candidate.result == 'success'");
+    // After the publish job of a release, or with no publish job for store-only.
+    expect(job.if).toContain("(needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.candidate.outputs.mode == 'store-only'))");
     expect(job.if).toContain(`inputs.stores == 'all' || inputs.stores == '${store}'`);
     const steps = job.steps;
     const index = predicate => steps.findIndex(predicate);
-    const download = steps.find(step => step.with?.["artifact-ids"]);
-    expect(download.with).toMatchObject({ "artifact-ids": "${{ needs.candidate.outputs.vsix-artifact-ids }}", path: "artifacts/vsix", "run-id": "${{ needs.candidate.outputs.ci-run-id }}" });
+    // The store jobs publish the GitHub release's files, never CI or candidate artifacts.
+    expect(steps.some(step => step.uses?.startsWith("actions/download-artifact@"))).toBe(false);
+    const fetch = index(step => step.run?.includes("release.mjs fetch-release"));
+    expect(steps[fetch].env).toEqual({ GH_TOKEN: "${{ github.token }}", RELEASE_COMMIT: "${{ needs.candidate.outputs.release-commit }}",
+      CANDIDATE_SHA256SUMS: "${{ needs.candidate.outputs.vsix-sha256sums }}" });
+    expect(steps[fetch].run).toContain('test -n "$CANDIDATE_SHA256SUMS"');
+    expect(steps[fetch].run.trim().split("\n").at(-1))
+      .toBe('bun eng/release/release.mjs fetch-release "$VERSION" "$RELEASE_COMMIT" artifacts/vsix artifacts/release artifacts/candidate-SHA256SUMS');
     const publish = index(step => step.run === `bun eng/release/release.mjs store-publish ${store} "$VERSION" artifacts/vsix`);
-    expect(publish).toBeGreaterThan(-1);
-    expect(index(step => step.run?.includes("sha256sum --check --strict"))).toBeLessThan(index(step => step.run?.includes("release.mjs verify")));
-    expect(index(step => step.run?.includes("release.mjs verify"))).toBeLessThan(publish);
+    expect(publish).toBeGreaterThan(fetch);
+    expect(fetch).toBeGreaterThan(-1);
     expect(index(step => step.run?.startsWith(`bun eng/release/release.mjs store-verify "$VERSION" artifacts/vsix ${store}`))).toBeGreaterThan(publish);
     for (const step of steps.filter(step => step.uses)) expect(step.uses).toMatch(/@[0-9a-f]{40}$/);
   }

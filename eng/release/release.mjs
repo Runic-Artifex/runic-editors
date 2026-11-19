@@ -2,7 +2,12 @@
 //   find-ci                                        green ci.yml push run on main for GITHUB_SHA and its VSIX artifacts
 //   prepare <vsix> <version> <ci-run> <out>        check both VSIX files; write <out>/candidate.json and <out>/SHA256SUMS
 //   verify <vsix> <candidate> <version> <ci-run>   check them again against the candidate inventory
-//   release-check <version>                        tag and any release must be absent or at this commit (read-only)
+//   release-check <version> [<stores>]             tag and any release must be absent or at this commit; with <stores>
+//                                                  a single store, a published release at an ancestor commit is a
+//                                                  store-only dispatch instead (read-only; writes mode, release-commit)
+//   fetch-release <version> <commit> <vsix> <download> [<expected-sums>]
+//                                                  download the published release's VSIX files, check them against its
+//                                                  SHA256SUMS and their build-provenance attestations
 //   release <version> <vsix> <sha256sums>          create the release, or finish a draft of this commit
 //   store-check <version> <vsix> [store...]        is the version listed on the stores, and as these bytes? (read-only)
 //   store-publish <stores> <version> <vsix> [--dry-run]
@@ -13,14 +18,18 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ideVersions, vsixMetadata } from "./ide-versions.mjs";
+import { ideVersions, releaseVersion, vsixMetadata } from "./ide-versions.mjs";
 
 export const root = fileURLToPath(new URL("../..", import.meta.url));
 export const REPOSITORY = "Runic-Artifex/runic-editors";
 export const CI_WORKFLOW = ".github/workflows/ci.yml";
+// The workflow whose publish job attests the release files; it runs only from main.
+export const RELEASE_WORKFLOW = ".github/workflows/release.yml";
+// Explicit .exe on Windows, where the Visual Studio Marketplace job runs fetch-release.
+const GH = process.platform === "win32" ? "gh.exe" : "gh";
 // The VSIX files CI builds and stamps for a commit; each CI artifact holds one file, released under the same name.
 // Both extensions are Runic DevKit since 0.22 (D070.5); until 0.21 they were runic.vsix (runic-artifex.runic) and
 // runic-translations-visualstudio.vsix (Runic.Artifex.Translations.Rmf2).
@@ -152,7 +161,7 @@ const ghFailure = (what, result) => new Error(`${what} failed: ${(result.stderr 
 export function tagCommit(tag, spawn = spawnSync) {
   let path = `repos/${REPOSITORY}/git/ref/tags/${tag}`;
   for (let depth = 0; depth < 5; depth++) {
-    const result = spawn("gh", ["api", path, "--jq", '.object.type + " " + .object.sha'], { encoding: "utf8" });
+    const result = spawn(GH, ["api", path, "--jq", '.object.type + " " + .object.sha'], { encoding: "utf8" });
     if (result.status !== 0) {
       if (depth === 0 && /HTTP 404/.test(result.stderr ?? "")) return undefined;
       throw ghFailure(`Tag lookup for ${tag}`, result);
@@ -168,7 +177,7 @@ export function tagCommit(tag, spawn = spawnSync) {
 
 // The release for a tag (drafts included), or undefined only when gh reports it not found.
 function findRelease(tag, spawn) {
-  const result = spawn("gh", ["release", "view", tag, "--repo", REPOSITORY, "--json", "isDraft,url,assets,targetCommitish"], { encoding: "utf8" });
+  const result = spawn(GH, ["release", "view", tag, "--repo", REPOSITORY, "--json", "isDraft,url,assets,targetCommitish"], { encoding: "utf8" });
   if (result.status === 0) return JSON.parse(result.stdout);
   if (/release not found|HTTP 404/.test(result.stderr ?? "")) return undefined;
   throw ghFailure(`Release lookup for ${tag}`, result);
@@ -201,6 +210,107 @@ export function releaseCheck(version, source, spawn = spawnSync) {
     : `Would create the ${githubPrerelease(version) ? "prerelease" : "release"} v${version} at ${source}.`;
 }
 
+// Whether `base` is `head` or an ancestor of it, from GitHub's comparison (the workflow checkout is shallow).
+export function isAncestor(base, head, spawn = spawnSync) {
+  if (base === head) return true;
+  const result = spawn(GH, ["api", `repos/${REPOSITORY}/compare/${base}...${head}?per_page=1`, "--jq", ".status"], { encoding: "utf8" });
+  if (result.status !== 0) throw ghFailure(`Comparing ${base}...${head}`, result);
+  const status = result.stdout.trim();
+  assert.ok(["ahead", "behind", "diverged", "identical"].includes(status), `Comparing ${base}...${head} returned ${status || "nothing"}`);
+  return status === "ahead" || status === "identical";
+}
+
+// What a dispatch does (read-only):
+// - "release": the GitHub release v<version> of the dispatched commit, created (or kept, or a draft resumed) from its
+//   CI artifacts by the publish job, then the selected stores. `version` must be the one in eng/version.json, and a
+//   tag or release of another commit fails (releaseCheck).
+// - "store-only": `stores` is a single store and v<version> is a published GitHub release whose tag commit is the
+//   dispatched commit or an ancestor of it. No publish job and no new GitHub release: the store job publishes the
+//   release's own files (fetchRelease) with the workflow code of the dispatched commit. This retries a store after a
+//   fix lands on main; `all` and `none` never take this path.
+export function releasePlan(version, stores, source, { spawn = spawnSync, projectVersion = releaseVersion() } = {}) {
+  assertNewVersion(version);
+  selectStores(stores, version);
+  const tag = `v${version}`;
+  if (Object.hasOwn(STORES, stores)) {
+    const found = findRelease(tag, spawn);
+    if (found && !found.isDraft) {
+      const tagged = tagCommit(tag, spawn);
+      if (tagged === undefined) throw new Error(`GitHub release ${tag} (${found.url}) has no tag; delete it first.`);
+      if (!isAncestor(tagged, source, spawn))
+        throw new Error(`Tag ${tag} is at ${tagged}, which is not an ancestor of ${source}; a store-only dispatch runs from a main commit that contains the release.`);
+      return { mode: "store-only", commit: tagged, message: `Store-only: GitHub release ${tag} (${found.url}) is published at ${tagged}, ${tagged === source ? "the dispatched commit" : `an ancestor of ${source}`}; `
+        + `the ${STORES[stores].title} job would publish that release's files, checked against its ${SUMS} and attestations, and no GitHub release is created.` };
+    }
+    if (found?.isDraft && found.targetCommitish !== source)
+      throw new Error(`GitHub release ${tag} (${found.url}) is a draft for ${found.targetCommitish}, not published; a store-only dispatch publishes only the files of a published release.`);
+  }
+  if (version !== projectVersion) throw new Error(`${version} is not the version in eng/version.json (${projectVersion}); a GitHub release is created only from the commit that sets its version.`);
+  return { mode: "release", commit: source, message: releaseCheck(version, source, spawn) };
+}
+
+// The sha256 of each VSIX file a SHA256SUMS text lists; it must list exactly the two VSIX files, once each.
+export function parseSums(text, what = SUMS) {
+  const entries = text.split("\n").filter(line => line.trim()).map(line => {
+    const match = /^([0-9a-f]{64}) [ *](\S+)$/.exec(line);
+    if (!match) throw new Error(`${what} has a malformed line: ${line}`);
+    return [match[2], match[1]];
+  });
+  const names = entries.map(([name]) => name).sort();
+  assert.deepEqual(names, VSIX.map(entry => entry.file).sort(), `${what} must list exactly ${VSIX.map(entry => entry.file).join(" and ")}`);
+  return Object.fromEntries(entries);
+}
+
+const emptyOrAbsent = directory => !existsSync(directory) || readdirSync(directory).length === 0;
+
+// The files of the published GitHub release v<version> whose tag is at `commit`, for a store job: downloads both VSIX
+// files and SHA256SUMS into `downloadDirectory`, checks the files against SHA256SUMS and SHA256SUMS against
+// `expectedSums` (the candidate job's), verifies each file's build-provenance attestation (this repository's release
+// workflow, run on main at `commit`, on a GitHub-hosted runner), and lays the VSIX files out as
+// <vsix>/<artifact>/<file> for store-publish, checking their identities and versions. Fails unless every check passes.
+export function fetchRelease(version, commit, vsixDirectory, downloadDirectory, { spawn = spawnSync, expectedSums, log = console.log } = {}) {
+  assert.match(commit ?? "", /^[a-f0-9]{40}$/, "Expected the full commit SHA of the release tag");
+  const tag = `v${version}`;
+  const found = findRelease(tag, spawn);
+  if (!found) throw new Error(`GitHub release ${tag} does not exist.`);
+  if (found.isDraft) throw new Error(`GitHub release ${tag} (${found.url}) is not published; the stores get only the files of a published release.`);
+  const tagged = tagCommit(tag, spawn);
+  if (tagged !== commit) throw new Error(`Tag ${tag} is at ${tagged ?? "no commit"}, not ${commit}.`);
+  const names = [...VSIX.map(entry => entry.file), SUMS];
+  const present = new Set((found.assets ?? []).map(asset => asset.name));
+  const missing = names.filter(name => !present.has(name));
+  if (missing.length) throw new Error(`GitHub release ${tag} (${found.url}) has no ${missing.join(", ")}.`);
+  for (const directory of [downloadDirectory, vsixDirectory]) assert.ok(emptyOrAbsent(directory), `${directory} must be empty`);
+  mkdirSync(downloadDirectory, { recursive: true });
+  const download = spawn(GH, ["release", "download", tag, "--repo", REPOSITORY, "--dir", downloadDirectory, ...names.flatMap(name => ["--pattern", name])], { encoding: "utf8" });
+  if (download.status !== 0) throw ghFailure(`Downloading the files of ${tag}`, download);
+  assert.deepEqual(readdirSync(downloadDirectory).sort(), [...names].sort(), `The download of ${tag} must be exactly ${names.join(", ")}`);
+  const sums = parseSums(readFileSync(join(downloadDirectory, SUMS), "utf8"), `${SUMS} of ${tag}`);
+  for (const { file } of VSIX) {
+    const actual = sha256(readFileSync(join(downloadDirectory, file)));
+    if (actual !== sums[file]) throw new Error(`${file} of ${tag} has sha256 ${actual}, but its ${SUMS} lists ${sums[file]}.`);
+  }
+  if (expectedSums !== undefined) {
+    const expected = parseSums(expectedSums, "The candidate job's SHA256SUMS");
+    for (const { file } of VSIX) if (expected[file] !== sums[file])
+      throw new Error(`${file} of ${tag} has sha256 ${sums[file]}, but the candidate job checked ${expected[file]}.`);
+  }
+  for (const name of names) {
+    const result = spawn(GH, ["attestation", "verify", join(downloadDirectory, name), "--repo", REPOSITORY, "--signer-workflow", `${REPOSITORY}/${RELEASE_WORKFLOW}`,
+      "--source-ref", "refs/heads/main", "--source-digest", commit, "--deny-self-hosted-runners"], { encoding: "utf8" });
+    if (result.status !== 0) throw ghFailure(`Verifying the build-provenance attestation of ${name} of ${tag} (${RELEASE_WORKFLOW} on main at ${commit})`, result);
+  }
+  for (const { artifact, file } of VSIX) {
+    mkdirSync(join(vsixDirectory, artifact), { recursive: true });
+    copyFileSync(join(downloadDirectory, file), join(vsixDirectory, artifact, file));
+  }
+  for (const entry of scanVsix(vsixDirectory, version)) assert.equal(entry.sha256, sums[basename(entry.file)], `${entry.file} changed while copying`);
+  log(`GitHub release ${tag} (${found.url}) at ${commit}: ${names.join(", ")} downloaded; the VSIX files match its ${SUMS}`
+    + `${expectedSums === undefined ? "" : " and the candidate job's"}, and each file has a build-provenance attestation by ${REPOSITORY}/${RELEASE_WORKFLOW} on main at ${commit}.`);
+  for (const { file } of VSIX) log(`${sums[file]}  ${file}`);
+  return { tag, url: found.url, sums };
+}
+
 // Hand-written notes for a version, if eng/release/notes/<version>.md exists; gh puts them before the generated list.
 export function releaseNotes(version, directory = resolve(root, "eng/release/notes")) {
   const path = join(directory, `${version}.md`);
@@ -213,7 +323,7 @@ export function createRelease(version, source, files, spawn = spawnSync, notes =
   const tag = `v${version}`;
   const found = existingRelease(version, source, spawn);
   const gh = (args, what) => {
-    if (spawn("gh", args, { stdio: "inherit" }).status !== 0) throw new Error(`Could not ${what} GitHub release ${tag}.`);
+    if (spawn(GH, args, { stdio: "inherit" }).status !== 0) throw new Error(`Could not ${what} GitHub release ${tag}.`);
   };
   const prerelease = githubPrerelease(version);
   if (!found) gh(["release", "create", tag, ...files, "--repo", REPOSITORY, "--target", source, ...(prerelease ? ["--prerelease"] : []), "--generate-notes",
@@ -398,6 +508,13 @@ async function main([command, ...args]) {
     console.log(`The VSIX files match the candidate inventory for ${version}`);
   } else if (command === "release-check" && args.length === 1) {
     console.log(releaseCheck(args[0], head()));
+  } else if (command === "release-check" && args.length === 2) {
+    const plan = releasePlan(args[0], args[1], head());
+    console.log(plan.message);
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `mode=${plan.mode}\nrelease-commit=${plan.commit}\n`);
+  } else if (command === "fetch-release" && (args.length === 4 || args.length === 5)) {
+    const [version, commit, vsixDirectory, downloadDirectory, expected] = args;
+    fetchRelease(version, commit, vsixDirectory, downloadDirectory, { expectedSums: expected === undefined ? undefined : readFileSync(expected, "utf8") });
   } else if (command === "release" && args.length === 3) {
     const [version, vsixDirectory, sums] = args;
     const files = [...VSIX.map(entry => join(vsixDirectory, entry.artifact, entry.file)), sums];
@@ -415,7 +532,7 @@ async function main([command, ...args]) {
     const waitSeconds = wait < 0 ? 0 : Number(rest.splice(wait, 2)[1]);
     assert.ok(Number.isInteger(waitSeconds) && waitSeconds >= 0, "--wait takes whole seconds");
     await storeVerify(rest.length ? rest : selectStores("all", version).stores, vsixDirectory, version, { waitSeconds });
-  } else throw new Error("Use find-ci, prepare <vsix> <version> <ci-run-id> <output>, verify <vsix> <candidate> <version> <ci-run-id>, release-check <version>, release <version> <vsix> <sha256sums>, store-check <version> <vsix> [store...], store-publish <all|none|store> <version> <vsix> [--dry-run] or store-verify <version> <vsix> [store...] [--wait <seconds>]");
+  } else throw new Error("Use find-ci, prepare <vsix> <version> <ci-run-id> <output>, verify <vsix> <candidate> <version> <ci-run-id>, release-check <version> [<stores>], fetch-release <version> <commit> <vsix> <download> [<expected-sums>], release <version> <vsix> <sha256sums>, store-check <version> <vsix> [store...], store-publish <all|none|store> <version> <vsix> [--dry-run] or store-verify <version> <vsix> [store...] [--wait <seconds>]");
 }
 
 if (import.meta.main) main(process.argv.slice(2)).catch(error => {
