@@ -34,7 +34,7 @@ checks that `vscode/package.json` and `visualstudio/publishManifest.json` agree.
 ## Versioning
 
 The extensions are released in lockstep with the Runic release train (D066.32): each
-release takes the train's version — 0.22.0 next (0.20.0 was the first, 0.21.0 the latest), and the train's
+release takes the train's version — 0.23.0 next (0.20.0 was the first, 0.22.0 the latest), and the train's
 `1.0.0-rc.N` and `1.0.0` — and is released last, after Runic Command Line, Runic
 Translations and Runic SDK (runic-sdk). The version says which Runic SDK and
 Translations releases the extensions belong to: the merged Runic extension
