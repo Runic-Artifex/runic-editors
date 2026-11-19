@@ -510,6 +510,81 @@ public class DevSessionTests
     });
 
     [Test]
+    public Task A_dev_that_exits_while_a_child_holds_its_output_has_exited() => WithRoot(async root =>
+    {
+        var lines = new List<string>();
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // The 0.22 checklist, row 6: dev stops on its input and exits, but its frontend server lives on with dev's
+        // output pipe. dev has exited all the same, so Start works again.
+        using var dev = FakeDev(root, "sleep 60 & echo \"child=$!\"; read line; exit 130", stopOnInput: true, lines, ready);
+        Check.True(ready.Task.Wait(TimeSpan.FromSeconds(20)), "Ready line");
+        int child = 0;
+        for (int attempt = 0; attempt < 100 && child == 0; attempt++)
+        {
+            lock (lines) child = lines.Where(line => line.StartsWith("child=", StringComparison.Ordinal)).Select(line => int.Parse(line.Substring(6))).FirstOrDefault();
+            if (child == 0) await Task.Delay(100);
+        }
+        Check.True(child > 0, "the child's process ID");
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            Check.Equal(DevStop.Input, await dev.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)));
+            Check.Equal(130, await dev.Exited);
+            Check.True(watch.Elapsed < DevProcess.OutputDrainTimeout + TimeSpan.FromSeconds(3), $"exited when the process did, not when the pipe closed ({watch.Elapsed})");
+            Check.True(dev.HasExited, "has exited");
+        }
+        finally { try { Process.GetProcessById(child).Kill(); } catch (Exception error) when (error is ArgumentException or InvalidOperationException) { } }
+    });
+
+    [Test]
+    public async Task A_forced_stop_on_Windows_ends_processes_whose_parent_has_exited()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+        string root = Path.Combine(Path.GetTempPath(), $"runic-vs-devtree-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var before = new HashSet<int>(Process.GetProcessesByName("PING").Select(process => process.Id));
+        try
+        {
+            var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            // A stand-in for dev on Windows: an inner cmd starts ping and exits at once, so ping's parent is gone and
+            // taskkill /T on dev cannot find it (Vite under bun under dev, row 6); ping also holds dev's output pipe.
+            using var dev = DevProcess.Start("cmd.exe", new[] { "/d", "/c", "echo [dev] Ready& start /b cmd /d /c start /b ping -n 121 127.0.0.1& ping -n 60 127.0.0.1 >nul" },
+                Path.Combine(root, "App.csproj"), noWindow: true, line => { if (DevOutput.IsReady(line)) ready.TrySetResult(true); });
+            Check.True(ready.Task.Wait(TimeSpan.FromSeconds(20)), "Ready line");
+            List<int> Orphans() => Process.GetProcessesByName("PING").Select(process => process.Id).Where(id => !before.Contains(id)).ToList();
+            for (int attempt = 0; attempt < 100 && Orphans().Count < 2; attempt++) await Task.Delay(100);
+            Check.True(Orphans().Count >= 1, "the orphaned ping runs");
+            Check.Equal(DevStop.Forced, await dev.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)));
+            Check.True(dev.HasExited, "dev has exited");
+            for (int attempt = 0; attempt < 50 && Orphans().Count > 0; attempt++) await Task.Delay(100);
+            Check.Equal(0, Orphans().Count, "no ping left running");
+        }
+        finally
+        {
+            foreach (var process in Process.GetProcessesByName("PING").Where(process => !before.Contains(process.Id)))
+                try { process.Kill(); } catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Start_never_does_nothing_without_saying_why()
+    {
+        Check.Equal(DevStartStep.Start, DevStartGate.Decide(ownedRunning: false, stopping: false));
+        Check.Equal(DevStartStep.Start, DevStartGate.Decide(ownedRunning: false, stopping: true), "a stop that has finished");
+        Check.Equal(DevStartStep.WaitForStop, DevStartGate.Decide(ownedRunning: true, stopping: true));
+        Check.Equal(DevStartStep.AlreadyRunning, DevStartGate.Decide(ownedRunning: true, stopping: false));
+        Check.True(DevStartGate.StopWait >= DevProcess.DefaultInputStopTimeout + DevProcess.OutputDrainTimeout, "the wait covers the input stop");
+        string still = DevStartGate.StillStopping("App.csproj", 9416);
+        Check.True(still.Contains("process 9416") && still.Contains("App.csproj") && still.Contains("Stop dotnet runic dev"), still);
+        string running = DevStartGate.AlreadyRunning("App.csproj", 9416, "starting");
+        Check.True(running.Contains("process 9416") && running.Contains("starting"), running);
+        Check.True(DevStartGate.Waiting("App.csproj", 9416).Contains("process 9416"), "waiting line");
+        Check.True(DevStartGate.AlreadyActive("App.csproj", null, "ready").Contains("already runs for App.csproj (ready)"), "already active");
+        Check.True(DevStartGate.EndedLeftovers(2).StartsWith("Ended 2 processes", StringComparison.Ordinal), "leftovers");
+    }
+
+    [Test]
     public void Starting_a_missing_program_says_which()
     {
         try

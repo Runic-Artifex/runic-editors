@@ -14,12 +14,16 @@ namespace RunicArtifex.DevKit.VisualStudio.ToolWindow;
 /// unfocused selection was near-white under white text in the dark theme). Each tree maps those keys to the theme's
 /// <see cref="TreeViewColors"/> selected-active and selected-inactive brushes, again when the theme changes. Rows set no
 /// foreground of their own, so the template's selected text brush reaches the label, and the description is the same
-/// brush, dimmed, instead of a fixed grey.
+/// brush, dimmed, instead of a fixed grey. The template's unselected text is <see cref="SystemColors.ControlTextBrushKey"/>
+/// (black whatever the theme), so that key maps to the theme's tree text too: without it every row was black on the
+/// dark theme's background.
 /// </summary>
 internal static class ThemedTree
 {
-    private static readonly (object System, object Theme)[] Selection =
+    /// <summary>The Windows brushes the <see cref="TreeViewItem"/> template draws with, and the theme's brush for each.</summary>
+    private static readonly (object System, object Theme)[] Colors =
     {
+        (SystemColors.ControlTextBrushKey, TreeViewColors.BackgroundTextBrushKey),
         (SystemColors.HighlightBrushKey, TreeViewColors.SelectedItemActiveBrushKey),
         (SystemColors.HighlightTextBrushKey, TreeViewColors.SelectedItemActiveTextBrushKey),
         (SystemColors.InactiveSelectionHighlightBrushKey, TreeViewColors.SelectedItemInactiveBrushKey),
@@ -33,9 +37,9 @@ internal static class ThemedTree
         tree.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
         tree.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
         AutomationProperties.SetName(tree, name);
-        ApplySelectionColors(tree);
-        ThemeChangedEventHandler changed = _ => ApplySelectionColors(tree);
-        tree.Loaded += (_, _) => { VSColorTheme.ThemeChanged -= changed; VSColorTheme.ThemeChanged += changed; ApplySelectionColors(tree); };
+        ApplyColors(tree);
+        ThemeChangedEventHandler changed = _ => ApplyColors(tree);
+        tree.Loaded += (_, _) => { VSColorTheme.ThemeChanged -= changed; VSColorTheme.ThemeChanged += changed; ApplyColors(tree); };
         tree.Unloaded += (_, _) => VSColorTheme.ThemeChanged -= changed;
         return tree;
     }
@@ -50,9 +54,9 @@ internal static class ThemedTree
         return header;
     }
 
-    private static void ApplySelectionColors(TreeView tree)
+    private static void ApplyColors(TreeView tree)
     {
-        foreach (var (system, theme) in Selection)
+        foreach (var (system, theme) in Colors)
         {
             if (tree.TryFindResource(theme) is Brush brush) tree.Resources[system] = brush;
             else tree.Resources.Remove(system);

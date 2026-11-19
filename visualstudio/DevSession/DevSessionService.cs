@@ -51,6 +51,8 @@ internal sealed class DevSessionService
         public FileSystemWatcher? Watcher { get; set; }
         /// <summary>The <c>dev</c> this extension started, until it exits.</summary>
         public DevProcess? Run { get; set; }
+        /// <summary>Whether Stop has asked <see cref="Run"/> to stop and it has not exited yet.</summary>
+        public bool Stopping { get; set; }
         public DevProblems? Problems { get; set; }
         public int ProblemsVersion;
     }
@@ -230,8 +232,12 @@ internal sealed class DevSessionService
         if (snapshot.IsActive)
         {
             bool ideOwned = snapshot.Session?.Window?.OwnedByIde == true;
-            if (ideOwned == noWindow) return;
             string name = Path.GetFileName(project);
+            if (ideOwned == noWindow)
+            {
+                SdkOutput.WriteLine(DevStartGate.AlreadyActive(name, snapshot.Session?.ProcessId, snapshot.Label));
+                return;
+            }
             if (!StartedHere(project))
                 throw new InvalidOperationException($"dotnet runic dev (process {snapshot.Session?.ProcessId}) already runs for {name}{(ideOwned ? " without the Window" : " with its Window")} and was started outside Visual Studio; stop it with Ctrl+C in its terminal first.");
             if (!await confirmRestart($"dotnet runic dev already runs for {name}{(ideOwned ? " without the Window" : " with its Window")}. Stop it and start dotnet runic dev{(noWindow ? " --no-window" : "")}?")) return;
@@ -241,7 +247,22 @@ internal sealed class DevSessionService
         Entry? entry;
         lock (gate) entries.TryGetValue(project, out entry);
         if (entry == null) throw new InvalidOperationException($"{project} is not a Runic SDK project of this solution.");
-        if (entry.Run is { HasExited: false }) return;
+        DevProcess? previous;
+        bool stopping;
+        lock (gate) { previous = entry.Run is { HasExited: false } running ? running : null; stopping = entry.Stopping; }
+        switch (DevStartGate.Decide(previous != null, stopping))
+        {
+            case DevStartStep.WaitForStop:
+                SdkOutput.WriteLine(DevStartGate.Waiting(Path.GetFileName(project), previous!.ProcessId));
+                if (await Task.WhenAny(previous.Exited, Task.Delay(DevStartGate.StopWait, cancellationToken)) != previous.Exited)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new InvalidOperationException(DevStartGate.StillStopping(Path.GetFileName(project), previous.ProcessId));
+                }
+                break;
+            case DevStartStep.AlreadyRunning:
+                throw new InvalidOperationException(DevStartGate.AlreadyRunning(Path.GetFileName(project), previous!.ProcessId, Refresh(project).Label));
+        }
 
         string dotnet = await RunicSdkState.DotnetAsync(cancellationToken);
         await TaskScheduler.Default;
@@ -285,7 +306,8 @@ internal sealed class DevSessionService
         _ = run.Exited.ContinueWith(task =>
         {
             SdkOutput.WriteLine($"dotnet runic dev exited with code {task.Result} ({Path.GetFileName(project)}).");
-            lock (gate) if (ReferenceEquals(entry.Run, run)) entry.Run = null;
+            if (run.EndedLeftovers > 0) SdkOutput.WriteLine(DevStartGate.EndedLeftovers(run.EndedLeftovers));
+            lock (gate) if (ReferenceEquals(entry.Run, run)) { entry.Run = null; entry.Stopping = false; }
             run.Dispose();
             entry.Follower.Refresh();
             Raise();
@@ -305,6 +327,7 @@ internal sealed class DevSessionService
         if (run is { HasExited: false })
         {
             SdkOutput.WriteLine($"Stopping dotnet runic dev (process {run.ProcessId}) for {Path.GetFileName(project)}.");
+            lock (gate) if (ReferenceEquals(entry!.Run, run)) entry.Stopping = true;
             var how = await run.StopAsync(DevProcess.DefaultInputStopTimeout, StopTimeout);
             if (run.StopOnInput && how == DevStop.Forced)
                 SdkOutput.WriteLine($"dotnet runic dev did not stop on its input within {DevProcess.DefaultInputStopTimeout.TotalSeconds:0} seconds; ended it by force.");
