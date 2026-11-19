@@ -109,12 +109,21 @@ runs its own task of type `runic`:
 Its `$runic-dev` and `$runic-dev-no-window` problem matchers are the template's:
 `$msCompile`'s pattern for `dev`'s faults (`RAPPDEV`) and the build's errors
 (`CS`, `RUNICBRIDGE`), and a background task that is ready at each
-`[dev] Ready`. The pattern skips the `[host] ` label that `dev` writes before
-each build line. With `dotnet-runic` 0.22 and later, the extension runs `dev` in
-its own terminal and reports its problems itself, because a problem matcher keeps
-every problem of a build cycle: a C# error leaves Problems at the `[dev] Ready`
-after its fix (`dev` is ready only after a build that succeeded), and warnings
-stay until the next cycle.
+`[dev] Ready`. The pattern skips the label that `dev` writes before each line
+of a process it runs (`[host] `, `[vite] `). With `dotnet-runic` 0.22 and later,
+the extension runs `dev` in its own terminal and reports its problems itself,
+because a problem matcher keeps every problem of a build cycle: a C# error
+leaves Problems at the `[dev] Ready` after its fix (`dev` is ready only after a
+build that succeeded), and warnings stay until the next cycle.
+
+From `dotnet-runic` 0.23, `dev` also prints each frontend (Vite) error as one
+line with code `RUNICP008`, for example
+`[vite] /…/Frontend/src/App.tsx(29,50): error RUNICP008: [vite:oxc] …`, and
+`[vite] [runic] Frontend errors cleared` once the files compile again
+(runic-sdk#1212). The extension's terminal shows those errors in Problems and
+removes them, and only them, at the clear line; `[dev] Ready` leaves them in
+place. A process task's problem matcher shows them too, but keeps them until
+the next build cycle (runic-editors#52).
 
 The extension follows `obj/runic/dev-session.json`
 (`runic.application.tool.dev-session/1`, see "Session file" in the
