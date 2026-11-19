@@ -35,7 +35,9 @@ Translations](README.md#moving-from-runic-or-runic-mf2-translations).
   to a `dev` with its Window, so a CS-WebUI Window opens its DevTools Protocol
   port, and **Stop dotnet runic dev** asks `dev` to stop on its standard input,
   so it marks its session stopped and removes its development pages, on Windows
-  too; after 10 seconds it is ended by force. Older tools run as in 0.21.
+  too; after 10 seconds it is ended by force. Older tools run as in 0.21. The
+  `dev` terminal ends when the `dev` process exits, even while a child it
+  started still holds its output (runic-editors#41).
 - When a `dev` was killed (its session file still says starting or ready, but
   the process is gone), the extension touches `obj/runic/dev-stopped` once, as
   `dev` does when it stops, so the next build restores the production frontend
