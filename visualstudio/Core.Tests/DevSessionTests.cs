@@ -555,7 +555,7 @@ public class DevSessionTests
         finally { try { Process.GetProcessById(child).Kill(); } catch (Exception error) when (error is ArgumentException or InvalidOperationException) { } }
     });
 
-    [Test]
+    [Test, NotInParallel("pings")]
     public async Task A_forced_stop_on_Windows_ends_processes_whose_parent_has_exited()
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
@@ -567,8 +567,12 @@ public class DevSessionTests
             var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             // A stand-in for dev on Windows: an inner cmd starts ping and exits at once, so ping's parent is gone and
             // taskkill /T on dev cannot find it (Vite under bun under dev, row 6); ping also holds dev's output pipe.
-            using var dev = DevProcess.Start("cmd.exe", new[] { "/d", "/c", "echo [dev] Ready& start /b cmd /d /c start /b ping -n 121 127.0.0.1& ping -n 60 127.0.0.1 >nul" },
+            // It starts them only once Start has returned (a line on its input), as dev starts its children only after
+            // the dotnet host has loaded: a child started before the job and whose parent exited before Start swept
+            // for children cannot be found (runic-editors#58, where this test raced the job).
+            using var dev = DevProcess.Start("cmd.exe", new[] { "/d", "/c", "echo [dev] Ready& set /p go=& start /b cmd /d /c start /b ping -n 121 127.0.0.1& ping -n 60 127.0.0.1 >nul" },
                 Path.Combine(root, "App.csproj"), noWindow: true, line => { if (DevOutput.IsReady(line)) ready.TrySetResult(true); });
+            dev.WriteInputLine("go");
             Check.True(ready.Task.Wait(TimeSpan.FromSeconds(20)), "Ready line");
             List<int> Orphans() => Process.GetProcessesByName("PING").Select(process => process.Id).Where(id => !before.Contains(id)).ToList();
             for (int attempt = 0; attempt < 100 && Orphans().Count < 2; attempt++) await Task.Delay(100);
@@ -577,6 +581,34 @@ public class DevSessionTests
             Check.True(dev.HasExited, "dev has exited");
             for (int attempt = 0; attempt < 50 && Orphans().Count > 0; attempt++) await Task.Delay(100);
             Check.Equal(0, Orphans().Count, "no ping left running");
+        }
+        finally
+        {
+            foreach (var process in Process.GetProcessesByName("PING").Where(process => !before.Contains(process.Id)))
+                try { process.Kill(); } catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Test, NotInParallel("pings")]
+    public async Task A_forced_stop_on_Windows_ends_children_dev_started_before_its_job()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+        // runic-editors#58: Process.Start returns a running process, so a child it starts at once can come before the job
+        // is assigned. Start puts those in the job as well; ending the job first used to cut taskkill's parent links.
+        string root = Path.Combine(Path.GetTempPath(), $"runic-vs-devjob-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var before = new HashSet<int>(Process.GetProcessesByName("PING").Select(process => process.Id));
+        List<int> Pings() => Process.GetProcessesByName("PING").Select(process => process.Id).Where(id => !before.Contains(id)).ToList();
+        try
+        {
+            using var dev = DevProcess.Start("cmd.exe", new[] { "/d", "/c", "start /b ping -n 121 127.0.0.1 >nul& echo [dev] Ready& ping -n 60 127.0.0.1 >nul" },
+                Path.Combine(root, "App.csproj"), noWindow: true, _ => { });
+            for (int attempt = 0; attempt < 100 && Pings().Count < 2; attempt++) await Task.Delay(100);
+            Check.Equal(2, Pings().Count, "both pings run");
+            Check.Equal(DevStop.Forced, await dev.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)));
+            for (int attempt = 0; attempt < 50 && Pings().Count > 0; attempt++) await Task.Delay(100);
+            Check.Equal(0, Pings().Count, "no ping left running");
         }
         finally
         {

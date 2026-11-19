@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
@@ -36,6 +38,53 @@ internal sealed class DevProcessTree : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Puts the processes that <paramref name="root"/> started before it was assigned in the job too, with their
+    /// descendants (runic-editors#58): <c>Process.Start</c> returns a running process, so a child it starts at once
+    /// (a stand-in <c>cmd</c>, or a <c>dev</c> on a busy machine) can come before <see cref="TryAssign"/>, and would
+    /// stay outside the job. A process created before the root is not its child, whatever its parent ID says (a reused
+    /// ID). Returns how many it assigned. A child whose own parent has exited by now cannot be found.
+    /// </summary>
+    public int AssignDescendants(Process root)
+    {
+        lock (gate)
+        {
+            if (job == IntPtr.Zero) return 0;
+            DateTime rootStart;
+            try { rootStart = root.StartTime.ToUniversalTime(); }
+            catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { return 0; }
+            int assigned = 0;
+            foreach (int id in PosixProcessTree.Tree(root.Id, Parents()).Skip(1))
+            {
+                IntPtr handle = OpenProcess(ProcessSetQuota | ProcessTerminate | ProcessQueryLimitedInformation, false, id);
+                if (handle == IntPtr.Zero) continue;
+                try
+                {
+                    if (GetProcessTimes(handle, out long created, out _, out _, out _) && DateTime.FromFileTimeUtc(created) >= rootStart
+                        && AssignProcessToJobObject(job, handle)) assigned++;
+                }
+                finally { CloseHandle(handle); }
+            }
+            return assigned;
+        }
+    }
+
+    /// <summary>Every running process's parent ID (a Toolhelp snapshot).</summary>
+    private static Dictionary<int, int> Parents()
+    {
+        var parents = new Dictionary<int, int>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(SnapProcess, 0);
+        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1)) return parents;
+        try
+        {
+            var entry = new ProcessEntry32 { dwSize = (uint)Marshal.SizeOf<ProcessEntry32>() };
+            for (bool more = Process32First(snapshot, ref entry); more; more = Process32Next(snapshot, ref entry))
+                parents[(int)entry.th32ProcessID] = (int)entry.th32ParentProcessID;
+        }
+        finally { CloseHandle(snapshot); }
+        return parents;
+    }
+
     /// <summary>Ends every process still in the job; returns how many there were.</summary>
     public int EndAll()
     {
@@ -67,6 +116,35 @@ internal sealed class DevProcessTree : IDisposable
         public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
         public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
     }
+
+    private const uint SnapProcess = 0x00000002;
+    private const uint ProcessTerminate = 0x0001, ProcessSetQuota = 0x0100, ProcessQueryLimitedInformation = 0x1000;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry32
+    {
+        public uint dwSize, cntUsage, th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID, cntThreads, th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "Process32FirstW")]
+    private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "Process32NextW")]
+    private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inherit, int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern IntPtr CreateJobObject(IntPtr attributes, string? name);
