@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio;
@@ -28,6 +29,8 @@ namespace RunicArtifex.DevKit.VisualStudio.DevSession;
 /// Studio builds. Its first version listened to the solution build's <c>UpdateProjectCfg_Begin</c> for the launch flags,
 /// which Visual Studio 18.12 does not pass for these launches (only the build flag arrives), and a launch whose fast
 /// up-to-date check skips the build raises no project build event at all (runic-editors#26).
+/// The same command target turns Debug.BreakAll during Debug the Window into a break of the .NET Window alone
+/// (<see cref="BreakAllCommand"/>, runic-editors#43).
 /// </remarks>
 internal sealed class DevLaunchGuard : IOleCommandTarget
 {
@@ -67,6 +70,7 @@ internal sealed class DevLaunchGuard : IOleCommandTarget
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         const int passOn = (int)OleConstants.OLECMDERR_E_NOTSUPPORTED;
+        if (BreakAllCommand.Is(pguidCmdGroup, nCmdID)) return BreakWindowOnly() ? VSConstants.S_OK : passOn;
         if (DevGuard.LaunchKind(pguidCmdGroup, nCmdID) is not { } debug) return passOn;
         try
         {
@@ -80,6 +84,31 @@ internal sealed class DevLaunchGuard : IOleCommandTarget
             SdkOutput.WriteLine("The F5 check for dotnet runic dev failed: " + error.Message);
         }
         return passOn;
+    }
+
+    /// <summary>
+    /// Break All while Debug the Window debugs a WebView2 Window and its page: breaks the Window's CoreCLR process alone
+    /// (<see cref="BreakAllCommand"/>, runic-editors#43). True when it did; false passes Break All on.
+    /// </summary>
+    private static bool BreakWindowOnly()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            var windows = Debugging.PageAttach.LaunchedWindows("webview2");
+            if (windows.Count == 0) return false;
+            if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is not EnvDTE.DTE dte || dte.Debugger.CurrentMode != EnvDTE.dbgDebugMode.dbgRunMode) return false;
+            var debugged = dte.Debugger.DebuggedProcesses.OfType<EnvDTE.Process>().ToList();
+            if (BreakAllCommand.Target(debugged.Select(process => { ThreadHelper.ThrowIfNotOnUIThread(); return process.ProcessID; }).ToList(), windows) is not { } target) return false;
+            debugged.First(process => { ThreadHelper.ThrowIfNotOnUIThread(); return process.ProcessID == target; }).Break(false);
+            SdkOutput.WriteLine(BreakAllCommand.BrokeWindowOnlyMessage(target));
+            return true;
+        }
+        catch (Exception error) when (error is COMException or InvalidOperationException or ArgumentException)
+        {
+            SdkOutput.WriteLine($"Break All: could not stop the .NET Window alone ({error.Message}); Visual Studio breaks all processes.");
+            return false;
+        }
     }
 
     /// <summary>F5 in break mode continues the session; the guard only checks a launch from design mode.</summary>

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace RunicArtifex.DevKit.VisualStudio.Core;
 
@@ -82,4 +84,37 @@ public sealed class BreakAllProcessesGuard
         write(true);
         return true;
     }
+}
+
+/// <summary>
+/// Debug → Break All while Debug the Window debugs a WebView2 page (runic-editors#43, D077.6). Break All stops the .NET
+/// Window and the page. The Window's stopped UI thread blocks WebView2's browser process, so the page's part of the break
+/// cannot finish and Visual Studio repeats "The script document cannot be opened". DevKit's priority command target turns
+/// Break All into a break of the CoreCLR process alone; the page keeps running, and its breakpoints still stop it.
+/// </summary>
+public static class BreakAllCommand
+{
+    /// <summary>Debug.BreakAll's command set (guidVSStd97).</summary>
+    public static readonly Guid CommandSet = DevGuard.LaunchCommandSet;
+    /// <summary>Debug.BreakAll (Ctrl+Alt+Break): command 180 of guidVSStd97, as DTE's <c>Commands.Item("Debug.BreakAll")</c> reports it in Visual Studio 18.12.</summary>
+    public const uint BreakAll = 180;
+
+    public static bool Is(Guid commandSet, uint command) => commandSet == CommandSet && command == BreakAll;
+
+    /// <summary>
+    /// The process Break All should stop instead: a WebView2 Window that Debug the Window started and the debugger runs,
+    /// while it also debugs another process (the page). Null passes Break All on unchanged: no such Window, or only the
+    /// Window is debugged (its page did not attach), when Break All stops nothing else anyway.
+    /// </summary>
+    public static int? Target(IReadOnlyCollection<int> debuggedProcessIds, IReadOnlyCollection<int> webView2Windows)
+    {
+        if (debuggedProcessIds.Count < 2) return null;
+        foreach (int window in webView2Windows)
+            if (debuggedProcessIds.Contains(window)) return window;
+        return null;
+    }
+
+    /// <summary>The Runic SDK Output pane's line when Break All stopped only the Window.</summary>
+    public static string BrokeWindowOnlyMessage(int processId) =>
+        $"Break All: stopped the .NET Window (process {processId}) only. The page keeps running: a stopped Window would block WebView2, and the page's part of the break would fail with \"The script document cannot be opened\" (runic-editors#43). Page breakpoints still stop the page.";
 }
