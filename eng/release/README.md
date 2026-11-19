@@ -144,7 +144,7 @@ The publish jobs follow D070.11–D070.14. Open VSX is deferred.
 | Store | Job | Identity | Versions | Tool |
 | --- | --- | --- | --- | --- |
 | VS Code Marketplace | `marketplace-vscode` (ubuntu) | `runic-artifex.runic-devkit` | every release; `x.y.z-rc.N`/`-preview.N` with `--pre-release` | `@vscode/vsce` 4.1.1 (`vscode/bun.lock`): `vsce publish --packagePath <vsix> --oidc --skip-duplicate [--pre-release]` |
-| Visual Studio Marketplace | `marketplace-visualstudio` (windows-2025) | `runic-artifex.runic-devkit-vs` | final versions only | `VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -oidc` from `Microsoft.VSSDK.BuildTools` 18.12.1606 |
+| Visual Studio Marketplace | `marketplace-visualstudio` (windows-2025) | `runic-artifex.runic-devkit-vs` | final versions only | `release.mjs` exchanges the job's GitHub OIDC token as vsce does, then `VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -personalAccessToken <exchanged token>` from `Microsoft.VSSDK.BuildTools` 18.12.1606 ([VsixPub0047](#vsixpublisher-oidc-workaround-vsixpub0047)) |
 
 The version mapping is the one in [IDE extension versions](#ide-extension-versions):
 0.22.0 is VS Code `0.22.1000` (a normal Marketplace release with the Preview label)
@@ -173,9 +173,12 @@ checks the VSIX identities and versions. Then it runs `release.mjs store-publish
    bytes and pre-release flag is skipped (so reruns are safe, and VsixPublisher,
    which overwrites a listed version, never runs twice); a version listed with
    other bytes or flag, or a newer listed version, fails the job.
-2. It prints and runs the publish command. Both tools exchange the job's GitHub
-   OIDC token for a short-lived Marketplace credential; the workflow stores no
-   token and removes `VSCE_PAT` from the tools' environment.
+2. It prints and runs the publish command. The job's GitHub OIDC token is
+   exchanged for a short-lived Marketplace credential: by vsce itself
+   (`--oidc`), and for Visual Studio by `release.mjs`, which hands the masked
+   credential to VsixPublisher because VsixPublisher's own `-oidc` exchange is
+   broken ([VsixPub0047](#vsixpublisher-oidc-workaround-vsixpub0047)). The
+   workflow stores no token and removes `VSCE_PAT` from the tools' environment.
 3. `store-verify` waits up to 20 minutes for the store's scan and checks that the
    store lists the version with the right pre-release flag and serves the release's
    bytes.
@@ -199,7 +202,10 @@ dispatch, also after a fix to the release tooling has landed on `main`:
    `fetch-release`'s line that the files of `v<version>` were downloaded, match
    its `SHA256SUMS` and are attested by `release.yml` on main at the tag commit,
    with the two `sha256sum` lines, then the store check and the exact publish
-   command.
+   command. For `visualstudio` that is the `Dry run, would exchange the job's
+   GitHub OIDC token …` line and a `VsixPublisher.exe publish … -personalAccessToken
+   <marketplace-token-from-github-oidc>` command: the placeholder, because a dry
+   run requests no OIDC token.
 3. Dispatch again without dry-run with the same inputs. The `publish` job is
    skipped (no `release` approval, no new release or attestation); the store job
    waits for the `marketplace` reviewers and publishes the release's files with the
@@ -233,7 +239,8 @@ Q&A is off on both stores; questions go to GitHub issues (D070.14).
 
 **VsixPublisher.** The extension still builds with `Microsoft.VSSDK.BuildTools`
 18.9.820 (`visualstudio/RunicArtifex.DevKit.VisualStudio.csproj`). The publish job
-restores 18.12.1606, the first version whose VsixPublisher has `-oidc`, from the
+restores 18.12.1606, the first version whose VsixPublisher has `-oidc` (which is
+broken, [VsixPub0047](#vsixpublisher-oidc-workaround-vsixpub0047)), from the
 restore-only project [`vsixpublisher/`](vsixpublisher/VsixPublisher.csproj) in
 locked mode, so publishing does not move the build toolchain. The project
 references `Microsoft.NETFramework.ReferenceAssemblies` explicitly: the .NET SDK
@@ -270,8 +277,9 @@ landed in (D070.11). The rules:
   maintainer's GitHub account owns it; there is no second owner for now (D070.16).
 - **Trusted publishing only** (D070.14). The `marketplace` environment has
   required reviewers, deployment branch `main` only and no secrets; the job
-  exchanges its GitHub OIDC token for a short-lived credential
-  (`VsixPublisher.exe publish -oidc`). Never add a personal access token.
+  exchanges its GitHub OIDC token for a short-lived credential and hands it to
+  VsixPublisher ([VsixPub0047](#vsixpublisher-oidc-workaround-vsixpub0047),
+  D072.25). Never add a personal access token.
 - **Visual Studio 2026 x64 only** (D070.14): the manifest's single installation
   target is `[18.0,19.0)` with product architecture `amd64`, which `package.py`
   enforces. There is no ARM64 test machine, so no ARM64 target.
@@ -293,8 +301,11 @@ publish on their own):
    candidate job's log, `store-publish visualstudio … --dry-run` must show the
    `runic-artifex.runic-devkit-vs` identity from `publishManifest.json`, report the
    version as not yet listed (a listed version with other bytes, or a newer listed
-   version, fails here), and print the `VsixPublisher.exe publish -payload … -publishManifest
-   visualstudio/publishManifest.json -oidc` command.
+   version, fails here), say that it would exchange the job's GitHub OIDC token at
+   `POST https://marketplace.visualstudio.com/_apis/gallery/token?api-version=7.2-preview.1`,
+   and print the `VsixPublisher.exe publish -payload … -publishManifest
+   visualstudio/publishManifest.json -personalAccessToken
+   <marketplace-token-from-github-oidc>` command.
 3. Dispatch again without dry-run (**stores** `all`, or `visualstudio` to publish to
    this store alone after the GitHub release exists). The `publish` job waits for
    the `release` environment's reviewers, the store jobs for the `marketplace`
@@ -315,6 +326,50 @@ publish on their own):
    **stores** `visualstudio`, dry run first. It publishes the GitHub release's own
    `runic-devkit-vs.vsix` (checked against `SHA256SUMS` and its attestation), not a
    new build; the GitHub release and the VS Code listing stay as they are.
+
+#### VsixPublisher OIDC workaround (VsixPub0047)
+
+`VsixPublisher.exe publish -oidc` of `Microsoft.VSSDK.BuildTools` 18.12.1606, the
+newest on nuget.org, cannot publish: its exchange POSTs the GitHub OIDC token to
+`https://marketplace.visualstudio.com/_apis/gallery/token` without an
+`api-version` (and with `Authorization: Bearer`), and the Marketplace refuses it
+with `VsixPub0047: Could not exchange the OIDC token for a Marketplace session
+token: {"message":"No api-version was supplied for the \"POST\" request. …",
+"typeName":"Microsoft.VisualStudio.Services.WebApi.VssVersionNotSpecifiedException"}`.
+This failed the store-only retry of 0.22.0 (run 44467138693), while `vsce publish
+--oidc` against the same Marketplace and publisher succeeded.
+
+So `store-publish visualstudio` exchanges the token itself, exactly as
+`@vscode/vsce` 4.1.1 does (`out/oidc.js`), in `release.mjs` `marketplaceToken`:
+
+1. `GET $ACTIONS_ID_TOKEN_REQUEST_URL&audience=marketplace.visualstudio.com` with
+   `Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN` (the job's
+   `id-token: write`); the GitHub OIDC token is the response's `value`.
+2. `POST https://marketplace.visualstudio.com/_apis/gallery/token?api-version=7.2-preview.1`
+   with `Authorization: FederatedToken <GitHub OIDC token>`, `Content-Type` and
+   `Accept: application/json` and the body `{"publisherName":"runic-artifex"}`;
+   the Marketplace token is the response's `credential`. The publisher's Trusted
+   Publishing policy (`Runic-Artifex/runic-editors`, `release.yml`, environment
+   `marketplace`) decides whether the exchange succeeds.
+3. Both tokens are masked (`::add-mask::`) before anything else is logged, and
+   VsixPublisher gets the credential as `-personalAccessToken`, its only token
+   input: it reads none from the environment or stdin, and its `-oidc` path
+   feeds its own exchanged credential into the same `VssBasicCredential`. The
+   shown command has the placeholder `<marketplace-token-from-github-oidc>`, and
+   VsixPublisher runs without the `ACTIONS_ID_TOKEN_REQUEST_*` variables. The
+   token expires on its own and is never written anywhere.
+
+`release.test.mjs` pins the requests, the masking, the dry run without a token,
+and the failure messages, and compares the exchange with the installed vsce. When
+Microsoft fixes `-oidc`, set `VSIXPUBLISHER_NATIVE_OIDC` in `release.mjs` to
+`true` and `store-publish` runs `VsixPublisher.exe publish … -oidc` again.
+Report or follow the bug in the Marketplace's issue tracker,
+<https://github.com/microsoft/vsmarketplace/issues>.
+
+If VsixPublisher rejects the exchanged token (the publish step fails after the
+`Exchanged the job's GitHub OIDC token …` line), the maintainer decides again
+(D072.25): upload the release's `runic-devkit-vs.vsix` on the publisher's manage
+page, or defer the Visual Studio listing.
 
 To withdraw a broken version, publish a fixed patch release (D026: patches only for
 security and severe regressions); unlisting on the publisher's manage page is the

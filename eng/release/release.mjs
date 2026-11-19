@@ -432,17 +432,73 @@ export async function storeCheck(name, vsixDirectory, version, { fetchImpl = fet
   return { action: "publish", message: `${store.title}: ${store.itemName} ${local.version} is not listed (newest ${newest ?? "none"}); it would be published.` };
 }
 
-// The exact publish command of a store, without credentials: both use GitHub OIDC trusted publishing.
-export function publishCommand(name, local, { vsixPublisher = resolve(root, VSIXPUBLISHER), manifest = resolve(root, PUBLISH_MANIFEST) } = {}) {
+// Trusted publishing for VsixPublisher (D072.25). The `-oidc` exchange of VsixPublisher 18.12.1606 POSTs the GitHub
+// OIDC token to _apis/gallery/token without an api-version, and the Marketplace refuses it (VsixPub0047,
+// VssVersionNotSpecifiedException). So the Visual Studio job exchanges the token itself, exactly as @vscode/vsce 4.1.1
+// does for `vsce publish --oidc` (out/oidc.js), and hands the short-lived credential to VsixPublisher through
+// -personalAccessToken, its only token input: its own -oidc path puts the exchanged credential into the same
+// VssBasicCredential. Set this to true once Microsoft fixes -oidc, to let VsixPublisher exchange the token again.
+export const VSIXPUBLISHER_NATIVE_OIDC = false;
+export const MARKETPLACE_URL = "https://marketplace.visualstudio.com";
+// The audience, endpoint, api-version and headers of vsce 4.1.1's exchange.
+export const OIDC_AUDIENCE = "marketplace.visualstudio.com";
+export const TOKEN_EXCHANGE = `${MARKETPLACE_URL}/_apis/gallery/token?api-version=7.2-preview.1`;
+// Stands in for the exchanged token wherever the VsixPublisher command is shown; the token itself is never printed.
+export const TOKEN_PLACEHOLDER = "<marketplace-token-from-github-oidc>";
+
+// The exact publish command of a store. Both use GitHub OIDC trusted publishing: vsce and (with nativeOidc)
+// VsixPublisher exchange the token themselves; otherwise VsixPublisher gets the token marketplaceToken exchanged.
+export function publishCommand(name, local, { vsixPublisher = resolve(root, VSIXPUBLISHER), manifest = resolve(root, PUBLISH_MANIFEST),
+  nativeOidc = VSIXPUBLISHER_NATIVE_OIDC, token = TOKEN_PLACEHOLDER } = {}) {
   if (name === "vscode") return ["node", resolve(root, VSCE), "publish", "--packagePath", local.path, "--oidc", "--skip-duplicate",
     ...(local.preRelease ? ["--pre-release"] : [])];
-  return [vsixPublisher, "publish", "-payload", local.path, "-publishManifest", manifest, "-oidc"];
+  return [vsixPublisher, "publish", "-payload", local.path, "-publishManifest", manifest, ...(nativeOidc ? ["-oidc"] : ["-personalAccessToken", token])];
+}
+
+async function requestJson(operation, url, init, fetchImpl) {
+  let response, body;
+  try {
+    response = await fetchImpl(url, init);
+    body = await response.text();
+  } catch (error) { throw new Error(`${operation} failed: ${error?.message ?? error}`); }
+  if (!response.ok) {
+    let details = body.trim().slice(0, 500);
+    try {
+      const parsed = JSON.parse(body);
+      const message = parsed?.message ?? parsed?.error_description ?? parsed?.error;
+      if (typeof message === "string" && message) details = message;
+    } catch { /* Keep the plain body. */ }
+    throw new Error(`${operation} failed with ${response.status}${response.statusText ? ` ${response.statusText}` : ""}${details ? `: ${details}` : "."}`);
+  }
+  try { return JSON.parse(body); } catch { throw new Error(`${operation} returned no JSON.`); }
+}
+
+// GitHub OIDC trusted publishing as vsce does it: the job's GitHub OIDC token for the Marketplace audience, exchanged
+// for a short-lived Marketplace credential of the publisher. Masks both tokens in the job log before anything else
+// can print them, and returns the credential; nothing stores it.
+export async function marketplaceToken({ env = process.env, fetchImpl = fetch, publisher = MARKETPLACE.publisher, log = console.log } = {}) {
+  const { ACTIONS_ID_TOKEN_REQUEST_URL: requestUrl, ACTIONS_ID_TOKEN_REQUEST_TOKEN: requestToken } = env;
+  if (!requestUrl || !requestToken) throw new Error("GitHub Actions provides no OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL, ACTIONS_ID_TOKEN_REQUEST_TOKEN); the job needs `permissions: id-token: write`.");
+  let tokenUrl;
+  try { tokenUrl = new URL(requestUrl); } catch { throw new Error("GitHub Actions provides an invalid ACTIONS_ID_TOKEN_REQUEST_URL."); }
+  tokenUrl.searchParams.set("audience", OIDC_AUDIENCE);
+  const oidc = (await requestJson("GitHub Actions OIDC token request", tokenUrl.toString(), { method: "GET",
+    headers: { Accept: "application/json", Authorization: `Bearer ${requestToken}` } }, fetchImpl))?.value;
+  if (typeof oidc !== "string" || !/^\S+$/.test(oidc)) throw new Error("GitHub Actions OIDC token request returned no token.");
+  log(`::add-mask::${oidc}`);
+  const credential = (await requestJson("Marketplace OIDC token exchange", TOKEN_EXCHANGE, { method: "POST", headers: { Accept: "application/json",
+    Authorization: `FederatedToken ${oidc}`, "Content-Type": "application/json", "User-Agent": "release.mjs" },
+    body: JSON.stringify({ publisherName: publisher }) }, fetchImpl))?.credential;
+  if (typeof credential !== "string" || !/^\S+$/.test(credential)) throw new Error("Marketplace OIDC token exchange returned no credential.");
+  log(`::add-mask::${credential}`);
+  log(`Exchanged the job's GitHub OIDC token (audience ${OIDC_AUDIENCE}) for a short-lived ${publisher} Marketplace token: POST ${TOKEN_EXCHANGE}.`);
+  return credential;
 }
 
 // Checks each selected store, prints its exact publish command and runs it unless this is a dry run. A dry run
 // contacts only the stores' public read APIs.
 export async function storePublish(input, vsixDirectory, version, { dryRun = true, fetchImpl = fetch, spawn = spawnSync, log = console.log,
-  env = process.env, vsixPublisher } = {}) {
+  env = process.env, vsixPublisher, nativeOidc = VSIXPUBLISHER_NATIVE_OIDC } = {}) {
   const { stores, skipped } = selectStores(input, version);
   for (const name of skipped) log(`${STORES[name].title}: skipped, it gets final versions only (no pre-release channel) and ${version} is not one.`);
   if (!stores.length && !skipped.length) log("No store selected.");
@@ -450,15 +506,29 @@ export async function storePublish(input, vsixDirectory, version, { dryRun = tru
     const check = await storeCheck(name, vsixDirectory, version, { fetchImpl });
     log(check.message);
     if (check.action !== "publish") continue;
-    const command = publishCommand(name, storePackage(name, vsixDirectory, version), { vsixPublisher });
+    const local = storePackage(name, vsixDirectory, version);
+    // Shown with TOKEN_PLACEHOLDER: the exchanged token never reaches the log.
+    let command = publishCommand(name, local, { vsixPublisher, nativeOidc });
     const shown = command.map(part => (/[\s"']/.test(part) ? JSON.stringify(part) : part)).join(" ");
-    if (dryRun) { log(`Dry run, would run: ${shown}`); continue; }
+    const exchange = name === "visualstudio" && !nativeOidc;
+    if (dryRun) {
+      if (exchange) log(`Dry run, would exchange the job's GitHub OIDC token (audience ${OIDC_AUDIENCE}) for a short-lived Marketplace token at POST ${TOKEN_EXCHANGE} and pass it as ${TOKEN_PLACEHOLDER} (VsixPublisher -oidc fails with VsixPub0047).`);
+      log(`Dry run, would run: ${shown}`);
+      continue;
+    }
     if (name === "visualstudio") assert.ok(existsSync(command[0]), `VsixPublisher.exe not found at ${command[0]}; restore eng/release/vsixpublisher first`);
-    log(`Running: ${shown}`);
-    // Trusted publishing only: never hand a stored token to the publish tools.
+    // Trusted publishing only: never hand a stored token to the publish tools. VsixPublisher gets the token exchanged
+    // here and no means to request another one.
     const { VSCE_PAT: _vscePat, ...childEnv } = env;
+    if (exchange) {
+      command = publishCommand(name, local, { vsixPublisher, nativeOidc, token: await marketplaceToken({ env, fetchImpl, log }) });
+      delete childEnv.ACTIONS_ID_TOKEN_REQUEST_URL;
+      delete childEnv.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+    }
+    log(`Running: ${shown}`);
     const result = spawn(command[0], command.slice(1), { stdio: "inherit", env: childEnv });
-    if (result.status !== 0) throw new Error(`${STORES[name].title} publish failed (exit ${result.status ?? result.error?.message ?? "unavailable"}).`);
+    if (result.status !== 0) throw new Error(`${STORES[name].title} publish failed (exit ${result.status ?? result.error?.message ?? "unavailable"})${exchange
+      ? "; VsixPublisher had the Marketplace token exchanged from the job's GitHub OIDC token (eng/release/README.md, \"Publishing to the Visual Studio Marketplace\")" : ""}.`);
   }
   return stores;
 }
