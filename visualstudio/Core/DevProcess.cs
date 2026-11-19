@@ -102,8 +102,11 @@ public sealed class DevProcess : IDisposable
         try { if (!process.Start()) throw new InvalidOperationException($"Could not start {program}."); }
         catch (System.ComponentModel.Win32Exception error) { process.Dispose(); throw new InvalidOperationException($"Could not start {program}: {error.Message}", error); }
         dev.ProcessId = process.Id;
-        // dev (the dotnet host) starts its own children only after it has loaded, so they start in the job.
+        // The job takes the process now and, as children it started before this line run outside the job unless assigned
+        // too (runic-editors#58), what it has started already; everything those start later is in the job by inheritance.
         dev.tree = DevProcessTree.TryAssign(process);
+        try { dev.tree?.AssignDescendants(process); }
+        catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or DllNotFoundException or EntryPointNotFoundException) { }
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         // An exit before the handler was attached to the started process raises no Exited event.
@@ -159,10 +162,11 @@ public sealed class DevProcess : IDisposable
         {
             if (windows)
             {
-                // The job holds the whole tree, also the processes whose parent has exited; taskkill covers a dev
-                // whose job could not be created.
-                tree?.EndAll();
+                // taskkill first, while dev still runs: it follows parent IDs from dev, which ending the job's processes
+                // first would cut (runic-editors#58), and it covers a dev whose job could not be created. Then the job
+                // ends the rest, also the processes whose parent has exited.
                 Run("taskkill", $"/PID {ProcessId} /T /F");
+                tree?.EndAll();
             }
             else PosixProcessTree.Signal("INT", posixTree);
         }
@@ -185,6 +189,13 @@ public sealed class DevProcess : IDisposable
         try { process.Kill(); } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
         await Task.WhenAny(Exited, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
         return DevStop.Forced;
+    }
+
+    /// <summary>Writes a line to the process's input (tests: a stand-in that waits for it).</summary>
+    internal void WriteInputLine(string line)
+    {
+        process.StandardInput.WriteLine(line);
+        process.StandardInput.Flush();
     }
 
     /// <summary>Writes the <c>stop</c> line and closes the input; false when the pipe is gone already.</summary>
