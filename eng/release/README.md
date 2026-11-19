@@ -267,7 +267,11 @@ policy the OIDC exchange fails and nothing is published.
 
 The Visual Studio extension, **Runic DevKit** `runic-artifex.runic-devkit-vs`, goes
 to the Visual Studio Marketplace from 0.22.0, the release Visual Studio parity
-landed in (D070.11). The rules:
+landed in (D070.11). 0.22.0 itself was uploaded on the publisher's manage page
+(the v0.22.0 release's `runic-devkit-vs.vsix`, checked against its `SHA256SUMS`
+and attestation; a one-time exception, D072.26) after VsixPublisher 18.12.1606
+failed twice (VsixPub0047, VsixPub0031). The next final release is the first
+that the job publishes. The rules:
 
 - **Final versions only** (D070.11). The job runs only for a version without `-`:
   `1.0.0-rc.N` and `-preview.N` versions reach Visual Studio users through the
