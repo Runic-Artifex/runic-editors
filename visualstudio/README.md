@@ -198,7 +198,8 @@ then waits for the stopped Window, stops answering the JavaScript debugger, and
 Visual Studio hangs on "a debugger operation is taking a long time". So a
 TSX breakpoint pauses the page while the .NET code runs on, and a C# breakpoint
 pauses the .NET code while the page's JavaScript runs on (its Bridge calls wait).
-Attach to the Page does the same for a WebView2 page. If Visual Studio ends while
+Attach to the Page does the same for a WebView2 page. **Debug → Break All**
+stops only the .NET Window in a Debug the Window session (see Known limits). If Visual Studio ends while
 the option is off, DevKit turns it on again the next time it loads. If you have
 turned the option off yourself, it stays off. Debug the Window waits for the page up to three
 minutes of the Window running (time stopped at a .NET breakpoint does not
@@ -465,10 +466,16 @@ work when the settings are empty; set them before starting Visual Studio.
   the main thread). DevKit ends that adapter after 60 seconds; Visual Studio
   then shows its own error about the attach and responds again, and a close
   you asked for meanwhile finishes (runic-editors#44).
-- **Debug → Break All while the page runs** stops the .NET Window, and WebView2
-  with it, so the page's part of the break fails: Visual Studio may say "The
-  script document cannot be opened". Continue, or stop debugging, to go on.
-  Breakpoints in the page are not affected.
+- **Debug → Break All in Debug the Window stops the .NET Window only.** A
+  stopped Window would block WebView2, so the page's part of the break would
+  fail and Visual Studio would repeat "The script document cannot be opened"
+  (runic-editors#43). DevKit therefore turns Break All, while Debug the Window
+  debugs a WebView2 Window and its page, into a break of the Window's CoreCLR
+  process; the page keeps running, the Runic SDK Output pane says so, and page
+  breakpoints still stop the page. To pause the page's JavaScript, use a page
+  breakpoint or `debugger;`. Break All in other sessions (F5, Attach to the
+  Page alone, CS-WebUI) is unchanged; with Attach to the Page on a Window that
+  DevKit did not start, Break All still stops both sides.
 
 ## Layout
 

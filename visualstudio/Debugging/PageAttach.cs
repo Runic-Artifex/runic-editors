@@ -58,6 +58,16 @@ internal static class PageAttach
         }
     }
 
+    /// <summary>The process IDs of running Windows Debug the Window started with a page of <paramref name="engine"/> (Break All, runic-editors#43).</summary>
+    public static IReadOnlyList<int> LaunchedWindows(string engine)
+    {
+        lock (gate)
+        {
+            launched.RemoveAll(item => !IsRunning(item.ProcessId));
+            return launched.Where(item => string.Equals(item.Endpoint.Engine, engine, StringComparison.OrdinalIgnoreCase)).Select(item => item.ProcessId).Distinct().ToList();
+        }
+    }
+
     public static bool IsRunning(int processId)
     {
         if (processId <= 0) return false;

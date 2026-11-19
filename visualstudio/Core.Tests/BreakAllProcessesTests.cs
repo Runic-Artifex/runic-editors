@@ -100,3 +100,25 @@ public class BreakAllProcessesTests
         Check.True(guard.Restore(), "its end restores");
     }
 }
+
+/// <summary>runic-editors#43: Break All during Debug the Window stops only the .NET Window.</summary>
+public class BreakAllCommandTests
+{
+    [Test]
+    public void Only_Debug_BreakAll_is_redirected()
+    {
+        Check.True(BreakAllCommand.Is(DevGuard.LaunchCommandSet, BreakAllCommand.BreakAll), "Debug.BreakAll");
+        Check.True(!BreakAllCommand.Is(DevGuard.LaunchCommandSet, DevGuard.StartCommand), "Debug.Start");
+        Check.True(!BreakAllCommand.Is(System.Guid.Empty, BreakAllCommand.BreakAll), "another command set");
+    }
+
+    [Test]
+    public void The_Window_is_the_target_while_its_page_is_debugged_too()
+    {
+        Check.Equal<int?>(4242, BreakAllCommand.Target(new[] { 4242, 7 }, new[] { 4242 }), "Window and page");
+        Check.Equal<int?>(null, BreakAllCommand.Target(new[] { 4242 }, new[] { 4242 }), "only the Window: Break All as usual");
+        Check.Equal<int?>(null, BreakAllCommand.Target(new[] { 1, 7 }, new[] { 4242 }), "a session Debug the Window did not start");
+        Check.Equal<int?>(null, BreakAllCommand.Target(new[] { 4242, 7 }, System.Array.Empty<int>()), "no WebView2 Window");
+        Check.True(BreakAllCommand.BrokeWindowOnlyMessage(4242).Contains("process 4242"), "message");
+    }
+}
