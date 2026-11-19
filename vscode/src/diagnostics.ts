@@ -1,9 +1,10 @@
 /**
- * Runic diagnostic codes from `dotnet runic` (`RAPPCLI`, `RAPPDEV`, `RAPPPKG`, `RCLI`) and the Bridge generator and build
- * targets (`RUNICBRIDGE`). They reach the Problems panel through the `$msCompile`-based problem matchers of the `dev` and
- * build tasks; each has an entry in runic-sdk's diagnostics catalog under its lowercase code.
+ * Runic diagnostic codes from `dotnet runic` (`RAPPCLI`, `RAPPDEV`, `RAPPPKG`, `RCLI`), the Bridge generator and build
+ * targets (`RUNICBRIDGE`), and the Vite plugin (`RUNICP`: frontend errors after `dev`'s `[vite] ` label, runic-sdk 0.23).
+ * They reach the Problems panel through the `$msCompile`-based problem matchers of the `dev` and build tasks; each has
+ * an entry in runic-sdk's diagnostics catalog under its lowercase code.
  */
-export const runicCodePattern = /^(?:RUNICBRIDGE|RAPPCLI|RAPPDEV|RAPPPKG|RCLI)\d{3,4}$/;
+export const runicCodePattern = /^(?:RUNICBRIDGE|RAPPCLI|RAPPDEV|RAPPPKG|RCLI|RUNICP)\d{3,4}$/;
 
 export function isRunicCode(code: string): boolean {
   return runicCodePattern.test(code);

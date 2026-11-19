@@ -19,6 +19,15 @@ export const beginsPattern = /^\[dev\] (Evaluating|Window exited|Reloading)/;
 export const beginsNoWindowPattern = /^\[dev\] Evaluating/;
 /** `[dev] Ready`, which `dev` prints only after a build that succeeded. */
 export const readyPattern = /^\[dev\] Ready$/;
+/**
+ * `[vite] [runic] Frontend errors cleared` (runic-sdk 0.23, runic-sdk#1212): each module that failed compiles again, so
+ * the {@link frontendErrorCode} problems go.
+ */
+export const frontendClearedPattern = /^\[vite\] \[runic\] Frontend errors cleared$/;
+/** The code of a frontend (Vite) error, which `dev` prints in MSBuild form after its `[vite] ` label (runic-sdk 0.23). */
+export const frontendErrorCode = "RUNICP008";
+
+const isFrontendError = (problem: DevProblem) => problem.code.toUpperCase() === frontendErrorCode;
 
 // eslint-disable-next-line no-control-regex
 const escapePattern = /\x1B\[[0-9;?]*[ -/]*[@-~]/g;
@@ -64,7 +73,9 @@ export function parseDevProblem(line: string, directory: string): DevProblem | u
  * A new build cycle replaces the previous cycle's problems, as a background matcher does. `[dev] Ready` also drops the
  * errors read before it, which a background matcher cannot: after a failed build `dotnet watch` waits for a change,
  * rebuilds and starts the Window again without a new `[dev] Window exited`, so the fixed build's cycle is the failed
- * one's, and a matcher keeps every problem it read in a cycle. Warnings stay until the next cycle.
+ * one's, and a matcher keeps every problem it read in a cycle. Warnings stay until the next cycle. Frontend errors
+ * ({@link frontendErrorCode}, after `dev`'s `[vite] ` label) stay until `[vite] [runic] Frontend errors cleared` or the
+ * next cycle (runic-editors#52); the problem matchers of a process task keep them until the next cycle.
  */
 export class DevProblems {
   private items: DevProblem[] = [];
@@ -81,19 +92,24 @@ export class DevProblems {
       this.items = []; this.seen.clear();
       return true;
     }
-    if (readyPattern.test(line.trimEnd())) {
-      const kept = this.items.filter(item => item.severity !== "error");
-      if (kept.length === this.items.length) return false;
-      this.items = kept;
-      this.seen.clear();
-      for (const item of kept) this.seen.add(key(item));
-      return true;
-    }
+    // A .NET build that succeeded fixes the build errors, not the frontend's.
+    if (readyPattern.test(line.trimEnd())) return this.keep(item => item.severity !== "error" || isFrontendError(item));
+    if (frontendClearedPattern.test(line.trimEnd())) return this.keep(item => !isFrontendError(item));
     const problem = parseDevProblem(line, this.directory);
     // MSBuild repeats a build's diagnostics in its summary; one problem each.
     if (!problem || this.seen.has(key(problem))) return false;
     this.seen.add(key(problem));
     this.items.push(problem);
+    return true;
+  }
+
+  /** Keeps the problems that match; true when that dropped any. */
+  private keep(match: (problem: DevProblem) => boolean): boolean {
+    const kept = this.items.filter(match);
+    if (kept.length === this.items.length) return false;
+    this.items = kept;
+    this.seen.clear();
+    for (const item of kept) this.seen.add(key(item));
     return true;
   }
 }

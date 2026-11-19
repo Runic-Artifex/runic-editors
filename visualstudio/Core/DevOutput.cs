@@ -22,6 +22,13 @@ public static class DevOutput
     private static readonly Regex BeginsWithWindow = new(@"^\[dev\] (Evaluating|Window exited|Reloading)", RegexOptions.CultureInvariant);
     private static readonly Regex BeginsNoWindow = new(@"^\[dev\] Evaluating", RegexOptions.CultureInvariant);
     private static readonly Regex Ends = new(@"^\[dev\] Ready$", RegexOptions.CultureInvariant);
+    private static readonly Regex FrontendCleared = new(@"^\[vite\] \[runic\] Frontend errors cleared$", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The code of a frontend (Vite) error that <c>dev</c> prints as an MSBuild-form line after its <c>[vite] </c> label
+    /// (runic-sdk 0.23, runic-sdk#1212): <c>[vite] /…/Frontend/src/App.tsx(29,50): error RUNICP008: [vite:oxc] …</c>.
+    /// </summary>
+    public const string FrontendErrorCode = "RUNICP008";
     private static readonly Regex Escape = new(@"\x1B\[[0-9;?]*[ -/]*[@-~]", RegexOptions.CultureInvariant);
     /// <summary>
     /// The label <c>dev</c> puts before each line of a process it runs (<c>[host] </c>, <c>[app] </c>, <c>[vite] </c>;
@@ -67,15 +74,26 @@ public static class DevOutput
 
     /// <summary><c>[dev] Ready</c>.</summary>
     public static bool IsReady(string line) => Ends.IsMatch(Plain(line).TrimEnd());
+
+    /// <summary>
+    /// <c>[vite] [runic] Frontend errors cleared</c>: each module that failed compiles again, so the
+    /// <see cref="FrontendErrorCode"/> rows go (runic-sdk 0.23).
+    /// </summary>
+    public static bool IsFrontendErrorsCleared(string line) => FrontendCleared.IsMatch(Plain(line).TrimEnd());
+
+    /// <summary>Whether the entry is a frontend (Vite) error, which only <see cref="IsFrontendErrorsCleared"/> or a new cycle removes.</summary>
+    public static bool IsFrontendError(RunicErrorEntry entry) => string.Equals(entry.Code, FrontendErrorCode, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
 /// The Error List entries of one running <c>dotnet runic dev</c>: <see cref="Add"/> each output line (standard output
 /// and error); it returns true when the entries changed. Not thread-safe; the caller serializes lines.
 /// <para>
-/// <c>[dev] Ready</c> also drops the errors read before it: <c>dev</c> is ready only after a build that succeeded, so
-/// they belong to a build that the fix replaced (after a failed build <c>dotnet watch</c> waits for a change, rebuilds
-/// and starts the Window again without a new <c>Window exited</c>). Warnings stay until the next cycle.
+/// <c>[dev] Ready</c> also drops the build errors read before it: <c>dev</c> is ready only after a build that succeeded,
+/// so they belong to a build that the fix replaced (after a failed build <c>dotnet watch</c> waits for a change, rebuilds
+/// and starts the Window again without a new <c>Window exited</c>). Warnings stay until the next cycle. Frontend errors
+/// (<see cref="DevOutput.FrontendErrorCode"/>, after the <c>[vite] </c> label) stay until
+/// <c>[vite] [runic] Frontend errors cleared</c> or the next cycle (runic-editors#52).
 /// </para>
 /// </summary>
 public sealed class DevProblems
@@ -102,14 +120,9 @@ public sealed class DevProblems
             entries.Clear(); seen.Clear();
             return true;
         }
-        if (DevOutput.IsReady(line))
-        {
-            int removed = entries.RemoveAll(kept => kept.Severity == RunicErrorSeverity.Error);
-            if (removed == 0) return false;
-            seen.Clear();
-            foreach (var kept in entries) seen.Add(Key(kept));
-            return true;
-        }
+        // A .NET build that succeeded fixes the build errors, not the frontend's.
+        if (DevOutput.IsReady(line)) return Remove(entry => entry.Severity == RunicErrorSeverity.Error && !DevOutput.IsFrontendError(entry));
+        if (DevOutput.IsFrontendErrorsCleared(line)) return Remove(DevOutput.IsFrontendError);
         if (DevOutput.Parse(line, directory, toolVersion) is not { } entry) return false;
         // MSBuild repeats a build's diagnostics in its summary; one entry each.
         if (!seen.Add(Key(entry))) return false;
@@ -117,7 +130,15 @@ public sealed class DevProblems
         return true;
     }
 
-    private static string Key(RunicErrorEntry entry) => $"{entry.Severity}|{entry.File}|{entry.Line}|{entry.Column}|{entry.Text}";
+    private bool Remove(Predicate<RunicErrorEntry> match)
+    {
+        if (entries.RemoveAll(match) == 0) return false;
+        seen.Clear();
+        foreach (var kept in entries) seen.Add(Key(kept));
+        return true;
+    }
+
+        private static string Key(RunicErrorEntry entry) => $"{entry.Severity}|{entry.File}|{entry.Line}|{entry.Column}|{entry.Text}";
 }
 
 /// <summary>What the pre-F5 guard does when F5 (or Ctrl+F5) starts a Runic startup project (D070.6).</summary>

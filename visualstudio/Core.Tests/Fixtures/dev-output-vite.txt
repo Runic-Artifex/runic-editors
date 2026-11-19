@@ -1,0 +1,9 @@
+[dev] Evaluating Views Window project...
+[host] /tmp/t1160/App/WorkspaceViewModel.cs(77,26): error CS1002: ; expected [/tmp/t1160/App/App.csproj]
+[dev] Ready
+[vite] 1:11:03 PM [vite] (client) hmr update /src/App.tsx
+[vite] /tmp/t1160/App/Frontend/src/App.tsx(29,50): error RUNICP008: [vite:oxc] [PARSE_ERROR] Expected corresponding JSX closing tag for 'p'.
+[host] /tmp/t1160/App/WorkspaceViewModel.cs(77,26): error CS1002: ; expected [/tmp/t1160/App/App.csproj]
+[dev] Ready
+[vite] 1:11:06 PM [vite] (client) hmr update /src/App.tsx
+[vite] [runic] Frontend errors cleared
