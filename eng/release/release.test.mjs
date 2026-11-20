@@ -74,6 +74,13 @@ test("each VSIX must carry its identity and the version CI stamps for the releas
   } finally { rmSync(vsix, { recursive: true, force: true }); }
 });
 
+test("the store checks download a publicly served asset: the VSIX package, or the Visual Studio file by its own name", () => {
+  // Microsoft.VisualStudio.Ide.Payload is listed but not served publicly (0.23.1's release run 44793782021).
+  expect(STORES.vscode.asset).toBe("Microsoft.VisualStudio.Services.VSIXPackage");
+  expect(STORES.visualstudio.asset).toBe(STORES.visualstudio.vsix.file);
+  expect(STORES.visualstudio.asset).toBe("runic-devkit-vs.vsix");
+});
+
 test("both extensions are Runic DevKit, with the store identities D070.5 fixed", () => {
   // Store identities are permanent once published: change them only with a new decision record.
   expect(VSIX.map(({ file, id, publisher }) => [file, id, publisher])).toEqual([
