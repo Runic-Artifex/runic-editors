@@ -20,7 +20,8 @@ public enum ServerTrustDecision
 /// The language server's trust gate (DEV-SEC-86), Visual Studio's counterpart of VS Code's workspace trust. Starting the
 /// server runs <c>dotnet tool run runic-translations</c> in the tool manifest's folder, and <c>dotnet</c> reads that
 /// folder's <c>global.json</c>, NuGet configuration and tool manifest, so a folder can make it run code of its own.
-/// Visual Studio has no extension API for its trust decision; a solution it opened has passed its own checks (Mark of
+/// Visual Studio documents no extension API for its trust decision (18.12 only references an internal, undocumented
+/// <c>SVsTrustService</c>); a solution it opened has passed its own checks (Mark of
 /// the Web) and already runs its projects' code in design-time builds, so a manifest in the solution's folder starts at
 /// once. Any other folder (a lone document, a manifest above the solution, a folder another user can write such as
 /// <c>C:\</c>) needs the user's yes once, remembered per folder.

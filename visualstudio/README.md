@@ -274,9 +274,9 @@ runtime, outside Visual Studio's process. The extension never downloads or
 restores a tool.
 
 `dotnet` uses the tool manifest's folder: its `global.json`, NuGet configuration
-and manifest can make it run code from that folder. Visual Studio offers
-extensions no workspace-trust API, so DevKit has its own gate, the counterpart of
-VS Code's Restricted Mode. A manifest in the open solution's folder (or below it)
+and manifest can make it run code from that folder. Visual Studio documents no
+workspace-trust API for extensions, so DevKit has its own gate, the counterpart
+of VS Code's Restricted Mode. A manifest in the open solution's folder (or below it)
 starts the server at once: Visual Studio opened that solution and already runs
 its projects' code in design-time builds. A manifest anywhere else (above the
 solution, or for a document opened without a solution) starts it only after you
