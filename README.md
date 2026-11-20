@@ -16,12 +16,12 @@ Install them from the stores (since 0.22.0) or from a VSIX file:
 | --- | --- | --- |
 | VS Code | [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit) (`code --install-extension runic-artifex.runic-devkit`); release candidates as pre-releases | `runic-devkit.vsix` from the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases) |
 | Visual Studio 2026 | [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit-vs) (**Extensions > Manage Extensions**); final versions only | `runic-devkit-vs.vsix` from the GitHub releases, also for release candidates |
-| VSCodium, Cursor, Windsurf and other Open VSX editors | Not on Open VSX for now | `runic-devkit.vsix` from the GitHub releases |
+| VSCodium, Cursor, Windsurf and other Open VSX editors | Not on Open VSX (deferred, D070.15) | `runic-devkit.vsix` from the GitHub releases |
 
 Both moved here from
 [runic-translations-sdk](https://github.com/Runic-Artifex/runic-translations-sdk)
 with their history (`tools/vscode-runic-translations`,
-`tools/visualstudio-runic-translations`). Both are **previews**. Each release
+`tools/visualstudio-runic-translations`). Each release
 attaches both VSIX files to
 the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
 of this repository and, since 0.22.0, publishes them to the Marketplaces above
@@ -57,7 +57,8 @@ dotnet tool install dotnet-runic-translations --version <VERSION>
 
 | Translations (`dotnet-runic-translations`) | Extensions |
 | --- | --- |
-| 0.14.0 | runic-editors 0.22.0 and this repository's `main`; CI runs the VS Code host test against this release from NuGet, with its protocol 2 refactorings (F2 for inputs and slots, Extract Group and Inline Resource) |
+| 0.15.0 | runic-editors 0.23.0 and this repository's `main`; CI runs the VS Code host test against this release from NuGet. Its language server speaks only protocol 2, which Runic DevKit 0.22 and later ask for; runic-editors 0.21 and earlier cannot use it |
+| 0.14.0 | runic-editors 0.22.0, with its protocol 2 refactorings (F2 for inputs and slots, Extract Group and Inline Resource); 0.23.0 still works with it |
 | 0.13.0 | runic-editors 0.21.0; 0.22.0 still works with it, without the protocol 2 refactorings |
 | 0.12.0 | runic-editors 0.20.0 |
 | 0.11.0 and older | The VSIX files attached to that [Translations release](https://github.com/Runic-Artifex/runic-translations-sdk/releases) |

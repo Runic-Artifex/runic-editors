@@ -57,7 +57,7 @@ internal sealed class AttachToPageCommand : RunicCommandHandler
         {
             await BreakAllProcesses.SuspendForAsync(endpoint.Engine, "Attach to the Page");
             await PageAttach.SetStatusAsync($"Runic: attaching the JavaScript debugger to {endpoint.Url}…");
-            var pages = await PageAttach.TryAttachAsync(endpoint.Url, cancellationToken, listing => SdkOutput.WriteLine("Attach to the Page: " + listing));
+            var pages = await PageAttach.TryAttachAsync(endpoint.Url, endpoint.WindowProcessId, cancellationToken, listing => SdkOutput.WriteLine("Attach to the Page: " + listing));
             if (pages.Count == 0) throw new System.InvalidOperationException($"The DevTools endpoint {endpoint.Url} shows no page yet; try again once the Window shows its page.");
             SdkOutput.WriteLine($"Attached the JavaScript debugger to {string.Join(", ", pages)} ({endpoint.Url}).");
         }

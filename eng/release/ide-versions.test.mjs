@@ -32,7 +32,7 @@ const compare = (a, b) => {
 
 test("maps a release onto the Visual Studio and VS Code version formats", () => {
   for (const [release, visualStudio, vscode, vscodePreRelease] of table)
-    expect(ideVersions(release)).toEqual({ release, visualStudio, vscode, vscodePreRelease, vscodePreview: true });
+    expect(ideVersions(release)).toEqual({ release, visualStudio, vscode, vscodePreRelease, vscodePreview: false });
 });
 
 test("IDE versions sort in release order and a prerelease never takes a final release's number", () => {
@@ -62,7 +62,7 @@ test("refuses versions the IDE formats cannot express", () => {
 // folded VS Code patch fits the Marketplace's 32-bit component.
 test("the largest components map within both IDE limits", () => {
   expect(ideVersions("65534.65534.65534")).toEqual({ release: "65534.65534.65534", visualStudio: "65534.65534.65534.1000",
-    vscode: "65534.65534.65535000", vscodePreRelease: false, vscodePreview: true });
+    vscode: "65534.65534.65535000", vscodePreRelease: false, vscodePreview: false });
   expect(ideVersions("65534.65534.65534-rc.499").vscode).toBe("65534.65534.65534999");
   expect(65534 * 1000 + 1000).toBeLessThanOrEqual(2 ** 31 - 1);
 });
@@ -139,7 +139,7 @@ test("both manifests take their version from the build, never from a committed n
     .toContain('<Identity Id="RunicArtifex.DevKit.VisualStudio" Version="|%CurrentProject%;GetRunicVsixVersion|"');
   const extension = JSON.parse(read("vscode/package.json"));
   expect(extension.scripts.package).toBe("bun run build && node package.mjs");
-  // package.mjs stamps "preview" (always true until 2.0); CI also packages a final release to check it.
+  // package.mjs stamps "preview" (false since 0.23, D077.4); CI also packages a final release to check it.
   expect(read("vscode/package.mjs")).toContain("preview: versions.vscodePreview }");
   const steps = Bun.YAML.parse(read(".github/workflows/ci.yml")).jobs.vscode.steps;
   expect(steps.find(step => step.name === "Build, test and package the VS Code extension").run.split("\n"))

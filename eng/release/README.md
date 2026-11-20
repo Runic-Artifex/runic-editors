@@ -11,7 +11,7 @@ from the released commit and a `SHA256SUMS` file:
 
 After the GitHub release, the same files are published to the VS Code
 Marketplace and, for final versions, the Visual Studio Marketplace through trusted
-publishing ([Stores](#stores)). Runic DevKit is not on Open VSX for now: users of
+publishing ([Stores](#stores)). Runic DevKit is not on Open VSX (deferred, D070.15): users of
 VSCodium, Cursor, Windsurf and other Open VSX editors install the VSIX from the
 GitHub release.
 
@@ -67,9 +67,9 @@ can be packaged, and each of major, minor and patch is at most 65534 (Visual Stu
 reads each component as a 16-bit `System.Version` part). Visual Studio's fourth
 component is the preview number, 500 plus the release-candidate number, or 1000 for
 a final release; VS Code folds it into the patch (`patch × 1000 + revision`) and
-packages a prerelease with `vsce package --pre-release`. Every release carries the
-VS Code `"preview": true` field (the Marketplace "Preview" label): the extensions
-are a preview product until the production language server (2.0).
+packages a prerelease with `vsce package --pre-release`. Since 0.23 no release
+carries the Marketplace "Preview" label (D070.2, D077.4): `package.mjs` stamps the
+VS Code `"preview": false` field, and the Visual Studio manifest has no `<Preview>`.
 
 - `bun run package` in `vscode` (`package.mjs`) stages the files `vsce ls` lists,
   stamps the staged `package.json` and packs it, then checks the VSIX identity,
@@ -147,8 +147,8 @@ The publish jobs follow D070.11–D070.14. Open VSX is deferred.
 | Visual Studio Marketplace | `marketplace-visualstudio` (windows-2025) | `runic-artifex.runic-devkit-vs` | final versions only | `release.mjs` exchanges the job's GitHub OIDC token as vsce does, then `VsixPublisher.exe publish -payload <vsix> -publishManifest visualstudio/publishManifest.json -personalAccessToken <exchanged token>` from `Microsoft.VSSDK.BuildTools` 18.11.1098 ([VsixPub0047](#vsixpublisher-oidc-workaround-vsixpub0047), [VsixPub0031](#vsixpublisher-oidc-workaround-vsixpub0047)) |
 
 The version mapping is the one in [IDE extension versions](#ide-extension-versions):
-0.22.0 is VS Code `0.22.1000` (a normal Marketplace release with the Preview label)
-and Visual Studio `0.22.0.1000`; `1.0.0-rc.N` is VS Code `1.0.(500+N)` as a
+0.23.0 is VS Code `0.23.1000` (a normal Marketplace release; 0.22.0 still had the Preview label)
+and Visual Studio `0.23.0.1000`; `1.0.0-rc.N` is VS Code `1.0.(500+N)` as a
 Marketplace pre-release, which only users who opt in receive, and is not published
 to Visual Studio, which has no pre-release channel and would offer it to everyone.
 `1.0.0` (`1.0.1000`) then sorts above every release candidate.
@@ -232,8 +232,8 @@ are the VS Code listing; `package.mjs` packs them with relative links pointing a
 the release tag (`--baseContentUrl`/`--baseImagesUrl`) and checks the icon (PNG,
 at least 128 px), at most 30 keywords, and no SVG images or `http:` links. The
 Visual Studio listing is `visualstudio/publishManifest.json`, `overview.md` and the
-manifest's `MoreInfo`, `ReleaseNotes`, `Icon`, `PreviewImage`, `Tags` and
-`<Preview>true</Preview>`, checked by `package.py`. The icons are rendered from the
+manifest's `MoreInfo`, `ReleaseNotes`, `Icon`, `PreviewImage` and `Tags`, checked by
+`package.py`, which also refuses `<Preview>true</Preview>` (no Preview label since 0.23). The icons are rendered from the
 Runic Artifex brand mark by [`eng/brand/render-icons.sh`](../brand/render-icons.sh).
 Q&A is off on both stores; questions go to GitHub issues (D070.14).
 
@@ -322,8 +322,8 @@ publish on their own):
    release's bytes.
 5. After the first publish, open
    <https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit-vs>:
-   the page must show the Preview label (VsixPublisher has dropped it before:
-   microsoft/vsmarketplace#905), the icon, the overview and no Q&A tab. Then install
+   the page must show no Preview label from 0.23.0 on (VsixPublisher has mishandled
+   the flag before: microsoft/vsmarketplace#905), the icon, the overview and no Q&A tab. Then install
    it in Visual Studio 2026 through Extensions > Manage Extensions and check that
    Tools > Runic appears in a Runic solution.
 6. If the job failed after the GitHub release, fix the cause on `main` and

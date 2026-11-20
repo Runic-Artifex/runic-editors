@@ -1,9 +1,8 @@
 # Runic DevKit for Visual Studio
 
-**Preview** for Visual Studio 2026 (18.x) on Windows x64. Its commands, settings
-and the `lsp` protocol it uses are outside the 1.0 compatibility rules and may
-change in a minor release. Visual Studio 2022 (17.x) and ARM64 are not
-supported.
+For Visual Studio 2026 (18.x) on Windows x64. Before 1.0, a minor release can
+still change commands and settings; the release notes list every change. Visual
+Studio 2022 (17.x) and ARM64 are not supported.
 
 One extension for the Runic SDK and Runic Translations, as
 [Runic DevKit for VS Code](../vscode/README.md):
@@ -215,6 +214,15 @@ and the .NET debugger stays attached.
 debugger alone to a page that already runs with an endpoint: the session file's
 `debugEndpoints` (WebView2's, and since runic-sdk 0.22 a CS-WebUI Window's) and
 the Windows that Debug the Window started. With several, it asks which one.
+It leaves out an endpoint the session also lists as unavailable.
+
+Both commands attach only to `127.0.0.1`, never to `localhost`, which can
+resolve to `[::1]`, where another user's program may listen. Before attaching,
+DevKit checks which process listens on the port: the Window, a process the
+Window started, or a process of yours started after the Window (CS-WebUI's
+browser). When another program holds the port, such as another user's on
+CS-WebUI's fixed 9225, DevKit does not attach, and the message names that
+process. Close it, or start the Window again.
 
 Page debugging needs:
 
@@ -271,7 +279,20 @@ The extension finds the nearest `.config/dotnet-tools.json` from the active
 document (or solution), respecting `isRoot`, and starts
 `dotnet tool run runic-translations -- lsp`. The tool runs on its own .NET
 runtime, outside Visual Studio's process. The extension never downloads or
-restores a tool; use trusted projects. If the server cannot start, an InfoBar
+restores a tool.
+
+`dotnet` uses the tool manifest's folder: its `global.json`, NuGet configuration
+and manifest can make it run code from that folder. Visual Studio documents no
+workspace-trust API for extensions, so DevKit has its own gate, the counterpart
+of VS Code's Restricted Mode. A manifest in the open solution's folder (or below it)
+starts the server at once: Visual Studio opened that solution and already runs
+its projects' code in design-time builds. A manifest anywhere else (above the
+solution, or for a document opened without a solution) starts it only after you
+answer **Yes** to DevKit's question, which names the folder. DevKit remembers the
+Yes for that folder in Visual Studio's user settings; after a **No** it does not
+ask again until **Tools → Runic → Restart Language Server**. A server DLL you set
+in Options (or `RUNIC_TRANSLATIONS_SERVER`) is your choice and is not asked about.
+If the server cannot start, an InfoBar
 says why once per solution, with **Show output** and install help. One server
 serves the Visual Studio session; **Tools → Runic → Restart Language Server**
 restarts it, for example after switching solutions or changing the tool.
@@ -478,6 +499,14 @@ work when the settings are empty; set them before starting Visual Studio.
   breakpoint or `debugger;`. Break All in other sessions (F5, Attach to the
   Page alone, CS-WebUI) is unchanged; with Attach to the Page on a Window that
   DevKit did not start, Break All still stops both sides.
+- **A C# breakpoint hit while you work in the page holds the page's
+  debugging and input until Continue.** When a .NET breakpoint or exception
+  stops the Window while the page has the focus, Visual Studio takes the
+  foreground. The page keeps rendering and running its scripts, but its
+  DevTools endpoint (so the JavaScript debugger) and its keyboard and mouse
+  input wait until you continue the .NET code. Visual Studio does not hang.
+  Break All does not show this: you press it in Visual Studio, so the page does
+  not have the focus when the Window stops (runic-sdk#1192).
 
 ## Layout
 

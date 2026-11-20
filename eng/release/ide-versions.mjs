@@ -26,9 +26,9 @@
 // Visual Studio reads each version component as a 16-bit System.Version part, so major, minor and
 // patch are limited to 65534 here, in package.py and in the Visual Studio project. The VS Code patch
 // is then at most 65534 * 1000 + 1000 = 65535000, well inside the 32-bit integer the Marketplace
-// keeps per component. The extensions are a preview product until 2.0 (outside the 1.0 compatibility
-// rules), so every release carries the VS Code "preview" field (the Marketplace "Preview" label),
-// independent of the pre-release flag; package.mjs stamps both.
+// keeps per component. Since 0.23 no release carries the Marketplace "Preview" label (D070.2, D077.4):
+// package.mjs stamps the VS Code "preview" field false, independent of the pre-release flag, and
+// release.mjs checks both.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -47,7 +47,7 @@ export function ideVersions(version) {
   const vscodePatch = patch * 1000 + revision;
   assert.ok(vscodePatch <= 2 ** 31 - 1, `${version} maps to VS Code patch ${vscodePatch}, above the 32-bit Marketplace limit`);
   return { release: version, visualStudio: `${major}.${minor}.${patch}.${revision}`,
-    vscode: `${major}.${minor}.${vscodePatch}`, vscodePreRelease: Boolean(match[4]), vscodePreview: true };
+    vscode: `${major}.${minor}.${vscodePatch}`, vscodePreRelease: Boolean(match[4]), vscodePreview: false };
 }
 
 export const releaseVersion = () => JSON.parse(readFileSync(new URL("../version.json", import.meta.url), "utf8")).version;

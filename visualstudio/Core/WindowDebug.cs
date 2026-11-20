@@ -47,18 +47,17 @@ public static class JsDebugAttach
 
     /// <summary>
     /// The js-debug configuration (<c>type: pwa-chrome</c>, <c>request: attach</c>) for the page <paramref name="pageUrl"/>
-    /// of the endpoint <paramref name="qualifier"/> (<c>http://127.0.0.1:&lt;port&gt;/</c>, as <see cref="CdpEndpoints.Qualifiers"/>
-    /// lists it). Like the transport attach, it sets no <c>webRoot</c>: TSX breakpoints bind through the development
-    /// server's absolute source map sources.
+    /// of the endpoint on 127.0.0.1:<paramref name="port"/>. The address is always 127.0.0.1, never <c>localhost</c>,
+    /// which can resolve to <c>[::1]</c> where another user may listen (DEV-SEC-55, DEV-SEC-82). Like the transport
+    /// attach, it sets no <c>webRoot</c>: TSX breakpoints bind through the development server's absolute source map sources.
     /// </summary>
-    public static string Options(string qualifier, string pageUrl)
+    public static string Options(int port, string pageUrl)
     {
-        var endpoint = new Uri(qualifier);
         var json = new StringBuilder("{");
         json.Append("\"type\":\"pwa-chrome\",\"request\":\"attach\",");
         json.Append("\"name\":").Append(Quote(Name)).Append(',');
-        json.Append("\"address\":").Append(Quote(endpoint.Host)).Append(',');
-        json.Append("\"port\":").Append(endpoint.Port.ToString(CultureInfo.InvariantCulture)).Append(',');
+        json.Append("\"address\":").Append(Quote(CdpEndpoints.LoopbackAddress)).Append(',');
+        json.Append("\"port\":").Append(port.ToString(CultureInfo.InvariantCulture)).Append(',');
         json.Append("\"url\":").Append(Quote(pageUrl)).Append(',');
         json.Append("\"sourceMaps\":true}");
         return json.ToString();
@@ -262,7 +261,7 @@ public static class WindowDebug
 /// <summary>A page's Chrome DevTools Protocol endpoint that Attach to the Page offers.</summary>
 public sealed class PageEndpoint
 {
-    public PageEndpoint(string engine, string url, string source) { Engine = engine; Url = url; Source = source; }
+    public PageEndpoint(string engine, string url, string source, int? windowProcessId = null) { Engine = engine; Url = url; Source = source; WindowProcessId = windowProcessId; }
 
     /// <summary><c>webview2</c> or <c>chromium</c>.</summary>
     public string Engine { get; }
@@ -271,23 +270,32 @@ public sealed class PageEndpoint
     /// <summary>Where it comes from, for the picker: the session file, or a Window Debug the Window started.</summary>
     public string Source { get; }
     public int Port => new Uri(Url).Port;
+    /// <summary>The Window whose page holds the endpoint, when known; the attach checks the port's owner against it (DEV-SEC-83).</summary>
+    public int? WindowProcessId { get; }
 }
 
-/// <summary>The session file's CDP endpoints and the attach qualifier (SPIKE-VS-0 §3: <c>http://localhost:&lt;port&gt;/</c> or the IP form).</summary>
+/// <summary>The session file's CDP endpoints and the attach qualifier (SPIKE-VS-0 §3: <c>http://127.0.0.1:&lt;port&gt;/</c>).</summary>
 public static class CdpEndpoints
 {
     private static readonly string[] PageEngines = { "webview2", "chromium" };
 
+    /// <summary>The only host DevKit attaches to: the Window's page engines listen on 127.0.0.1.</summary>
+    public const string LoopbackAddress = "127.0.0.1";
+
     /// <summary>The loopback endpoint of a port, on 127.0.0.1 rather than <c>localhost</c>, which can resolve to <c>[::1]</c> (DEV-SEC-55).</summary>
     public static string Url(int port) => "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/";
 
-    /// <summary>The <c>debugEndpoints</c> a JavaScript engine can attach to: WebView2's and CS-WebUI's Chromium CDP endpoints on loopback.</summary>
+    /// <summary>
+    /// The <c>debugEndpoints</c> a JavaScript engine can attach to: WebView2's and CS-WebUI's Chromium CDP endpoints on
+    /// loopback, without those the session also lists under <c>unavailableDebugEndpoints</c> (DEV-SEC-83).
+    /// </summary>
     public static IReadOnlyList<PageEndpoint> FromSession(DevSessionFile? session)
     {
         if (session == null) return Array.Empty<PageEndpoint>();
+        var unavailable = new HashSet<string>(session.UnavailableDebugEndpoints.Select(endpoint => Normalize(endpoint.Url)).OfType<string>(), StringComparer.OrdinalIgnoreCase);
         return session.DebugEndpoints
-            .Where(endpoint => endpoint.Protocol == "cdp" && PageEngines.Contains(endpoint.Engine))
-            .Select(endpoint => Normalize(endpoint.Url) is { } url ? new PageEndpoint(endpoint.Engine, url, "dev session") : null)
+            .Where(endpoint => endpoint.Protocol == "cdp" && PageEngines.Contains(endpoint.Engine) && !(Normalize(endpoint.Url) is { } url && unavailable.Contains(url)))
+            .Select(endpoint => Normalize(endpoint.Url) is { } url ? new PageEndpoint(endpoint.Engine, url, "dev session", session.Window?.ProcessId) : null)
             .OfType<PageEndpoint>().ToList();
     }
 
@@ -308,14 +316,6 @@ public static class CdpEndpoints
 
     /// <summary>The URL that says whether the endpoint answers (<c>/json/version</c>).</summary>
     public static string VersionUrl(string url) => url.TrimEnd('/') + "/json/version";
-
-    /// <summary>The qualifiers to try with the CDP transport, in order: the endpoint URL, its <c>host:port</c> form, and the <c>localhost</c> URL the spike used.</summary>
-    public static IReadOnlyList<string> Qualifiers(string url)
-    {
-        var uri = new Uri(url);
-        string port = uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return new[] { Url(uri.Port), "127.0.0.1:" + port, "http://localhost:" + port + "/" };
-    }
 
     /// <summary>
     /// Which targets the CDP transport lists to attach to: the pages, not DevTools or extension pages (the Runic DevTools

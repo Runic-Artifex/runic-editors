@@ -135,7 +135,7 @@ internal static class PageAttach
             if (debuggedProcess is { } id && !await RunsAsync(id)) settled.Restart();
             if (answered && settled.Elapsed >= SettleTime)
             {
-                var attached = await TryAttachAsync(url, cancellationToken, listing =>
+                var attached = await TryAttachAsync(url, debuggedProcess, cancellationToken, listing =>
                 {
                     if (listing != lastListing) SdkOutput.WriteLine("Debug the Window: " + listing);
                     lastListing = listing;
@@ -176,7 +176,8 @@ internal static class PageAttach
 
     /// <summary>
     /// One attempt: lists the endpoint's targets on the CDP transport and attaches to the pages; empty when none is listed
-    /// yet. <paramref name="report"/> receives what each qualifier listed, for the Output pane.
+    /// yet. <paramref name="report"/> receives what the endpoint listed, for the Output pane. Refuses an endpoint whose
+    /// port the Window (<paramref name="windowProcessId"/>, when known) does not hold (<see cref="VerifyOwnerAsync"/>).
     /// </summary>
     /// <remarks>
     /// <c>Debugger2.GetProcesses</c> (which starts Visual Studio's JavaScript debug adapter) and <c>Process2.Attach2</c>
@@ -185,7 +186,7 @@ internal static class PageAttach
     /// returns (<see cref="HungAttach"/>, runic-editors#23 and #44); <paramref name="attachHung"/> then runs on the thread
     /// pool, after the Output pane says so.
     /// </remarks>
-    public static async Task<IReadOnlyList<string>> TryAttachAsync(string url, CancellationToken cancellationToken, Action<string>? report = null, Action? attachHung = null)
+    public static async Task<IReadOnlyList<string>> TryAttachAsync(string url, int? windowProcessId, CancellationToken cancellationToken, Action<string>? report = null, Action? attachHung = null)
     {
         // Adapters that an exited Visual Studio left running (runic-editors#44).
         await TaskScheduler.Default;
@@ -199,31 +200,41 @@ internal static class PageAttach
         if (transport == null)
             throw new InvalidOperationException("Visual Studio has no \"JavaScript and TypeScript (Chrome DevTools/V8 Inspector)\" debugger transport. Add the \"JavaScript diagnostics\" component (Microsoft.VisualStudio.Component.JavaScript.Diagnostics) in the Visual Studio Installer.");
         var attached = new List<string>();
-        var listings = new List<string>();
-        foreach (string qualifier in CdpEndpoints.Qualifiers(url))
+        // Only 127.0.0.1, never localhost, which can resolve to [::1] (DEV-SEC-82); and only while the Window holds the port (DEV-SEC-83).
+        string qualifier = CdpEndpoints.Url(new Uri(url).Port);
+        await VerifyOwnerAsync(url, windowProcessId, cancellationToken);
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        EnvDTE.Processes processes;
+        try { processes = await GuardedAsync($"listing the targets of {qualifier}", () => { ThreadHelper.ThrowIfNotOnUIThread(); return debugger.GetProcesses(transport, qualifier); }, attachHung, cancellationToken); }
+        catch (Exception error) when (error is COMException or ArgumentException) { report?.Invoke($"{qualifier}: {error.Message}"); return attached; }
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        var all = processes.OfType<EnvDTE80.Process2>().ToList();
+        var pages = all.Where(process => { ThreadHelper.ThrowIfNotOnUIThread(); return CdpEndpoints.IsPageTarget(process.Name); }).ToList();
+        report?.Invoke($"{qualifier}: {(all.Count == 0 ? "no targets" : string.Join(", ", all.Select(process => { ThreadHelper.ThrowIfNotOnUIThread(); return process.Name; })))}");
+        foreach (var page in pages)
         {
-            EnvDTE.Processes processes;
-            try { processes = await GuardedAsync($"listing the targets of {qualifier}", () => { ThreadHelper.ThrowIfNotOnUIThread(); return debugger.GetProcesses(transport, qualifier); }, attachHung, cancellationToken); }
-            catch (Exception error) when (error is COMException or ArgumentException) { listings.Add($"{qualifier}: {error.Message}"); continue; }
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-            var all = processes.OfType<EnvDTE80.Process2>().ToList();
-            var pages = all.Where(process => { ThreadHelper.ThrowIfNotOnUIThread(); return CdpEndpoints.IsPageTarget(process.Name); }).ToList();
-            listings.Add($"{qualifier}: {(all.Count == 0 ? "no targets" : string.Join(", ", all.Select(process => { ThreadHelper.ThrowIfNotOnUIThread(); return process.Name; })))}");
-            if (pages.Count == 0) continue;
-            report?.Invoke(string.Join("; ", listings));
-            foreach (var page in pages)
-            {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-                string name = page.Name;
-                SdkOutput.WriteLine($"Attaching the JavaScript debugger to {name} ({qualifier}).");
-                await AttachPageAsync(dte, page, name, qualifier, attachHung, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                attached.Add(name);
-            }
-            return attached;
+            string name = page.Name;
+            SdkOutput.WriteLine($"Attaching the JavaScript debugger to {name} ({qualifier}).");
+            await AttachPageAsync(dte, page, name, qualifier, attachHung, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            attached.Add(name);
         }
-        report?.Invoke(string.Join("; ", listings));
         return attached;
+    }
+
+    /// <summary>
+    /// Refuses the attach unless the processes listening on the endpoint's port are the Window's page or this user's
+    /// processes started after the Window (<see cref="EndpointOwners"/>, DEV-SEC-83). Another user's program can take a
+    /// planned port first, or bind a port the browser has released.
+    /// </summary>
+    public static async Task VerifyOwnerAsync(string url, int? windowProcessId, CancellationToken cancellationToken)
+    {
+        await TaskScheduler.Default;
+        cancellationToken.ThrowIfCancellationRequested();
+        var check = EndpointOwners.CheckNow(new Uri(url).Port, windowProcessId is > 0 ? windowProcessId : null);
+        if (check.Verdict == EndpointOwnerVerdict.Owned) return;
+        throw new EndpointNotOwnedException(check.Refusal(url));
     }
 
     /// <summary>
@@ -258,7 +269,7 @@ internal static class PageAttach
                 dlo = (uint)DEBUG_LAUNCH_OPERATION.DLO_CreateProcess,
                 bstrExe = name,
                 bstrCurDir = Path.GetTempPath(),
-                bstrOptions = JsDebugAttach.Options(qualifier, name),
+                bstrOptions = JsDebugAttach.Options(new Uri(qualifier).Port, name),
                 guidLaunchDebugEngine = new Guid(DebugEngines.JavaScript),
                 fSendToOutputWindow = true,
             };
@@ -340,4 +351,10 @@ internal static class PageAttach
             if (frozen == 0) bar.SetText(text);
         }
     }
+}
+
+/// <summary>The endpoint's port is held by a process that is not the Window's (DEV-SEC-83); the attach stops.</summary>
+internal sealed class EndpointNotOwnedException : InvalidOperationException
+{
+    public EndpointNotOwnedException(string message) : base(message) { }
 }
