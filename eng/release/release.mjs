@@ -50,8 +50,11 @@ export const MARKETPLACE = {
 export const STORES = {
   vscode: { title: "VS Code Marketplace", vsix: VSIX[0], format: "vscode", itemName: MARKETPLACE.vscode.itemName,
     target: "Microsoft.VisualStudio.Code", asset: "Microsoft.VisualStudio.Services.VSIXPackage" },
+  // The gallery lists the Visual Studio payload as Microsoft.VisualStudio.Ide.Payload but refuses to serve it publicly
+  // (500, ExtensionAssetAccessNotSupportedException), which failed the byte check of 0.23.1 after a good upload. The
+  // same version lists the uploaded file under its own name, whose bytes are the release's VSIX.
   visualstudio: { title: "Visual Studio Marketplace", vsix: VSIX[1], format: "visualStudio", itemName: MARKETPLACE.visualStudio.itemName,
-    target: "Microsoft.VisualStudio.Ide", asset: "Microsoft.VisualStudio.Ide.Payload", finalOnly: true },
+    target: "Microsoft.VisualStudio.Ide", asset: VSIX[1].file, finalOnly: true },
 };
 export const PUBLISH_MANIFEST = "visualstudio/publishManifest.json";
 // VsixPublisher refuses a VSIX whose manifest <Description> is empty or not "less than 280 characters in length"
