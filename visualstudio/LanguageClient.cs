@@ -4,8 +4,10 @@ using System.ComponentModel;
 using System.ComponentModel.Composition;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.LanguageServer.Client;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -90,6 +92,7 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
             var assembly = RunicSettings.ServerAssembly(options.ServerAssembly, Environment.GetEnvironmentVariable(RunicSettings.ServerAssemblyVariable), solutionDirectory);
             var launch = ServerLaunch.Find(Path.GetDirectoryName(file)!, assembly);
             attempt.Directory = launch.Directory;
+            if (launch.UsesToolManifest) await ServerTrustGate.RequireAsync(launch.Directory, solutionDirectory, token);
             pane.OutputStringThreadSafe($"Starting {attempt.Dotnet} {launch.Arguments} in {launch.Directory}{Environment.NewLine}");
             var started = process = new Process { StartInfo = new ProcessStartInfo {
                 FileName = attempt.Dotnet, Arguments = launch.Arguments,
@@ -153,6 +156,7 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
         => (rpc ?? throw new InvalidOperationException("The Runic language server is not ready.")).InvokeWithParameterObjectAsync<JObject>(method, parameters, cancellationToken);
     internal async Task RestartAsync()
     {
+        ServerTrustGate.ForgetDeclined(); // Restart Language Server asks again
         if (StopAsync != null) await StopAsync.InvokeAsync(this, EventArgs.Empty);
         DisposeProcess();
         if (StartAsync != null) await StartAsync.InvokeAsync(this, EventArgs.Empty);
@@ -172,14 +176,16 @@ internal sealed class ServerLaunch
 {
     internal string Directory { get; }
     internal string Arguments { get; }
-    private ServerLaunch(string directory, string arguments) { Directory = directory; Arguments = arguments; }
+    /// <summary>Whether it runs the folder's tool manifest (<c>dotnet tool run</c>), which the trust gate covers; not a configured server DLL.</summary>
+    internal bool UsesToolManifest { get; }
+    private ServerLaunch(string directory, string arguments, bool usesToolManifest) { Directory = directory; Arguments = arguments; UsesToolManifest = usesToolManifest; }
     internal static ServerLaunch Find(string directory, ServerAssemblySetting? assembly)
     {
         if (assembly != null)
         {
             if (!Path.IsPathRooted(assembly.Path) || !File.Exists(assembly.Path))
                 throw new ServerLaunchException(ServerStartProblem.AssemblyMissing, $"{assembly.Source} must identify an existing absolute tool DLL; {assembly.Path} is not one.");
-            return new ServerLaunch(directory, Quote(assembly.Path) + " lsp");
+            return new ServerLaunch(directory, Quote(assembly.Path) + " lsp", usesToolManifest: false);
         }
         for (string? current = directory; current != null; current = Path.GetDirectoryName(current))
         {
@@ -188,7 +194,7 @@ internal sealed class ServerLaunch
             var json = JObject.Parse(File.ReadAllText(manifest));
             foreach (var tool in (json["tools"] as JObject ?? new JObject()).Properties())
                 if (tool.Value["commands"] is JArray commands && commands.ToObject<string[]>() is string[] names && Array.IndexOf(names, "runic-translations") >= 0)
-                    return new ServerLaunch(current, "tool run runic-translations -- lsp");
+                    return new ServerLaunch(current, "tool run runic-translations -- lsp", usesToolManifest: true);
             if (json.Value<bool?>("isRoot") == true) break;
         }
         throw new ServerLaunchException(ServerStartProblem.ToolMissing, "No project-local runic-translations tool manifest found. Restore the local tool before opening MF2 resources.");
@@ -211,4 +217,73 @@ internal sealed class ServerLaunchException : InvalidOperationException
 {
     internal ServerLaunchException(ServerStartProblem problem, string message) : base(message) { Problem = problem; }
     internal ServerStartProblem Problem { get; }
+}
+
+/// <summary>
+/// The language server's trust gate in Visual Studio (<see cref="ServerTrust"/>, DEV-SEC-86): a tool manifest outside the
+/// open solution's folder starts the server only after the user says Yes, which is remembered per folder in Visual
+/// Studio's user settings; a No holds until Restart Language Server.
+/// </summary>
+internal static class ServerTrustGate
+{
+    private static readonly HashSet<string> declined = new(StringComparer.OrdinalIgnoreCase);
+
+    public static void ForgetDeclined() { lock (declined) declined.Clear(); }
+
+    public static async Task RequireAsync(string manifestFolder, string? solutionFolder, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        string key = ServerTrust.Key(manifestFolder);
+        ServerTrustDecision decision;
+        lock (declined) decision = ServerTrust.Decide(manifestFolder, solutionFolder, IsTrusted, declined);
+        if (decision == ServerTrustDecision.Ask)
+        {
+            int answer = VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider, ServerTrust.Question(key, solutionFolder), "Runic DevKit",
+                OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_YESNO, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND);
+            if (answer == 6 /* IDYES */) { Trust(key); return; }
+            lock (declined) declined.Add(key);
+            decision = ServerTrustDecision.Declined;
+        }
+        if (decision == ServerTrustDecision.Declined)
+            throw new ServerLaunchException(ServerStartProblem.NotTrusted, ServerTrust.DeclinedMessage(key));
+    }
+
+    private static bool IsTrusted(string key)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try { return ServerTrust.ParseFolders(Read()).Contains(key, StringComparer.OrdinalIgnoreCase); }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException or InvalidOperationException) { return false; }
+    }
+
+    private static void Trust(string key)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            var store = Store();
+            ErrorHandler.ThrowOnFailure(store.CollectionExists(ServerTrust.Collection, out int exists));
+            if (exists == 0) ErrorHandler.ThrowOnFailure(store.CreateCollection(ServerTrust.Collection));
+            ErrorHandler.ThrowOnFailure(store.SetString(ServerTrust.Collection, ServerTrust.Property, ServerTrust.AddFolder(Read(), key)));
+        }
+        // Not remembered: the next start asks again.
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException or InvalidOperationException) { }
+    }
+
+    private static string? Read()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var store = Store();
+        ErrorHandler.ThrowOnFailure(store.CollectionExists(ServerTrust.Collection, out int exists));
+        if (exists == 0) return null;
+        ErrorHandler.ThrowOnFailure(store.GetStringOrDefault(ServerTrust.Collection, ServerTrust.Property, "", out string value));
+        return value;
+    }
+
+    private static IVsWritableSettingsStore Store()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (ServiceProvider.GlobalProvider.GetService(typeof(SVsSettingsManager)) is not IVsSettingsManager manager) throw new InvalidOperationException("Visual Studio's settings manager is unavailable.");
+        ErrorHandler.ThrowOnFailure(manager.GetWritableSettingsStore((uint)__VsSettingsScope.SettingsScope_UserSettings, out var store));
+        return store;
+    }
 }

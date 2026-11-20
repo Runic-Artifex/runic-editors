@@ -280,7 +280,20 @@ The extension finds the nearest `.config/dotnet-tools.json` from the active
 document (or solution), respecting `isRoot`, and starts
 `dotnet tool run runic-translations -- lsp`. The tool runs on its own .NET
 runtime, outside Visual Studio's process. The extension never downloads or
-restores a tool; use trusted projects. If the server cannot start, an InfoBar
+restores a tool.
+
+`dotnet` uses the tool manifest's folder: its `global.json`, NuGet configuration
+and manifest can make it run code from that folder. Visual Studio documents no
+workspace-trust API for extensions, so DevKit has its own gate, the counterpart
+of VS Code's Restricted Mode. A manifest in the open solution's folder (or below it)
+starts the server at once: Visual Studio opened that solution and already runs
+its projects' code in design-time builds. A manifest anywhere else (above the
+solution, or for a document opened without a solution) starts it only after you
+answer **Yes** to DevKit's question, which names the folder. DevKit remembers the
+Yes for that folder in Visual Studio's user settings; after a **No** it does not
+ask again until **Tools → Runic → Restart Language Server**. A server DLL you set
+in Options (or `RUNIC_TRANSLATIONS_SERVER`) is your choice and is not asked about.
+If the server cannot start, an InfoBar
 says why once per solution, with **Show output** and install help. One server
 serves the Visual Studio session; **Tools → Runic → Restart Language Server**
 restarts it, for example after switching solutions or changing the tool.

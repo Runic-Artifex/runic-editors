@@ -20,6 +20,8 @@ public enum ServerStartProblem
     DotnetMissing,
     /// <summary>The configured server assembly is not an existing absolute DLL.</summary>
     AssemblyMissing,
+    /// <summary>The user did not trust the folder the server would start in (DEV-SEC-86).</summary>
+    NotTrusted,
     /// <summary>Anything else; the Output pane has the details.</summary>
     Other,
 }
@@ -79,6 +81,7 @@ public static class ServerStartFailure
             ServerStartProblem.WrongToolVersion => "The restored runic-translations tool has no language server (lsp). Use the version of the project's Runic Translations packages in .config/dotnet-tools.json, run dotnet tool restore, then restart the language server.",
             ServerStartProblem.DotnetMissing => $"The dotnet executable '{attempt.Dotnet}' was not found. Install .NET, or set .NET executable in Tools > Options > {RunicSettings.OptionsCategory}.",
             ServerStartProblem.AssemblyMissing => Summary(attempt.Error) + " Fix the setting, then restart the language server.",
+            ServerStartProblem.NotTrusted => Summary(attempt.Error),
             _ => Summary(attempt.Error ?? attempt.Stderr.LastOrDefault()),
         };
     }
