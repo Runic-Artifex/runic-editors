@@ -4,6 +4,24 @@ The VS Code extension's changes per runic-editors release. Releases are GitHub
 releases of [runic-editors](https://github.com/Runic-Artifex/runic-editors/releases)
 and, from 0.22.0, versions on the VS Code Marketplace.
 
+## 0.23.0
+
+**No Preview label.** Runic DevKit is published without the Marketplace
+"Preview" label (runic-editors#50). Before 1.0, a minor release can still change
+commands and settings; the release notes list every change.
+
+- Tested against `dotnet-runic-translations` 0.15.0, whose language server speaks
+  only protocol 2. The extension has asked for protocol 2 since 0.22, and
+  Translations 0.14.0 keeps working. The bundled `runic.json` schema is
+  unchanged.
+- With `dotnet-runic` 0.23, Vite errors that `dotnet runic dev` prints
+  (`RUNICP008`) are problems at their file and line, removed when `dev` prints
+  that the frontend errors cleared. A successful .NET build keeps them.
+  `RUNICP` codes link to runic-sdk's diagnostics reference (runic-editors#52).
+- When `dev` doesn't stop on its input, the forced stop signals the `dotnet`
+  launcher's whole process group off Windows, so `dev`, its frontend server and
+  its Window end too (runic-editors#53).
+
 ## 0.22.0
 
 **VS Code Marketplace.** Runic DevKit is published to the VS Code Marketplace as
