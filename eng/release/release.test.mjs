@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { cpSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, MARKETPLACE_URL, OIDC_AUDIENCE, PUBLISH_MANIFEST, RELEASE_WORKFLOW, REPOSITORY, STORES,
-  TOKEN_EXCHANGE, TOKEN_PLACEHOLDER, VSCE, VSIX, VSIXPUBLISHER, VSIXPUBLISHER_NATIVE_OIDC, assertNewVersion, createRelease, fetchRelease, findCiArtifacts,
+import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, MARKETPLACE_URL, MAX_VISUAL_STUDIO_DESCRIPTION, OIDC_AUDIENCE, PUBLISH_MANIFEST, RELEASE_WORKFLOW, REPOSITORY, STORES,
+  TOKEN_EXCHANGE, TOKEN_PLACEHOLDER, VSCE, VSIX, VSIXPUBLISHER, VSIXPUBLISHER_NATIVE_OIDC, assertNewVersion, checkVisualStudioDescription, createRelease, fetchRelease, findCiArtifacts,
   galleryListing, githubPrerelease, isAncestor, marketplaceToken, parseSums, prepare, publishCommand, releaseCheck, releaseNotes,
   releasePlan, root, scanVsix, selectArtifact, selectCiRun, selectStores, sha256Sums, storeCheck, storePackage, storePublish, storeVerify, verify } from "./release.mjs";
 import { MAX_KEYWORDS, checkVscodeListing, listingBaseUrls, markdownProblems, pngSize } from "./listing.mjs";
@@ -544,6 +546,51 @@ test("the Visual Studio store identity comes from publishManifest.json and must 
     } finally { rmSync(directory, { recursive: true, force: true }); }
     expect(() => storePackage("vscode", vsix, "0.23.0")).toThrow("declares version 0.22.1000, not 0.23.1000");
   });
+});
+
+// VsixPub0024 failed the Visual Studio publish of 0.23.0 (a 387-character description); the dry run refuses it now.
+test("the Visual Studio store refuses a VSIX description VsixPublisher would reject, in the dry run too", async () => {
+  expect(MAX_VISUAL_STUDIO_DESCRIPTION).toBe(279);
+  expect(checkVisualStudioDescription("x".repeat(279))).toBe(279);
+  expect(() => checkVisualStudioDescription("x".repeat(280))).toThrow("<Description> of 280 characters; VsixPublisher needs fewer than 280 (VsixPub0024)");
+  for (const missing of [undefined, null, "", "  "]) expect(() => checkVisualStudioDescription(missing)).toThrow("has no <Description>");
+  const manifest = readFileSync(new URL("../../visualstudio/source.extension.vsixmanifest", import.meta.url), "utf8");
+  const description = /<Description xml:space="preserve">([^<]*)<\/Description>/.exec(manifest)[1];
+  expect(checkVisualStudioDescription(description)).toBeLessThan(280);
+  for (const [description, error] of [["x".repeat(387), "of 387 characters"], ["", "has no <Description>"]]) {
+    const directory = mkdtempSync(join(tmpdir(), "runic-editors-description-"));
+    try {
+      writeVsixFixtures(directory, "0.23.1", { visualStudio: { description } });
+      expect(() => storePackage("visualstudio", directory, "0.23.1")).toThrow(error);
+      expect(storePackage("vscode", directory, "0.23.1").version).toBe("0.23.2000");
+      await expect(storePublish("visualstudio", directory, "0.23.1", { fetchImpl: fakeStores().fetchImpl, log: () => {} })).rejects.toThrow(error);
+      expect(scanVsix(directory, "0.23.1").map(entry => entry.identity.version)).toEqual(["0.23.2000", "0.23.1.1000"]);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+test("package.py --check-source refuses a description of 280 characters or more and an empty one", () => {
+  const directory = mkdtempSync(join(tmpdir(), "runic-editors-package-py-"));
+  try {
+    const source = resolve(root, "visualstudio");
+    mkdirSync(join(directory, "visualstudio"));
+    mkdirSync(join(directory, "eng"));
+    cpSync(resolve(root, "eng/version.json"), join(directory, "eng/version.json"));
+    for (const name of ["package.py", "publishManifest.json", "overview.md", "media"]) cpSync(join(source, name), join(directory, "visualstudio", name), { recursive: true });
+    const manifest = readFileSync(join(source, "source.extension.vsixmanifest"), "utf8");
+    const check = description => {
+      writeFileSync(join(directory, "visualstudio/source.extension.vsixmanifest"),
+        manifest.replace(/<Description xml:space="preserve">[^<]*<\/Description>/, `<Description xml:space="preserve">${description}</Description>`));
+      return spawnSync(process.platform === "win32" ? "python" : "python3", [join(directory, "visualstudio/package.py"), "--check-source"], { encoding: "utf8" });
+    };
+    expect(check("x".repeat(279)).status).toBe(0);
+    for (const [description, error] of [["x".repeat(280), "has 280 characters; VsixPublisher needs fewer than 280 (VsixPub0024)"],
+      ["x".repeat(387), "has 387 characters"], ["", "needs a <Description>"]]) {
+      const result = check(description);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(error);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("store-publish prints the exact trusted-publishing commands and runs them only outside a dry run", async () => {

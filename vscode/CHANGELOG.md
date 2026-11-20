@@ -4,6 +4,13 @@ The VS Code extension's changes per runic-editors release. Releases are GitHub
 releases of [runic-editors](https://github.com/Runic-Artifex/runic-editors/releases)
 and, from 0.22.0, versions on the VS Code Marketplace.
 
+## 0.23.1
+
+No change to the VS Code extension. 0.23.1 is a Visual Studio Marketplace
+release; the VS Code Marketplace keeps 0.23.0 (`0.23.1000`), and the
+`runic-devkit.vsix` of the 0.23.1 GitHub release (`0.23.2000`) has the same
+features.
+
 ## 0.23.0
 
 **No Preview label.** Runic DevKit is published without the Marketplace

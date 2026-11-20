@@ -3,7 +3,7 @@
   <Metadata>
     <Identity Id="RunicArtifex.DevKit.VisualStudio" Version="|%CurrentProject%;GetRunicVsixVersion|" Language="en-US" Publisher="Runic Artifex" />
     <DisplayName>Runic DevKit</DisplayName>
-    <Description xml:space="preserve">Runic DevKit for Visual Studio, the Runic SDK and Runic Translations extension. Replaces Runic MF2 Translations (Runic.Artifex.Translations.Rmf2); uninstall that one. The dotnet runic dev session, Debug the Window, doctor and the ViewModels tree; direct MF2 and grouped RMF2 diagnostics, navigation, refactorings and inert message preview through the project-local Runic language server.</Description>
+    <Description xml:space="preserve">Runic DevKit for Visual Studio: the Runic SDK and Runic Translations extension. The dotnet runic dev session, Debug the Window, doctor and the ViewModels tree; MF2 and RMF2 diagnostics, navigation and refactorings. Replaces Runic MF2 Translations; uninstall that one.</Description>
     <MoreInfo>https://github.com/Runic-Artifex/runic-editors/blob/main/visualstudio/README.md</MoreInfo>
     <License>LICENSE.txt</License>
     <ReleaseNotes>https://github.com/Runic-Artifex/runic-editors/releases</ReleaseNotes>

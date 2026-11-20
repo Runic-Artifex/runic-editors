@@ -48,6 +48,22 @@ STORE_CATEGORIES = {'build', 'coding', 'data', 'debugging', 'documentation', 'ex
                     'other', 'performance', 'programming languages', 'security', 'source control', 'testing', 'web'}
 # Listing images: <Icon> 32x32 in lists, <PreviewImage> 200x200 (VSIX schema 2.0 reference).
 LISTING_IMAGES = {'Icon': 32, 'PreviewImage': 200}
+# VsixPublisher (Microsoft.VSSDK.BuildTools 18.11.1098, the publish job's) refuses a description that is empty or, in
+# its words, not "less than 280 characters in length" (VsixPub0024; 0.23.0's 387 failed its publish), and a tag
+# longer than 50 characters. It counts .NET UTF-16 code units of the text as the manifest has it.
+MAX_DESCRIPTION_LENGTH = 279
+MAX_TAG_LENGTH = 50
+
+
+def check_store_description(description):
+    """The manifest <Description>, which VsixPublisher sends as the Visual Studio Marketplace short description."""
+    description = description or ''
+    length = len(description.encode('utf-16-le')) // 2
+    assert description.strip(), 'The VSIX manifest needs a <Description> (VsixPub0024)'
+    assert length <= MAX_DESCRIPTION_LENGTH, (
+        f'The VSIX <Description> has {length} characters; VsixPublisher needs fewer than {MAX_DESCRIPTION_LENGTH + 1} (VsixPub0024). '
+        'Shorten it and keep the details in overview.md')
+    return length
 
 
 def png_size(data):
@@ -61,8 +77,9 @@ def listing_contract(manifest):
     text = lambda name: (metadata.findtext(f'v:{name}', namespaces=ns) or '').strip()
     listing = {name: text(name) for name in ('DisplayName', 'MoreInfo', 'ReleaseNotes', 'Icon', 'PreviewImage', 'Tags', 'Preview')}
     assert 0 < len(listing['DisplayName']) <= 50, 'DisplayName must have 1 to 50 characters'
-    assert 0 < len(text('Description')) <= 1000, 'Description must have 1 to 1000 characters'
+    check_store_description(metadata.findtext('v:Description', namespaces=ns))
     assert 0 < len(listing['Tags']) <= 100, 'Tags must have 1 to 100 characters'
+    assert all(len(tag) <= MAX_TAG_LENGTH for tag in listing['Tags'].split(';')), f'Each of the Tags must have at most {MAX_TAG_LENGTH} characters'
     assert listing['Preview'] in ('', 'false'), 'Runic DevKit has no Preview label since 0.23 (D077.4): no <Preview>true</Preview>'
     for name in ('MoreInfo', 'ReleaseNotes'):
         assert listing[name].startswith('https://'), f'{name} must be an https URL'

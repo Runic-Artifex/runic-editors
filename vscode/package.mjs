@@ -41,7 +41,7 @@ try {
   rmSync(staging, { recursive: true, force: true });
 }
 
-const packed = vsixMetadata(output);
+const { description: _description, ...packed } = vsixMetadata(output);
 assert.deepEqual(packed, { id: 'runic-devkit', version: versions.vscode, publisher: 'runic-artifex',
   preRelease: versions.vscodePreRelease, preview: versions.vscodePreview, packageVersion: versions.vscode,
   packagePreview: versions.vscodePreview },
