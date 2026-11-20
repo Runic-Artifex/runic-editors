@@ -63,7 +63,7 @@ def listing_contract(manifest):
     assert 0 < len(listing['DisplayName']) <= 50, 'DisplayName must have 1 to 50 characters'
     assert 0 < len(text('Description')) <= 1000, 'Description must have 1 to 1000 characters'
     assert 0 < len(listing['Tags']) <= 100, 'Tags must have 1 to 100 characters'
-    assert listing['Preview'] == 'true', 'The extension is a preview product: <Preview>true</Preview>'
+    assert listing['Preview'] in ('', 'false'), 'Runic DevKit has no Preview label since 0.23 (D077.4): no <Preview>true</Preview>'
     for name in ('MoreInfo', 'ReleaseNotes'):
         assert listing[name].startswith('https://'), f'{name} must be an https URL'
     for name in LISTING_IMAGES:

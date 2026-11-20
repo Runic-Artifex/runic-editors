@@ -16,12 +16,12 @@ Install them from the stores (since 0.22.0) or from a VSIX file:
 | --- | --- | --- |
 | VS Code | [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit) (`code --install-extension runic-artifex.runic-devkit`); release candidates as pre-releases | `runic-devkit.vsix` from the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases) |
 | Visual Studio 2026 | [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=runic-artifex.runic-devkit-vs) (**Extensions > Manage Extensions**); final versions only | `runic-devkit-vs.vsix` from the GitHub releases, also for release candidates |
-| VSCodium, Cursor, Windsurf and other Open VSX editors | Not on Open VSX for now | `runic-devkit.vsix` from the GitHub releases |
+| VSCodium, Cursor, Windsurf and other Open VSX editors | Not on Open VSX (deferred, D070.15) | `runic-devkit.vsix` from the GitHub releases |
 
 Both moved here from
 [runic-translations-sdk](https://github.com/Runic-Artifex/runic-translations-sdk)
 with their history (`tools/vscode-runic-translations`,
-`tools/visualstudio-runic-translations`). Both are **previews**. Each release
+`tools/visualstudio-runic-translations`). Each release
 attaches both VSIX files to
 the [GitHub releases](https://github.com/Runic-Artifex/runic-editors/releases)
 of this repository and, since 0.22.0, publishes them to the Marketplaces above

@@ -1,9 +1,8 @@
 # Runic DevKit for Visual Studio
 
-**Preview** for Visual Studio 2026 (18.x) on Windows x64. Its commands, settings
-and the `lsp` protocol it uses are outside the 1.0 compatibility rules and may
-change in a minor release. Visual Studio 2022 (17.x) and ARM64 are not
-supported.
+For Visual Studio 2026 (18.x) on Windows x64. Before 1.0, a minor release can
+still change commands and settings; the release notes list every change. Visual
+Studio 2022 (17.x) and ARM64 are not supported.
 
 One extension for the Runic SDK and Runic Translations, as
 [Runic DevKit for VS Code](../vscode/README.md):

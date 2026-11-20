@@ -77,7 +77,7 @@ jobs:
         with:
           global-json-file: global.json
       # Packaging stamps the eng/version.json release version (eng/release/ide-versions.mjs) and checks the VSIX.
-      # The second package (not uploaded) checks that a plain release drops the pre-release flag and keeps the Preview label.
+      # The second package (not uploaded) checks that a plain release drops the pre-release flag and has no Preview label.
       - name: Build, test and package the VS Code extension
         working-directory: vscode
         run: |

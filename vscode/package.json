@@ -3,7 +3,7 @@
   "displayName": "Runic DevKit",
   "description": "Runic SDK and Runic Translations in VS Code: dotnet runic dev, F5 of the Window, doctor, the ViewModel/Bridge tree, and MF2/RMF2 authoring through the project-local language server.",
   "version": "0.0.1",
-  "preview": true,
+  "preview": false,
   "publisher": "runic-artifex",
   "icon": "media/icon.png",
   "galleryBanner": {

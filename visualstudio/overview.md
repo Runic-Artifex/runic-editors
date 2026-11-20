@@ -1,9 +1,9 @@
 # Runic DevKit for Visual Studio
 
-**Preview.** Runic DevKit is the Visual Studio 2026 (18.x, x64) extension for the
-[Runic SDK](https://github.com/Runic-Artifex) and Runic Translations. It is a
-preview product until the production language server: its commands, environment
-variables and the language server protocol it uses may change in a minor release.
+Runic DevKit is the Visual Studio 2026 (18.x, x64) extension for the
+[Runic SDK](https://github.com/Runic-Artifex) and Runic Translations. Before 1.0, a
+minor release can still change its commands and environment variables; the
+release notes list every change.
 
 ## Runic SDK
 
