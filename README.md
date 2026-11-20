@@ -57,7 +57,8 @@ dotnet tool install dotnet-runic-translations --version <VERSION>
 
 | Translations (`dotnet-runic-translations`) | Extensions |
 | --- | --- |
-| 0.14.0 | runic-editors 0.22.0 and this repository's `main`; CI runs the VS Code host test against this release from NuGet, with its protocol 2 refactorings (F2 for inputs and slots, Extract Group and Inline Resource) |
+| 0.15.0 | runic-editors 0.23.0 and this repository's `main`; CI runs the VS Code host test against this release from NuGet. Its language server speaks only protocol 2, which Runic DevKit 0.22 and later ask for; runic-editors 0.21 and earlier cannot use it |
+| 0.14.0 | runic-editors 0.22.0, with its protocol 2 refactorings (F2 for inputs and slots, Extract Group and Inline Resource); 0.23.0 still works with it |
 | 0.13.0 | runic-editors 0.21.0; 0.22.0 still works with it, without the protocol 2 refactorings |
 | 0.12.0 | runic-editors 0.20.0 |
 | 0.11.0 and older | The VSIX files attached to that [Translations release](https://github.com/Runic-Artifex/runic-translations-sdk/releases) |
