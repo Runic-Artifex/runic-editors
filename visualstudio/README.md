@@ -499,6 +499,14 @@ work when the settings are empty; set them before starting Visual Studio.
   breakpoint or `debugger;`. Break All in other sessions (F5, Attach to the
   Page alone, CS-WebUI) is unchanged; with Attach to the Page on a Window that
   DevKit did not start, Break All still stops both sides.
+- **A C# breakpoint hit while you work in the page holds the page's
+  debugging and input until Continue.** When a .NET breakpoint or exception
+  stops the Window while the page has the focus, Visual Studio takes the
+  foreground. The page keeps rendering and running its scripts, but its
+  DevTools endpoint (so the JavaScript debugger) and its keyboard and mouse
+  input wait until you continue the .NET code. Visual Studio does not hang.
+  Break All does not show this: you press it in Visual Studio, so the page does
+  not have the focus when the Window stops (runic-sdk#1192).
 
 ## Layout
 
