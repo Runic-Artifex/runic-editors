@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using TUnit.Core;
@@ -113,7 +114,8 @@ public class WindowDebugTests
                 { "engine": "chromium", "protocol": "cdp", "url": "http://192.168.1.2:9226/" },
                 { "engine": "webview2", "protocol": "cdp", "url": "http://127.0.0.1:9222/" }
               ],
-              "unavailableDebugEndpoints": [ { "engine": "webview2", "protocol": "cdp", "url": "http://127.0.0.1:9222/", "reason": "elevated" } ]
+              "window": { "owner": "dev", "processId": 4242 },
+              "unavailableDebugEndpoints": [ { "engine": "chromium", "protocol": "cdp", "url": "http://127.0.0.1:9230/", "reason": "port in use" } ]
             }
             """)!;
         var endpoints = CdpEndpoints.FromSession(session);
@@ -121,14 +123,35 @@ public class WindowDebugTests
         var launched = new PageEndpoint("webview2", "http://127.0.0.1:41000/", "Debug the Window");
         Check.Same(new[] { "http://127.0.0.1:41000/", "http://127.0.0.1:9222/", "http://127.0.0.1:9225/" }, CdpEndpoints.Distinct(new[] { launched }.Concat(endpoints)).Select(item => item.Url));
         Check.Equal(9225, endpoints[1].Port);
-        Check.Equal("elevated", session.UnavailableDebugEndpoints.Single().Reason);
+        Check.Equal("port in use", session.UnavailableDebugEndpoints.Single().Reason);
+        Check.Equal<int?>(4242, endpoints[0].WindowProcessId, "the session's Window holds its endpoints");
+        Check.Equal<int?>(null, launched.WindowProcessId);
         Check.Equal(0, CdpEndpoints.FromSession(null).Count);
+    }
+
+    [Test]
+    public void Session_endpoints_the_session_lists_as_unavailable_are_not_offered()
+    {
+        // DEV-SEC-83: a port dev reports as unavailable is another process's, even while debugEndpoints still names it.
+        var session = DevSessions.Parse("""
+            {
+              "schema": "runic.application.tool.dev-session/1", "state": "ready", "processId": 1, "project": "/a/App.csproj",
+              "debugEndpoints": [
+                { "engine": "chromium", "protocol": "cdp", "url": "http://localhost:9225/" },
+                { "engine": "chromium", "protocol": "cdp", "url": "http://127.0.0.1:51234/" }
+              ],
+              "unavailableDebugEndpoints": [ { "engine": "chromium", "protocol": "cdp", "url": "http://127.0.0.1:9225/", "reason": "port in use" } ]
+            }
+            """)!;
+        Check.Same(new[] { "http://127.0.0.1:51234/" }, CdpEndpoints.FromSession(session).Select(item => item.Url));
     }
 
     [Test]
     public void Cdp_qualifiers_targets_and_version_response()
     {
-        Check.Same(new[] { "http://127.0.0.1:9222/", "127.0.0.1:9222", "http://localhost:9222/" }, CdpEndpoints.Qualifiers("http://127.0.0.1:9222/"));
+        Check.Equal("http://127.0.0.1:9222/", CdpEndpoints.Url(9222));
+        Check.Equal("http://127.0.0.1:9222/", CdpEndpoints.Normalize("http://localhost:9222"), "localhost is attached as 127.0.0.1 (DEV-SEC-82)");
+        Check.Equal(null, CdpEndpoints.Normalize("http://[::1]:9222/"));
         Check.Equal("http://127.0.0.1:9222/json/version", CdpEndpoints.VersionUrl("http://127.0.0.1:9222/"));
         Check.Equal(null, CdpEndpoints.Normalize("https://127.0.0.1:9222/"));
         Check.Equal(null, CdpEndpoints.Normalize("http://127.0.0.1/"));
@@ -196,7 +219,7 @@ public class JsDebugAttachTests
     [Test]
     public void The_options_attach_js_debug_to_the_page_of_the_endpoint()
     {
-        string options = JsDebugAttach.Options("http://127.0.0.1:59449/", "http://127.0.0.1:59451/surface-87e3/index.html");
+        string options = JsDebugAttach.Options(59449, "http://127.0.0.1:59451/surface-87e3/index.html");
         var parsed = Json.Object(Json.Parse(options));
         Check.Equal("pwa-chrome", Json.String(parsed, "type"));
         Check.Equal("attach", Json.String(parsed, "request"));
@@ -210,8 +233,59 @@ public class JsDebugAttachTests
     [Test]
     public void Page_urls_are_escaped()
     {
-        string options = JsDebugAttach.Options("http://localhost:9222/", "http://localhost:5173/a\"b\\c\u0001");
+        string options = JsDebugAttach.Options(9222, "http://localhost:5173/a\"b\\c\u0001");
         Check.Equal("http://localhost:5173/a\"b\\c\u0001", Json.String(Json.Object(Json.Parse(options)), "url"));
-        Check.Equal("localhost", Json.String(Json.Object(Json.Parse(options)), "address"));
+        Check.Equal("127.0.0.1", Json.String(Json.Object(Json.Parse(options)), "address"), "never localhost, which can be [::1] (DEV-SEC-82)");
+    }
+}
+
+/// <summary>DEV-SEC-83: the debugger attaches only to a port the Window's page holds.</summary>
+public class EndpointOwnersTests
+{
+    private static readonly DateTime WindowStart = new(2026, 11, 20, 10, 0, 0, DateTimeKind.Utc);
+
+    // 100: the Window; 101: its WebView2 browser; 200: this user's CS-WebUI browser, whose parent cmd exited;
+    // 300: another user's listener; 400: this user's program from before the Window; 500: a reused parent ID.
+    private static readonly Dictionary<int, int> Parents = new() { [100] = 1, [101] = 100, [200] = 199, [300] = 2, [400] = 3, [500] = 100 };
+    private static readonly Dictionary<int, DateTime> Starts = new()
+    {
+        [100] = WindowStart, [101] = WindowStart.AddSeconds(1), [200] = WindowStart.AddSeconds(2),
+        [300] = WindowStart.AddSeconds(3), [400] = WindowStart.AddMinutes(-5), [500] = WindowStart.AddMinutes(-1),
+    };
+
+    private static bool Mine(int id) => id != 300;
+    private static DateTime? Start(int id) => Starts.TryGetValue(id, out var start) ? start : null;
+    private static bool Expected(int id, int? window = 100) => EndpointOwners.Expected(id, window, Parents, Mine, Start);
+
+    private static List<TcpListenerEntry> Listening(params (string Address, int Port, int Id)[] rows)
+        => rows.Select(row => new TcpListenerEntry(IPAddress.Parse(row.Address), row.Port, row.Id)).ToList();
+
+    [Test]
+    public void The_window_its_children_and_this_users_later_processes_may_hold_the_port()
+    {
+        Check.True(Expected(100), "the Window");
+        Check.True(Expected(101), "WebView2's browser, the Window's child");
+        Check.True(Expected(200), "CS-WebUI's browser, started through cmd /c START after the Window");
+        Check.True(!Expected(300), "another user's process");
+        Check.True(!Expected(400), "this user's process from before the Window");
+        Check.True(!Expected(500), "a process older than the Window that names its ID as parent");
+        Check.True(!Expected(999), "a process without a start time");
+        Check.True(Expected(400, window: null), "without a Window, any process of this user");
+        Check.True(!Expected(300, window: null), "another user, without a Window");
+    }
+
+    [Test]
+    public void Only_listeners_that_127_0_0_1_reaches_count()
+    {
+        var owned = EndpointOwners.Check(9225, Listening(("127.0.0.1", 9225, 101), ("192.168.1.2", 9225, 300), ("127.0.0.1", 9226, 300)), id => Expected(id));
+        Check.Equal(EndpointOwnerVerdict.Owned, owned.Verdict);
+
+        var squatted = EndpointOwners.Check(9225, Listening(("0.0.0.0", 9225, 300), ("127.0.0.1", 9225, 101)), id => Expected(id));
+        Check.Equal(EndpointOwnerVerdict.Foreign, squatted.Verdict);
+        Check.Same(new[] { 300 }, squatted.Foreign);
+        Check.True(squatted.Refusal("http://127.0.0.1:9225/").Contains("process 300"), squatted.Refusal("http://127.0.0.1:9225/"));
+
+        Check.Equal(EndpointOwnerVerdict.NotListening, EndpointOwners.Check(9225, Listening(("127.0.0.1", 9226, 101)), id => Expected(id)).Verdict);
+        Check.Equal(EndpointOwnerVerdict.Unknown, EndpointOwners.Check(9225, null, id => Expected(id)).Verdict);
     }
 }
