@@ -288,4 +288,29 @@ public class EndpointOwnersTests
         Check.Equal(EndpointOwnerVerdict.NotListening, EndpointOwners.Check(9225, Listening(("127.0.0.1", 9226, 101)), id => Expected(id)).Verdict);
         Check.Equal(EndpointOwnerVerdict.Unknown, EndpointOwners.Check(9225, null, id => Expected(id)).Verdict);
     }
+
+    [Test]
+    public void On_Windows_the_listener_table_names_this_process_and_other_accounts()
+    {
+        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            Check.Equal(EndpointOwnerVerdict.Unknown, EndpointOwners.CheckNow(9225, null).Verdict);
+            return;
+        }
+        var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            int self = System.Diagnostics.Process.GetCurrentProcess().Id;
+            Check.True(EndpointOwners.ListenersNow()!.Any(item => item.Port == port && item.ProcessId == self && item.Address.Equals(IPAddress.Loopback)), "GetExtendedTcpTable lists this process's 127.0.0.1 listener");
+            Check.Equal(EndpointOwnerVerdict.Owned, EndpointOwners.CheckNow(port, self).Verdict, "the Window itself");
+            Check.Equal(EndpointOwnerVerdict.Owned, EndpointOwners.CheckNow(port, null).Verdict, "this user's process");
+            // RPC's endpoint mapper (0.0.0.0:135) runs as NETWORK SERVICE on every Windows: another account.
+            var rpc = EndpointOwners.CheckNow(135, null);
+            Check.Equal(EndpointOwnerVerdict.Foreign, rpc.Verdict, "a service account's listener");
+        }
+        finally { listener.Stop(); }
+        Check.Equal(EndpointOwnerVerdict.NotListening, EndpointOwners.CheckNow(1, null).Verdict);
+    }
 }
