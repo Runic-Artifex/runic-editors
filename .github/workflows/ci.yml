@@ -48,6 +48,12 @@ jobs:
           echo "$ACTIONLINT_SHA256  $archive" | sha256sum --check --strict
           tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
           "$RUNNER_TEMP/actionlint" -color
+      # The store-rule tests run vsce from vscode/bun.lock and the release's VsixPublisher (eng/release/store-rules.mjs).
+      - name: Install vsce for the store-rule tests
+        working-directory: vscode
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Restore VsixPublisher for the store-rule tests
+        run: dotnet restore eng/release/vsixpublisher --locked-mode
       - name: Test the version mapping and release scripts
         run: bun test eng
       - name: Check the runic.json schema against the pinned Translations release
@@ -76,7 +82,8 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
-      # Packaging stamps the eng/version.json release version (eng/release/ide-versions.mjs) and checks the VSIX.
+      # Packaging stamps the eng/version.json release version (eng/release/ide-versions.mjs) and checks the VSIX,
+      # including vsce's publish checks (eng/release/store-rules.mjs).
       # The second package (not uploaded) checks that a plain release drops the pre-release flag and has no Preview label.
       - name: Build, test and package the VS Code extension
         working-directory: vscode
@@ -138,6 +145,13 @@ jobs:
         run: msbuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1 /p:Configuration=Release /p:RestoreLockedMode=true
       - name: Verify the VSIX against the source manifest
         run: python visualstudio/package.py --configuration Release
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # VsixPublisher's own publish checks up to its first Marketplace request, offline (eng/release/store-rules.mjs);
+      # the release workflow's dry run runs them on the release candidate.
+      - name: Check the VSIX against the Visual Studio Marketplace upload rules
+        run: bun eng/release/release.mjs check-vsix visualstudio visualstudio/artifacts/runic-devkit-vs.vsix
       - name: Test the Core library on Windows
         run: dotnet run --project visualstudio/Core.Tests --configuration Release -p:RestoreLockedMode=true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

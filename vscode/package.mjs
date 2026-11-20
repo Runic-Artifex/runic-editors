@@ -6,7 +6,7 @@
 // carries the Marketplace "Preview" label (D077.4). Only a
 // x.y.z-preview.N or x.y.z-rc.N release is packaged with --pre-release. Relative README links point at the
 // release tag (--baseContentUrl/--baseImagesUrl), and the store listing (icon, keywords, README and CHANGELOG
-// images) is checked after packing (eng/release/listing.mjs).
+// images) and vsce's publish checks are run on the packed file (eng/release/listing.mjs, store-rules.mjs).
 // See eng/release/ide-versions.mjs for the version mapping.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { ideVersions, releaseVersion, vsixMetadata } from '../eng/release/ide-versions.mjs';
 import { checkVscodeListing, listingBaseUrls, vscodeListing } from '../eng/release/listing.mjs';
+import { checkStoreRules } from '../eng/release/store-rules.mjs';
 
 const here = import.meta.dirname;
 const vsce = join(dirname(createRequire(import.meta.url).resolve('@vscode/vsce/package.json')), 'vsce');
@@ -47,4 +48,6 @@ assert.deepEqual(packed, { id: 'runic-devkit', version: versions.vscode, publish
   packagePreview: versions.vscodePreview },
   `${output} does not carry the ${versions.release} mapping ${JSON.stringify(versions)}`);
 const icon = checkVscodeListing(vscodeListing(output));
+// vsce's package and publish checks on the packed file, as `vsce publish --packagePath` would run them (eng/release/store-rules.mjs).
+console.log(await checkStoreRules('vscode', output, { preRelease: versions.vscodePreRelease }));
 console.log(`Packaged ${output}: version ${versions.vscode}${versions.vscodePreRelease ? ' (pre-release)' : ''} for release ${versions.release}, icon ${icon.width}x${icon.height}`);
