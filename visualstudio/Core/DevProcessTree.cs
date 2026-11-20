@@ -70,7 +70,7 @@ internal sealed class DevProcessTree : IDisposable
     }
 
     /// <summary>Every running process's parent ID (a Toolhelp snapshot).</summary>
-    private static Dictionary<int, int> Parents()
+    internal static Dictionary<int, int> Parents()
     {
         var parents = new Dictionary<int, int>();
         IntPtr snapshot = CreateToolhelp32Snapshot(SnapProcess, 0);

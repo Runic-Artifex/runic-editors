@@ -215,6 +215,15 @@ and the .NET debugger stays attached.
 debugger alone to a page that already runs with an endpoint: the session file's
 `debugEndpoints` (WebView2's, and since runic-sdk 0.22 a CS-WebUI Window's) and
 the Windows that Debug the Window started. With several, it asks which one.
+It leaves out an endpoint the session also lists as unavailable.
+
+Both commands attach only to `127.0.0.1`, never to `localhost`, which can
+resolve to `[::1]`, where another user's program may listen. Before attaching,
+DevKit checks which process listens on the port: the Window, a process the
+Window started, or a process of yours started after the Window (CS-WebUI's
+browser). When another program holds the port, such as another user's on
+CS-WebUI's fixed 9225, DevKit does not attach, and the message names that
+process. Close it, or start the Window again.
 
 Page debugging needs:
 

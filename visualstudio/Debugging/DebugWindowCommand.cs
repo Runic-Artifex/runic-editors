@@ -121,7 +121,7 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         int processId;
         try { processId = await LaunchAsync(program, plan, cancellationToken); }
         catch { await BreakAllProcesses.RestoreIfNotDebuggingAsync(); throw; }
-        var endpoint = new PageEndpoint(engine, plan.EndpointUrl, "Debug the Window");
+        var endpoint = new PageEndpoint(engine, plan.EndpointUrl, "Debug the Window", processId);
         PageAttach.Remember(project, endpoint, processId);
 
         // 4. The page: attach the JavaScript engine once the endpoint answers and lists the page.
