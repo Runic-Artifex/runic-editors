@@ -1,16 +1,17 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { cpSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { CI_WORKFLOW, LAST_TRANSLATIONS_RELEASE, MARKETPLACE, MARKETPLACE_URL, MAX_VISUAL_STUDIO_DESCRIPTION, OIDC_AUDIENCE, PUBLISH_MANIFEST, RELEASE_WORKFLOW, REPOSITORY, STORES,
   TOKEN_EXCHANGE, TOKEN_PLACEHOLDER, VSCE, VSIX, VSIXPUBLISHER, VSIXPUBLISHER_NATIVE_OIDC, assertNewVersion, checkVisualStudioDescription, createRelease, fetchRelease, findCiArtifacts,
   galleryListing, githubPrerelease, isAncestor, marketplaceToken, parseSums, prepare, publishCommand, releaseCheck, releaseNotes,
-  releasePlan, root, scanVsix, selectArtifact, selectCiRun, selectStores, sha256Sums, storeCheck, storePackage, storePublish, storeVerify, verify } from "./release.mjs";
+  releasePlan, root, scanVsix, selectArtifact, selectCiRun, selectStores, sha256Sums, storeCheck, storePackage, storePublish, storeRules, storeVerify, verify } from "./release.mjs";
+import { vscodeStoreProblems, vsixPublisherCheck } from "./store-rules.mjs";
 import { MAX_KEYWORDS, checkVscodeListing, listingBaseUrls, markdownProblems, pngSize } from "./listing.mjs";
-import { writeVsixFixtures } from "./vsix-fixtures.mjs";
+import { writeVisualStudioStoreVsix, writeVscodeStoreVsix, writeVsixFixtures } from "./vsix-fixtures.mjs";
 
 const sha = "a".repeat(40);
 const run = (id, extra = {}) => ({ id, head_sha: sha, event: "push", head_branch: "main", path: CI_WORKFLOW,
@@ -831,4 +832,154 @@ test("the store jobs publish the released files from the marketplace environment
   expect(visualStudio.if).toContain("!contains(inputs.version, '-')");
   expect(visualStudio.steps.find(step => step.name === "Restore VsixPublisher").run).toBe("dotnet restore eng/release/vsixpublisher --locked-mode");
   expect(vscode.steps.find(step => step.name === "Install vsce").run).toBe("bun install --frozen-lockfile --ignore-scripts");
+});
+
+// --- Store rules (eng/release/store-rules.mjs): the stores' own offline checks, in CI and in the release dry run. ---
+
+const withStoreVsix = (write, check) => {
+  const directory = mkdtempSync(join(tmpdir(), "runic-editors-store-rules-"));
+  try { return check(write(directory)); } finally { rmSync(directory, { recursive: true, force: true }); }
+};
+const visualStudioVsix = (options, manifest) => withStoreVsix(directory => {
+  const path = join(directory, "runic-devkit-vs.vsix");
+  writeVisualStudioStoreVsix(path, options);
+  let publishManifest;
+  if (manifest) {
+    // A publish manifest next to a copy of overview.md, as VsixPublisher resolves `overview` from its directory.
+    publishManifest = join(directory, "publishManifest.json");
+    cpSync(resolve(root, "visualstudio/overview.md"), join(directory, "overview.md"));
+    writeFileSync(publishManifest, typeof manifest === "string" ? manifest
+      : JSON.stringify(manifest(JSON.parse(readFileSync(resolve(root, PUBLISH_MANIFEST), "utf8")))));
+  }
+  return vsixPublisherCheck(path, { publishManifest });
+}, result => result);
+const longDescription = text => text.replace(/(<Description xml:space="preserve">)([^<]*)/, (_, open, description) => `${open}${description} ${"x".repeat(387 - description.length - 1)}`);
+
+test("VsixPublisher's own publish checks pass the release's Visual Studio VSIX and publish manifest offline", () => {
+  const { status, output } = visualStudioVsix();
+  expect(output).toContain("offline publish checks passed for runic-artifex.runic-devkit-vs");
+  expect(status).toBe(0);
+}, 300_000);
+
+// Each row breaks one rule VsixPublisher 18.11.1098 checks before its first Marketplace request; the check fails with
+// VsixPublisher's own message and its error code as the exit code. VsixPub0024 failed the 0.23.0 upload.
+test("VsixPublisher's offline checks refuse a VSIX or publish manifest the Visual Studio Marketplace upload would refuse", () => {
+  const cases = [
+    [24, "VsixPub0024", { edit: longDescription }],
+    [24, "VsixPub0024", { edit: text => text.replace(/<Description xml:space="preserve">[^<]*<\/Description>/, '<Description xml:space="preserve"></Description>') }],
+    [23, "VsixPub0023", { edit: text => text.replace("<Tags>runic;", `<Tags>${"t".repeat(51)};runic;`) }],
+    [26, "VsixPub0026", { edit: text => text.replace("<DisplayName>Runic DevKit</DisplayName>", `<DisplayName>${"D".repeat(81)}</DisplayName>`) }],
+    // On .NET 10 with ICU any well-formed tag is a culture; .NET Framework also refuses unknown ones (README, "Store rules").
+    [25, "VsixPub0025", { edit: text => text.replace('Language="en-US"', 'Language="en US!"') }],
+    [18, "VsixPub0018", { edit: text => text.replace('InstallationTarget Id="Microsoft.VisualStudio.Community"', 'InstallationTarget Id="Microsoft.VisualStudio.Unknown"') }],
+    [27, "VsixPub0027", { edit: text => text.replace(/<Installation>[\s\S]*<\/Installation>/, "<Installation />") }],
+    [20, "VsixPub0020", { icon: false }],
+    [21, "VsixPub0021", {}, manifest => ({ ...manifest, categories: ["coding", "build", "data", "testing"] })],
+    [6, "VsixPub0006", {}, manifest => ({ ...manifest, categories: ["coding", "no such category"] })],
+    [17, "VsixPub0017", {}, manifest => ({ ...manifest, identity: { ...manifest.identity, vsixId: "RunicArtifex.DevKit.VisualStudio" } })],
+    [33, "VsixPub0033", {}, manifest => ({ ...manifest, identity: { internalName: "runic_devkit_vs" } })],
+    [9, "VsixPub0009", {}, manifest => ({ ...manifest, overview: "missing.md" })],
+    [28, "VsixPub0028", {}, manifest => ({ ...manifest, repo: "not a url" })],
+    [5, "VsixPub0005", {}, manifest => ({ ...manifest, publisher: "" })],
+    [3, "VsixPub0003", {}, "{ not json"],
+  ];
+  for (const [status, code, options, manifest] of cases) {
+    const result = visualStudioVsix(options, manifest);
+    expect(result.output).toContain(`error ${code} :`);
+    expect(result.status).toBe(status);
+  }
+}, 600_000);
+
+// VsixPublisher 18.12.1606 shipped Microsoft.Identity.Client 4.87.0.0 without the binding redirect for the 4.85.2.0
+// that Microsoft.VisualStudio.Services.Common references, and every publish failed with VsixPub0031.
+test("the VsixPublisher check refuses a VsixPublisher whose binding redirects .NET Framework would refuse (VsixPub0031)", () => {
+  const original = resolve(root, VSIXPUBLISHER);
+  const bin = dirname(original);
+  const config = readFileSync(`${original}.config`, "utf8");
+  const msal = /<dependentAssembly>\s*<assemblyIdentity name="Microsoft\.Identity\.Client"[^>]*\/>[\s\S]*?<\/dependentAssembly>/;
+  expect(config).toMatch(msal);
+  withStoreVsix(directory => {
+    // A copy of the restored VsixPublisher that differs only in its config (links to the restored files).
+    for (const entry of readdirSync(bin)) if (entry !== "VsixPublisher.exe.config") symlinkSync(join(bin, entry), join(directory, entry));
+    writeFileSync(join(directory, "VsixPublisher.exe.config"), config.replace(msal, ""));
+    const vsix = join(directory, "runic-devkit-vs.vsix");
+    writeVisualStudioStoreVsix(vsix);
+    return vsixPublisherCheck(vsix, { vsixPublisher: join(directory, "VsixPublisher.exe") });
+  }, ({ status, output }) => {
+    expect(output).toContain("error VsixPub0031 : Microsoft.VisualStudio.Services.Common references Microsoft.Identity.Client");
+    expect(status).toBe(31);
+  });
+}, 300_000);
+
+const vscodeProblems = async (options, preRelease = false) => {
+  const directory = mkdtempSync(join(tmpdir(), "runic-editors-store-rules-"));
+  try {
+    const path = join(directory, "runic-devkit.vsix");
+    writeVscodeStoreVsix(path, options);
+    return await vscodeStoreProblems(path, { preRelease });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+};
+
+test("vsce's package and publish checks pass the release's VS Code VSIX, as a release and as a pre-release", async () => {
+  expect(await vscodeProblems({ version: "0.23.1" })).toEqual([]);
+  expect(await vscodeProblems({ version: "1.0.0-rc.2" }, true)).toEqual([]);
+});
+
+// Each row breaks one rule `vsce package` or `vsce publish --packagePath` checks before it uploads.
+test("vsce's offline checks refuse a VS Code VSIX the VS Code Marketplace upload would refuse", async () => {
+  const cases = [
+    ["Cannot use '--pre-release' flag with a package that was not packaged as pre-release", { version: "1.0.0-rc.2", packagedPreRelease: false }, true],
+    ["doesn't support prerelease versions: '1.0.0-rc.2'", { edit: manifest => ({ ...manifest, version: "1.0.0-rc.2" }) }],
+    ["Pre-release versions are supported by VS Code >=1.63", { version: "1.0.0-rc.2", edit: manifest => ({ ...manifest, engines: { vscode: "^1.50.0" },
+      devDependencies: { ...manifest.devDependencies, "@types/vscode": "1.50.0" } }) }, true],
+    ["@types/vscode 1.100.0 greater than engines.vscode ^1.50.0", { edit: manifest => ({ ...manifest, engines: { vscode: "^1.50.0" } }) }],
+    ["Manifest missing field: engines", { edit: ({ engines: _engines, ...manifest }) => manifest }],
+    ["SVGs can't be used as icons", { edit: manifest => ({ ...manifest, icon: "media/icon.svg" }) }],
+    ["Badge URLs must come from an HTTPS source", { edit: manifest => ({ ...manifest, badges: [{ url: "http://example.com/b.png", href: "https://example.com", description: "b" }] }) }],
+    ["Badge SVGs are restricted", { edit: manifest => ({ ...manifest, badges: [{ url: "https://example.com/b.svg", href: "https://example.com", description: "b" }] }) }],
+    ["Invalid extension \"publisher\"", { edit: manifest => ({ ...manifest, publisher: "Runic Artifex" }) }],
+    ["Invalid extension \"name\"", { edit: manifest => ({ ...manifest, name: "runic devkit" }) }],
+    ["You should not depend on 'vscode'", { edit: manifest => ({ ...manifest, dependencies: { ...manifest.dependencies, vscode: "1.1.37" } }) }],
+    ["proposed API", { edit: manifest => ({ ...manifest, enabledApiProposals: ["chatProvider"] }) }],
+    ["no repository", { edit: ({ repository: _repository, ...manifest }) => manifest }],
+    ["Pricing can only be", { edit: manifest => ({ ...manifest, pricing: "Paid" }) }],
+  ];
+  for (const [message, options, preRelease] of cases) expect((await vscodeProblems(options, preRelease)).join("\n")).toContain(message);
+});
+
+test("store-rules checks each selected store's VSIX with its pre-release flag, and skips Visual Studio for a pre-release", async () => {
+  await withVsix("1.0.0-rc.2", async vsix => {
+    const calls = [];
+    const check = async (store, path, options) => { calls.push([store, basename(path), options]); return "ok"; };
+    expect(await storeRules("all", vsix, "1.0.0-rc.2", { check, log: () => {} })).toEqual(["vscode"]);
+    expect(calls).toEqual([["vscode", "runic-devkit.vsix", { preRelease: true }]]);
+  });
+  await withVsix("0.22.0", async vsix => {
+    const calls = [];
+    const check = async (store, path, options) => { calls.push([store, basename(path), options]); return "ok"; };
+    expect(await storeRules("all", vsix, "0.22.0", { check, log: () => {} })).toEqual(["vscode", "visualstudio"]);
+    expect(calls).toEqual([["vscode", "runic-devkit.vsix", { preRelease: false }], ["visualstudio", "runic-devkit-vs.vsix", { preRelease: false }]]);
+    expect(await storeRules("none", vsix, "0.22.0", { check, log: () => {} })).toEqual([]);
+    // The project's stricter description check (storePackage) still runs first.
+    await expect(storeRules("visualstudio", vsix, "0.23.0", { check, log: () => {} })).rejects.toThrow("not 0.23.0.1000");
+  });
+});
+
+test("CI and the release dry run run the stores' offline upload checks", () => {
+  const ci = workflow("ci.yml").jobs;
+  const runs = job => job.steps.map(step => step.run ?? "");
+  const visualStudio = runs(ci.visualstudio);
+  expect(visualStudio.indexOf("bun eng/release/release.mjs check-vsix visualstudio visualstudio/artifacts/runic-devkit-vs.vsix"))
+    .toBeGreaterThan(visualStudio.indexOf("python visualstudio/package.py --configuration Release"));
+  expect(readFileSync(resolve(root, "vscode/package.mjs"), "utf8")).toContain("await checkStoreRules('vscode', output, { preRelease: versions.vscodePreRelease })");
+  const sourceChecks = runs(ci["source-checks"]);
+  expect(sourceChecks.indexOf("dotnet restore eng/release/vsixpublisher --locked-mode")).toBeLessThan(sourceChecks.indexOf("bun test eng"));
+  const { candidate } = workflow("release.yml").jobs;
+  const steps = runs(candidate);
+  const rules = steps.indexOf('bun eng/release/release.mjs store-rules "$STORES" "$VERSION" artifacts/vsix');
+  expect(rules).toBeGreaterThan(steps.indexOf("dotnet restore eng/release/vsixpublisher --locked-mode"));
+  expect(rules).toBeGreaterThan(steps.indexOf("bun install --frozen-lockfile --ignore-scripts"));
+  expect(rules).toBeLessThan(steps.findIndex(run => run.includes("store-publish")));
+  // The candidate job runs in the dry run and before every store job, so the checks gate a real publish as well.
+  for (const job of ["marketplace-vscode", "marketplace-visualstudio"]) expect(workflow("release.yml").jobs[job].needs).toContain("candidate");
 });

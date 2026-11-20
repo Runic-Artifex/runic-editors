@@ -12,9 +12,9 @@ pushing:
 
 | CI job | Local command |
 | --- | --- |
-| Source checks | `actionlint`, `bun test eng`, `bun eng/translations.mjs --check`, `python3 visualstudio/package.py --check-source` and `dotnet run --project visualstudio/Core.Tests` |
+| Source checks | `actionlint`, `bun install --frozen-lockfile --ignore-scripts` in `vscode` and `dotnet restore eng/release/vsixpublisher --locked-mode` (the store-rule tests run vsce and VsixPublisher), `bun test eng`, `bun eng/translations.mjs --check`, `python3 visualstudio/package.py --check-source` and `dotnet run --project visualstudio/Core.Tests` |
 | VS Code extension | `bun install --frozen-lockfile && bun run --bun check && bun run --bun test && bun run package` in `vscode`, then `dotnet tool restore` and `bun run test:host` (needs an installed `code` or `VSCODE_EXECUTABLE_PATH`) |
-| Visual Studio extension | Windows only: `dotnet restore eng/release/vsixpublisher --locked-mode`, `msbuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1 /p:Configuration=Release /p:RestoreLockedMode=true`, then `python visualstudio/package.py --configuration Release` and `dotnet run --project visualstudio/Core.Tests`. On Linux, `dotnet build visualstudio` cross-compiles it |
+| Visual Studio extension | Windows only: `dotnet restore eng/release/vsixpublisher --locked-mode`, `msbuild visualstudio/RunicArtifex.DevKit.VisualStudio.csproj /restore /m:1 /p:Configuration=Release /p:RestoreLockedMode=true`, then `python visualstudio/package.py --configuration Release`, `bun eng/release/release.mjs check-vsix visualstudio visualstudio/artifacts/runic-devkit-vs.vsix` (VsixPublisher's offline publish checks; also on Linux with a VSIX copied from Windows) and `dotnet run --project visualstudio/Core.Tests`. On Linux, `dotnet build visualstudio` cross-compiles it |
 
 The VS Code host test and CI run the language server of the
 `dotnet-runic-translations` release in `.config/dotnet-tools.json`, restored from
@@ -35,4 +35,5 @@ are exempt.
 See [Releasing the editor extensions](eng/release/README.md). The release
 workflow publishes to the VS Code Marketplace and the Visual Studio Marketplace
 through trusted publishing ([Stores](eng/release/README.md#stores)); it is a dry
-run by default. Do not dispatch it without the maintainer's approval.
+run by default. CI and the dry run run both stores' offline upload checks
+([Store rules](eng/release/README.md#store-rules)). Do not dispatch it without the maintainer's approval.

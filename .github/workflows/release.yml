@@ -3,10 +3,11 @@ name: Release
 # Releases the two VSIX files that CI built for a commit on main as a GitHub release with SHA256SUMS and
 # build-provenance attestations, then publishes the same files to the VS Code Marketplace and (final versions only)
 # the Visual Studio Marketplace through trusted publishing (D070.11-D070.14; Open VSX is deferred). Dispatch-only and
-# a dry run by default: a dry run checks the stores' public listings and prints the publish commands, and never
-# publishes. A dispatch with a single store for a version whose GitHub release is already published at an ancestor
-# commit is store-only: no new release, and the store job publishes that release's own files, checked against its
-# SHA256SUMS and attestations, with this commit's workflow code. See eng/release/README.md ("Stores").
+# a dry run by default: a dry run runs both stores' offline upload checks (vsce, VsixPublisher), checks the stores'
+# public listings and prints the publish commands, and never publishes. A dispatch with a single store for a version
+# whose GitHub release is already published at an ancestor commit is store-only: no new release, and the store job
+# publishes that release's own files, checked against its SHA256SUMS and attestations, with this commit's workflow code.
+# See eng/release/README.md ("Stores" and "Store rules").
 on:
   workflow_dispatch:
     inputs:
@@ -137,6 +138,22 @@ jobs:
             cat artifacts/release/SHA256SUMS
             echo SHA256SUMS
           } >> "$GITHUB_OUTPUT"
+      # Offline, before any store is contacted: each store's VSIX against the store's own upload checks
+      # (eng/release/store-rules.mjs): vsce's package and publish checks, and VsixPublisher's publish steps up to its
+      # first Marketplace request. A store failure the tools can see shows up here, in the dry run, not at upload.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Restore VsixPublisher
+        run: dotnet restore eng/release/vsixpublisher --locked-mode
+      # @vscode/vsce from vscode/bun.lock, without lifecycle scripts.
+      - name: Install vsce
+        working-directory: vscode
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Check the VSIX files against the stores' upload rules (offline)
+        env:
+          STORES: ${{ inputs.stores }}
+        run: bun eng/release/release.mjs store-rules "$STORES" "$VERSION" artifacts/vsix
       # Read-only: the stores' public listings and the exact publish commands; no credentials, no publish endpoint.
       - name: Check the stores and print the publish commands (dry run)
         env:

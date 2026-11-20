@@ -123,7 +123,9 @@ first decides what the dispatch does (`release.mjs release-check <version>
   the release's files and checks them (`fetch-release`); no GitHub release is
   created.
 
-It then checks each store selected by the **stores** input and prints its exact
+It then checks each store's VSIX against the store's own offline upload checks
+(`store-rules <stores> <version> <vsix>`, see [Store rules](#store-rules)),
+checks each store selected by the **stores** input and prints its exact
 publish command (`store-publish <stores> <version> <vsix> --dry-run`, see
 [Stores](#stores)). A dry run ends there.
 
@@ -218,7 +220,8 @@ job refuses files whose hashes differ from `SHA256SUMS` or the candidate job's, 
 that lack the release workflow's attestation for the tag commit. A version the
 store already lists with other bytes still fails `store-check`.
 
-**Dry run.** The candidate job runs `store-publish <stores> <version> <vsix>
+**Dry run.** The candidate job runs `store-rules <stores> <version> <vsix>`
+([Store rules](#store-rules)) and `store-publish <stores> <version> <vsix>
 --dry-run` in every run: it checks the VSIX identities (the VS Code VSIX against
 `publisher.name`, the Visual Studio identity in `publishManifest.json`) and the
 stores' public listings, and prints the exact commands. It reads only the stores'
@@ -234,12 +237,11 @@ at least 128 px), at most 30 keywords, and no SVG images or `http:` links. The
 Visual Studio listing is `visualstudio/publishManifest.json`, `overview.md` and the
 manifest's `MoreInfo`, `ReleaseNotes`, `Icon`, `PreviewImage` and `Tags`, checked by
 `package.py`, which also refuses `<Preview>true</Preview>` (no Preview label since 0.23).
-VsixPublisher refuses a manifest `<Description>` that is missing or not shorter than
+VsixPublisher refuses a manifest `<Description>` that is missing or longer than
 280 characters (`VsixPub0024`, which failed the Visual Studio publish of 0.23.0, released
-there as 0.23.1); `package.py` and `store-publish visualstudio`, also in the dry run, refuse
-it first. The other limits VsixPublisher 18.11.1098 checks: display name under 80
-characters, each tag at most 50, 1 to 3 categories, a language, an install target, an
-http(s) `repo` and an `internalName` under 63 characters. The icons are rendered from the
+there as 0.23.1); `package.py` and `store-publish visualstudio` refuse 280 too, as
+VsixPublisher's message ("less than 280") says. Every other rule either store checks
+at upload is in [Store rules](#store-rules). The icons are rendered from the
 Runic Artifex brand mark by [`eng/brand/render-icons.sh`](../brand/render-icons.sh).
 Q&A is off on both stores; questions go to GitHub issues (D070.14).
 
@@ -255,6 +257,85 @@ adds it implicitly only where the .NET Framework targeting pack is missing (Linu
 not the Windows runner), so a lock file written on Linux failed the first Visual
 Studio publish of 0.22.0 with `NU1004`. CI's "Visual Studio extension" job
 (windows-2025) restores the project in locked mode on every change.
+
+### Store rules
+
+Both stores refuse an upload for rules their publish tools check before they send
+anything, and the release runs those tools only in the store jobs, after the
+GitHub release exists. So CI and the release workflow's candidate job (also in a
+dry run) run the same checks offline, with the stores' own tools and without a
+token: [`store-rules.mjs`](store-rules.mjs).
+
+| Where | VS Code Marketplace | Visual Studio Marketplace |
+| --- | --- | --- |
+| CI, every PR | `vscode/package.mjs` on both packages it builds (the artifact, and the final-release check) | "Visual Studio extension" job (windows-2025) on the built VSIX: `release.mjs check-vsix visualstudio <vsix>` |
+| Release workflow, candidate job (dry run included) | `release.mjs store-rules <stores> <version> artifacts/vsix`, on the files the stores would get | the same |
+| Locally | `bun eng/release/release.mjs check-vsix vscode <vsix> [--pre-release]` (after `bun install` in `vscode`) | `bun eng/release/release.mjs check-vsix visualstudio <vsix>` (after `dotnet restore eng/release/vsixpublisher --locked-mode`) |
+
+**VS Code Marketplace: vsce's own checks.** `vsce package` already checks the
+source; `store-rules.mjs` calls `@vscode/vsce` 4.1.1 from `vscode/bun.lock` (the
+version the publish job runs) on the packaged VSIX, with the package.json the
+release stamped:
+
+| Rule | Source in vsce 4.1.1 | Could ours break it? |
+| --- | --- | --- |
+| A readable VSIX: `extension/package.json` and `extension.vsixmanifest`; `@types/vscode` not newer than `engines.vscode` | `out/zip.js` `readVSIXPackage` | the stamping in `package.mjs` |
+| `engines.vscode` present and valid; `name` and `publisher` match `^[a-z0-9][a-z0-9-]*$`; `version` is semver; `pricing` is Free or Trial; `main` with `activationEvents`; no SVG `icon`; badges over https, SVG badges only from trusted hosts; no `vscode` dependency; valid `extensionKind`, `sponsor`, `extensionDependencies`, `extensionPack` | `out/package.js` `validateManifestForPackaging` | yes, `vscode/package.json` |
+| A pre-release needs `engines.vscode` >= 1.63 | `out/package.js` `ManifestProcessor` | yes, for `-rc.N` |
+| Not the `vscode-samples` publisher; a `repository`; no `*` activation (vsce prompts, which aborts a non-interactive publish) | `out/package.js` `ManifestProcessor.onEnd` | yes, `vscode/package.json` |
+| `--pre-release` only for a VSIX packaged as a pre-release | `out/publish.js` `publish` | yes, the version mapping |
+| No proposed API (`enableProposedApi`, `enabledApiProposals`); no semver prerelease version (`1.0.0-rc.1`); a valid publisher | `out/publish.js` `validateManifestForPublishing` (not exported, restated) | yes, the version mapping |
+| At most 30 keywords; a square PNG icon of at least 128 px; `qna: false`; https `homepage`, `bugs`, `repository`; README and CHANGELOG without SVG images or `http:` links | [Publishing extensions](https://code.visualstudio.com/api/working-with-extensions/publishing-extension) and the extension manifest reference; `listing.mjs` | yes, `vscode/package.json`, README, CHANGELOG |
+
+**Visual Studio Marketplace: VsixPublisher's own code.** VsixPublisher has no
+offline mode: `publish` authenticates before it checks anything. So
+[`vsixpublisher-check`](vsixpublisher-check/Program.cs) loads the
+`VsixPublisher.exe` the publish job uses (18.11.1098, restored by
+[`vsixpublisher/`](vsixpublisher/VsixPublisher.csproj)) and calls the steps of its
+`publish` command by reflection, in order, up to its first Marketplace request:
+`PublishCommand.Validate` and `TryReadPublishManifest`, then
+`Publisher.TryAddIdentityForVsixPayload`, the icon extraction,
+`ValidatePublishManifest`, `MarketplaceManifestGenerator.GenerateManifest` and
+`PayloadPackager.TryGetPackageStream`, which builds the package the upload would
+send. A failure prints VsixPublisher's own message and exits with its error code
+(`VSSDK: error VsixPub0024 : …`, exit 24). The .NET Framework program runs on
+.NET 10 with `System.IO.Packaging` and `System.Security.Permissions`, on Linux and
+Windows. The error codes are from VsixPublisher's `VsixPublisherOutputMessages`:
+
+| Code | Rule | Could ours break it? |
+| --- | --- | --- |
+| VsixPub0001, 0002, 0022 | The payload and publish manifest exist; the payload is a file or an http(s) URL | the workflow paths |
+| VsixPub0003, 0006 | `publishManifest.json` deserializes, with `identity.internalName`, `categories`, `overview` and `publisher`; every category and the `priceCategory` are known values | yes, `publishManifest.json` |
+| VsixPub0016, 0017, 0018 | The VSIX has `extension.vsixmanifest`; the publish manifest sets no `vsixId`; the manifest parses, with Identity `Id`, a `System.Version` `Version` and `Language`, `<Description>`, `<DisplayName>`, and InstallationTargets with a known SKU `Id` and a version range | yes, `source.extension.vsixmanifest` and the version stamp |
+| VsixPub0020 | The `<Icon>` is in the VSIX | yes |
+| VsixPub0005, 0009, 0021 | A `publisher`; the `overview` file exists next to `publishManifest.json`; 1 to 3 categories | yes, `publishManifest.json` |
+| VsixPub0023, 0024, 0025, 0026, 0027 | Each tag at most 50 characters; a `<Description>` of 1 to 280 characters; a valid `Language`; a `<DisplayName>` of 1 to 80; at least one InstallationTarget | yes, `source.extension.vsixmanifest`; **0024 failed 0.23.0** |
+| VsixPub0028, 0033 | `repo` is an absolute http(s) URL; `internalName` matches `^[a-zA-Z0-9][a-zA-Z0-9-]*$` and has at most 63 characters | yes, `publishManifest.json` |
+| VsixPub0034, 0036 | Asset file and payload names are valid package part names | the workflow paths |
+| VsixPub0031 (binding redirects) | Every reference from VsixPublisher's publish path (`VsixPublisher`, `VsixCommandLine`, `Microsoft.VisualStudio.Services.*`, `Microsoft.Identity.Client*`) to an assembly the package ships in another version has a binding redirect in `VsixPublisher.exe.config` to that version. .NET Framework refuses the load otherwise, which VsixPublisher reports as VsixPub0031. 18.12.1606 has 8 such references, including `Microsoft.Identity.Client` 4.85.2.0 → 4.87.0.0; 18.11.1098 has none | a `Microsoft.VSSDK.BuildTools` update in `vsixpublisher/` |
+
+One difference from the publish job: on .NET 10 with ICU, any well-formed
+`Language` tag is a culture, while .NET Framework on Windows also refuses an
+unknown one (VsixPub0025). `package.py` checks the manifest's other listing
+fields, the images and `overview.md`.
+
+**Checked only by the stores.** These need the store or a token and stay with the
+store jobs: authentication and trusted publishing (VsixPub0031 from a bad
+token, VsixPub0047, `vsce --oidc`), the publisher existing and owning the item
+(VsixPub0030, VsixPub0032), a version already published (`store-check` reads it
+from the public gallery in the dry run), the Marketplace's server-side checks
+(VsixPub0029, VsixPub0043; vsce reports them as gallery errors), such as its
+package scan and size limits, and whether the listing serves the uploaded bytes
+(`store-verify`).
+
+**The failures of 0.22 and 0.23.** Five Visual Studio store attempts failed. Three
+are now caught in a PR and in the dry run: `NU1004` (a VsixPublisher lock file that
+restored only on Linux; CI restores `vsixpublisher/` in locked mode on Windows since
+#45, and the candidate job restores it too), VsixPub0031 in 18.12.1606 (the
+binding-redirect check) and VsixPub0024 in 0.23.0 (VsixPublisher's own check; the
+0.23.0 manifest fails it with exit 24). Two needed the Marketplace: VsixPub0047
+(VsixPublisher's OIDC exchange, [worked around](#vsixpublisher-oidc-workaround-vsixpub0047))
+and the byte check that read a non-public asset (fixed in #68).
 
 **One-time setup (maintainer).** Before the first publish:
 

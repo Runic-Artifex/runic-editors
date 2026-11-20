@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Runs VsixPublisher's own `publish` checks offline (eng/release/README.md, "Store rules"): Program.cs loads the
+    VsixPublisher.exe that eng/release/vsixpublisher restores and calls the steps of its `publish` command up to the
+    first Marketplace request, so no token and no network are needed. VsixPublisher.exe is a .NET Framework program;
+    its validation code also runs on .NET 10 with the two packages below (System.IO.Packaging for the VSIX, and
+    System.Security.Permissions for the Newtonsoft.Json build it bundles), on Linux and Windows.
+    `bun eng/release/release.mjs store-rules` runs it in locked mode; Program.cs lists its arguments.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.IO.Packaging" Version="10.0.0" />
+    <PackageReference Include="System.Security.Permissions" Version="10.0.0" />
+  </ItemGroup>
+</Project>

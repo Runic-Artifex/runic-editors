@@ -10,6 +10,8 @@
 //                                                  SHA256SUMS and their build-provenance attestations
 //   release <version> <vsix> <sha256sums>          create the release, or finish a draft of this commit
 //   store-check <version> <vsix> [store...]        is the version listed on the stores, and as these bytes? (read-only)
+//   store-rules <stores> <version> <vsix>          check each store's VSIX against the store's offline upload rules
+//   check-vsix <store> <file> [--pre-release]      the same for one VSIX file (CI)
 //   store-publish <stores> <version> <vsix> [--dry-run]
 //                                                  check, print and (without --dry-run) run each store's publish command
 //   store-verify <version> <vsix> [store...] [--wait <seconds>]
@@ -22,6 +24,7 @@ import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFil
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ideVersions, releaseVersion, vsixMetadata } from "./ide-versions.mjs";
+import { PUBLISH_MANIFEST, VSIXPUBLISHER, checkStoreRules } from "./store-rules.mjs";
 
 export const root = fileURLToPath(new URL("../..", import.meta.url));
 export const REPOSITORY = "Runic-Artifex/runic-editors";
@@ -56,7 +59,7 @@ export const STORES = {
   visualstudio: { title: "Visual Studio Marketplace", vsix: VSIX[1], format: "visualStudio", itemName: MARKETPLACE.visualStudio.itemName,
     target: "Microsoft.VisualStudio.Ide", asset: VSIX[1].file, finalOnly: true },
 };
-export const PUBLISH_MANIFEST = "visualstudio/publishManifest.json";
+export { PUBLISH_MANIFEST, VSIXPUBLISHER };
 // VsixPublisher refuses a VSIX whose manifest <Description> is empty or not "less than 280 characters in length"
 // (VsixPub0024), which failed the Visual Studio publish of 0.23.0. visualstudio/package.py checks the same limit.
 export const MAX_VISUAL_STUDIO_DESCRIPTION = 279;
@@ -69,8 +72,6 @@ export function checkVisualStudioDescription(description, file = STORES.visualst
   return description.length;
 }
 export const VSCE = "vscode/node_modules/@vscode/vsce/vsce";
-// Microsoft.VSSDK.BuildTools as restored by eng/release/vsixpublisher (NuGet.config keeps packages in .cache/nuget).
-export const VSIXPUBLISHER = ".cache/nuget/microsoft.vssdk.buildtools/18.11.1098/tools/vssdk/bin/VsixPublisher.exe";
 // Runic Translations attached both extensions to its own releases up to this version (the VS Code extension as
 // 0.11.1000, the Visual Studio one as 0.11.0.1000), so a release from this repository must map above it.
 export const LAST_TRANSLATIONS_RELEASE = "0.11.0";
@@ -426,6 +427,19 @@ export function storePackage(name, vsixDirectory, version, manifestPath = resolv
   return { path, version: versions[store.format], preRelease: name === "vscode" && versions.vscodePreRelease, sha256: sha256(readFileSync(path)) };
 }
 
+// Offline, before any store is contacted: each selected store's VSIX against that store's own upload checks (vsce's
+// package and publish checks; VsixPublisher's publish steps up to its first request, eng/release/store-rules.mjs).
+// The release workflow runs it in the candidate job, so a dry run fails where the upload would.
+export async function storeRules(input, vsixDirectory, version, { log = console.log, check = checkStoreRules } = {}) {
+  const { stores, skipped } = selectStores(input, version);
+  for (const name of skipped) log(`${STORES[name].title}: skipped, it gets final versions only and ${version} is not one.`);
+  for (const name of stores) {
+    const local = storePackage(name, vsixDirectory, version);
+    log(`${STORES[name].title}: ${await check(name, local.path, { preRelease: local.preRelease })}`);
+  }
+  return stores;
+}
+
 // Read-only: "publish" when the store does not list this version and it is above every listed one; "skip" when the
 // store lists exactly these bytes with the right pre-release flag. Anything else fails.
 export async function storeCheck(name, vsixDirectory, version, { fetchImpl = fetch } = {}) {
@@ -610,6 +624,11 @@ async function main([command, ...args]) {
   } else if (command === "store-check" && args.length >= 2) {
     const [version, vsixDirectory, ...names] = args;
     for (const name of names.length ? names : selectStores("all", version).stores) console.log((await storeCheck(name, vsixDirectory, version)).message);
+  } else if (command === "store-rules" && args.length === 3) {
+    const [stores, version, vsixDirectory] = args;
+    await storeRules(stores, vsixDirectory, version);
+  } else if (command === "check-vsix" && (args.length === 2 || (args.length === 3 && args[2] === "--pre-release"))) {
+    console.log(await checkStoreRules(args[0], args[1], { preRelease: args[2] === "--pre-release" }));
   } else if (command === "store-publish" && (args.length === 3 || (args.length === 4 && args[3] === "--dry-run"))) {
     const [stores, version, vsixDirectory] = args;
     await storePublish(stores, vsixDirectory, version, { dryRun: args[3] === "--dry-run", vsixPublisher: process.env.VSIXPUBLISHER || undefined });
@@ -619,7 +638,7 @@ async function main([command, ...args]) {
     const waitSeconds = wait < 0 ? 0 : Number(rest.splice(wait, 2)[1]);
     assert.ok(Number.isInteger(waitSeconds) && waitSeconds >= 0, "--wait takes whole seconds");
     await storeVerify(rest.length ? rest : selectStores("all", version).stores, vsixDirectory, version, { waitSeconds });
-  } else throw new Error("Use find-ci, prepare <vsix> <version> <ci-run-id> <output>, verify <vsix> <candidate> <version> <ci-run-id>, release-check <version> [<stores>], fetch-release <version> <commit> <vsix> <download> [<expected-sums>], release <version> <vsix> <sha256sums>, store-check <version> <vsix> [store...], store-publish <all|none|store> <version> <vsix> [--dry-run] or store-verify <version> <vsix> [store...] [--wait <seconds>]");
+  } else throw new Error("Use find-ci, prepare <vsix> <version> <ci-run-id> <output>, verify <vsix> <candidate> <version> <ci-run-id>, release-check <version> [<stores>], fetch-release <version> <commit> <vsix> <download> [<expected-sums>], release <version> <vsix> <sha256sums>, store-check <version> <vsix> [store...], store-rules <all|none|store> <version> <vsix>, check-vsix <store> <file> [--pre-release], store-publish <all|none|store> <version> <vsix> [--dry-run] or store-verify <version> <vsix> [store...] [--wait <seconds>]");
 }
 
 if (import.meta.main) main(process.argv.slice(2)).catch(error => {
