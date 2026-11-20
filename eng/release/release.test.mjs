@@ -63,8 +63,9 @@ test("each VSIX must carry its identity and the version CI stamps for the releas
     expect(check("0.12.0", { vscode: { packageVersion: "0.0.1" } })).toThrow("bundles package.json version 0.0.1");
     expect(check("1.0.0-rc.2", { vscode: { preRelease: false } })).toThrow("is not marked pre-release");
     expect(check("0.12.0", { vscode: { preRelease: true } })).toThrow("is marked pre-release");
-    expect(check("0.12.0", { vscode: { preview: false } })).toThrow("lacks the Marketplace Preview flag");
-    expect(check("0.12.0", { vscode: { packagePreview: false } })).toThrow("bundles package.json preview false");
+    // No Preview label since 0.23 (D077.4).
+    expect(check("0.12.0", { vscode: { preview: true } })).toThrow("has the Marketplace Preview flag");
+    expect(check("0.12.0", { vscode: { packagePreview: true } })).toThrow("bundles package.json preview true");
     expect(check("0.12.0", { visualStudio: { id: "Other" } })).toThrow("declares extension Other");
     expect(check("0.12.0", { vscode: { publisher: "someone" } })).toThrow("declares publisher someone");
     expect(() => scanVsix(vsix, "0.12.0-beta.1")).toThrow("cannot express");
@@ -703,12 +704,13 @@ test("the listing files agree with the store identities and the store limits", (
   expect(publish.categories.length).toBeLessThanOrEqual(3);
   expect(markdownProblems(read("visualstudio/overview.md").toString(), "overview.md")).toEqual([]);
   const vscode = JSON.parse(read("vscode/package.json"));
-  expect(vscode).toMatchObject({ icon: "media/icon.png", qna: false, bugs: { url: `https://github.com/${REPOSITORY}/issues` }, preview: true });
+  expect(vscode).toMatchObject({ icon: "media/icon.png", qna: false, bugs: { url: `https://github.com/${REPOSITORY}/issues` }, preview: false });
   expect(vscode.keywords.length).toBeLessThanOrEqual(MAX_KEYWORDS);
   expect(vscode.devDependencies["@vscode/vsce"]).toBe("4.1.1");
   expect(vscode.devDependencies.ovsx).toBeUndefined();
   const manifest = read("visualstudio/source.extension.vsixmanifest").toString();
-  for (const element of ["<Icon>media\\icon.png</Icon>", "<PreviewImage>media\\preview.png</PreviewImage>", "<Preview>true</Preview>"]) expect(manifest).toContain(element);
+  for (const element of ["<Icon>media\\icon.png</Icon>", "<PreviewImage>media\\preview.png</PreviewImage>"]) expect(manifest).toContain(element);
+  expect(manifest).not.toContain("<Preview>true</Preview>");
   expect([pngSize(read("vscode/media/icon.png")), pngSize(read("visualstudio/media/icon.png")), pngSize(read("visualstudio/media/preview.png"))])
     .toEqual([{ width: 256, height: 256 }, { width: 32, height: 32 }, { width: 200, height: 200 }]);
   const tool = read("eng/release/vsixpublisher/VsixPublisher.csproj").toString();

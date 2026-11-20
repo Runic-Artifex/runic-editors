@@ -114,8 +114,8 @@ export async function findCiArtifacts({ repository, sha, token, fetchImpl = fetc
 }
 
 // Exactly the two extensions, one per CI artifact directory, with their identities and the version CI stamped for
-// this release (ide-versions.mjs); VS Code is a pre-release exactly for a -preview.N or -rc.N release and always
-// carries the Marketplace "Preview" label (preview until 2.0).
+// this release (ide-versions.mjs); VS Code is a pre-release exactly for a -preview.N or -rc.N release and, since
+// 0.23, never carries the Marketplace "Preview" label (D077.4).
 export function scanVsix(directory, version) {
   const versions = ideVersions(version);
   assert.deepEqual(readdirSync(directory).sort(), VSIX.map(entry => entry.artifact).sort(), "VSIX directory must contain exactly the extension artifacts");

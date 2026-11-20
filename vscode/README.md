@@ -1,9 +1,7 @@
 # Runic DevKit for VS Code
 
-**Preview.** This extension is a preview product until the production language
-server (2.0): its commands and settings, and the `lsp` protocol it uses, are
-outside the 1.0 compatibility rules and may change in a minor release. Every
-release carries the Marketplace "Preview" label.
+Before 1.0, a minor release can still change commands and settings; the
+release notes list every change.
 
 ## Install
 

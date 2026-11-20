@@ -2,8 +2,8 @@
 //   node package.mjs [release-version [output]]   package another release mapping (CI checks a final one)
 // The committed package.json keeps a placeholder version: the files vsce would package are
 // copied to a staging directory, package.json is stamped there and vsce packs the copy, so
-// packaging never modifies tracked files. The stamp also sets "preview" (the Marketplace "Preview"
-// label), which every release carries: the extension is a preview product until 2.0. Only a
+// packaging never modifies tracked files. The stamp also sets "preview" false: since 0.23 no release
+// carries the Marketplace "Preview" label (D077.4). Only a
 // x.y.z-preview.N or x.y.z-rc.N release is packaged with --pre-release. Relative README links point at the
 // release tag (--baseContentUrl/--baseImagesUrl), and the store listing (icon, keywords, README and CHANGELOG
 // images) is checked after packing (eng/release/listing.mjs).
