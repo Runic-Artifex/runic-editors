@@ -75,7 +75,8 @@ export async function vscodeStoreProblems(path, { preRelease = false, vsce = vsc
 export function vsixPublisherCheck(path, { vsixPublisher = resolve(root, VSIXPUBLISHER), publishManifest = resolve(root, PUBLISH_MANIFEST),
   uploadPackage, spawn = spawnSync } = {}) {
   if (!existsSync(vsixPublisher)) throw new Error(`${vsixPublisher} does not exist; run \`dotnet restore eng/release/vsixpublisher --locked-mode\` first`);
-  const result = spawn("dotnet", ["run", "--project", resolve(root, VSIXPUBLISHER_CHECK), "--configuration", "Release", "-p:RestoreLockedMode=true",
+  // Explicit .exe on Windows, as release.mjs runs gh.exe.
+  const result = spawn(process.platform === "win32" ? "dotnet.exe" : "dotnet", ["run", "--project", resolve(root, VSIXPUBLISHER_CHECK), "--configuration", "Release", "-p:RestoreLockedMode=true",
     "--", vsixPublisher, resolve(path), publishManifest, ...(uploadPackage ? [uploadPackage] : [])], { cwd: root, encoding: "utf8" });
   if (result.error) throw new Error(`Could not run ${VSIXPUBLISHER_CHECK}: ${result.error.message}`);
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
