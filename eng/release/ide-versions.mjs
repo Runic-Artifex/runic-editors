@@ -52,8 +52,8 @@ export function ideVersions(version) {
 
 export const releaseVersion = () => JSON.parse(readFileSync(new URL("../version.json", import.meta.url), "utf8")).version;
 
-// Identity, pre-release flag, Marketplace "Preview" gallery flag and the bundled package.json
-// version and preview field of a VSIX (python3, standard library only).
+// Identity, pre-release flag, Marketplace "Preview" gallery flag, the manifest <Description> and the bundled
+// package.json version and preview field of a VSIX (python3, standard library only).
 export function vsixMetadata(path) {
   const script = `import json,sys,zipfile,xml.etree.ElementTree as E
 z=zipfile.ZipFile(sys.argv[1])
@@ -64,8 +64,9 @@ i=[e for e in m.iter() if local(e)=='Identity']
 assert len(i)==1,'one VSIX identity'
 p={e.get('Id'):e.get('Value') for e in m.iter() if local(e)=='Property'}
 f=' '.join(e.text or '' for e in m.iter() if local(e)=='GalleryFlags').split()
+d=[e.text or '' for e in m.iter() if local(e)=='Description']
 j=json.loads(z.read('extension/package.json')) if 'extension/package.json' in z.namelist() else {}
-print(json.dumps(dict(id=i[0].get('Id'),version=i[0].get('Version'),publisher=i[0].get('Publisher'),preRelease=p.get(sys.argv[2])=='true',preview='Preview' in f,packageVersion=j.get('version'),packagePreview=j.get('preview') is True)))`;
+print(json.dumps(dict(id=i[0].get('Id'),version=i[0].get('Version'),publisher=i[0].get('Publisher'),preRelease=p.get(sys.argv[2])=='true',preview='Preview' in f,description=d[0] if d else None,packageVersion=j.get('version'),packagePreview=j.get('preview') is True)))`;
   return JSON.parse(execFileSync(process.platform === "win32" ? "python" : "python3", ["-c", script, path, VSCODE_PRE_RELEASE], { encoding: "utf8" }));
 }
 

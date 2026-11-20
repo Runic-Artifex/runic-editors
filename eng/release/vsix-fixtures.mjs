@@ -5,12 +5,14 @@ import { VSCODE_PRE_RELEASE, ideVersions } from "./ide-versions.mjs";
 
 const script = String.raw`
 import json, os, sys, zipfile
-path, ident, version, publisher, pre_release, preview, package_preview, package_version = sys.argv[1:]
+from xml.sax.saxutils import escape
+path, ident, version, publisher, pre_release, preview, package_preview, package_version, description = sys.argv[1:]
 os.makedirs(os.path.dirname(path), exist_ok=True)
 properties = f'<Properties><Property Id="${VSCODE_PRE_RELEASE}" Value="true" /></Properties>' if pre_release == 'true' else ''
+summary = '<Description xml:space="preserve">' + escape(description) + '</Description>' if description else ''
 flags = '<GalleryFlags>Public Preview</GalleryFlags>' if preview == 'true' else '<GalleryFlags>Public</GalleryFlags>'
 with zipfile.ZipFile(path, 'w') as z:
-    z.writestr('extension.vsixmanifest', f'<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"><Metadata><Identity Id="{ident}" Version="{version}" Language="en-US" Publisher="{publisher}" />{flags}{properties}</Metadata></PackageManifest>')
+    z.writestr('extension.vsixmanifest', f'<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"><Metadata><Identity Id="{ident}" Version="{version}" Language="en-US" Publisher="{publisher}" />{summary}{flags}{properties}</Metadata></PackageManifest>')
     if package_version:
         z.writestr('extension/package.json', json.dumps({'name': ident, 'version': package_version, 'preview': package_preview == 'true', 'license': 'MIT', 'dependencies': {'vscode-languageclient': '10.1.2'}}))
 `;
@@ -22,8 +24,8 @@ export function writeVsixFixtures(directory, version, overrides = {}) {
     const vscode = format === "vscode";
     const preRelease = vscode && versions.vscodePreRelease, preview = vscode && versions.vscodePreview;
     const fixture = { id, publisher, version: versions[format], preRelease, preview, packagePreview: preview,
-      packageVersion: vscode ? versions.vscode : "", ...overrides[format] };
+      packageVersion: vscode ? versions.vscode : "", description: "Runic DevKit test fixture.", ...overrides[format] };
     execFileSync(process.platform === "win32" ? "python" : "python3", ["-c", script, `${directory}/${artifact}/${file}`, fixture.id, fixture.version,
-      fixture.publisher, String(fixture.preRelease), String(fixture.preview), String(fixture.packagePreview), fixture.packageVersion]);
+      fixture.publisher, String(fixture.preRelease), String(fixture.preview), String(fixture.packagePreview), fixture.packageVersion, fixture.description]);
   }
 }

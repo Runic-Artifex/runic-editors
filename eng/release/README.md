@@ -233,7 +233,13 @@ the release tag (`--baseContentUrl`/`--baseImagesUrl`) and checks the icon (PNG,
 at least 128 px), at most 30 keywords, and no SVG images or `http:` links. The
 Visual Studio listing is `visualstudio/publishManifest.json`, `overview.md` and the
 manifest's `MoreInfo`, `ReleaseNotes`, `Icon`, `PreviewImage` and `Tags`, checked by
-`package.py`, which also refuses `<Preview>true</Preview>` (no Preview label since 0.23). The icons are rendered from the
+`package.py`, which also refuses `<Preview>true</Preview>` (no Preview label since 0.23).
+VsixPublisher refuses a manifest `<Description>` that is missing or not shorter than
+280 characters (`VsixPub0024`, which failed the Visual Studio publish of 0.23.0, released
+there as 0.23.1); `package.py` and `store-publish visualstudio`, also in the dry run, refuse
+it first. The other limits VsixPublisher 18.11.1098 checks: display name under 80
+characters, each tag at most 50, 1 to 3 categories, a language, an install target, an
+http(s) `repo` and an `internalName` under 63 characters. The icons are rendered from the
 Runic Artifex brand mark by [`eng/brand/render-icons.sh`](../brand/render-icons.sh).
 Q&A is off on both stores; questions go to GitHub issues (D070.14).
 

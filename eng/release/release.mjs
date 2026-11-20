@@ -54,6 +54,17 @@ export const STORES = {
     target: "Microsoft.VisualStudio.Ide", asset: "Microsoft.VisualStudio.Ide.Payload", finalOnly: true },
 };
 export const PUBLISH_MANIFEST = "visualstudio/publishManifest.json";
+// VsixPublisher refuses a VSIX whose manifest <Description> is empty or not "less than 280 characters in length"
+// (VsixPub0024), which failed the Visual Studio publish of 0.23.0. visualstudio/package.py checks the same limit.
+export const MAX_VISUAL_STUDIO_DESCRIPTION = 279;
+
+// The manifest <Description> VsixPublisher sends as the short description; JavaScript and .NET both count UTF-16 units.
+export function checkVisualStudioDescription(description, file = STORES.visualstudio.vsix.file) {
+  assert.ok(description?.trim(), `${file} has no <Description>; VsixPublisher refuses it (VsixPub0024)`);
+  assert.ok(description.length <= MAX_VISUAL_STUDIO_DESCRIPTION, `${file} has a <Description> of ${description.length} characters; VsixPublisher `
+    + `needs fewer than ${MAX_VISUAL_STUDIO_DESCRIPTION + 1} (VsixPub0024). Shorten it in visualstudio/source.extension.vsixmanifest and release a new version.`);
+  return description.length;
+}
 export const VSCE = "vscode/node_modules/@vscode/vsce/vsce";
 // Microsoft.VSSDK.BuildTools as restored by eng/release/vsixpublisher (NuGet.config keeps packages in .cache/nuget).
 export const VSIXPUBLISHER = ".cache/nuget/microsoft.vssdk.buildtools/18.11.1098/tools/vssdk/bin/VsixPublisher.exe";
@@ -123,7 +134,7 @@ export function scanVsix(directory, version) {
     assert.deepEqual(readdirSync(join(directory, artifact)), [file], `${artifact} must contain only ${file}`);
     const path = resolve(directory, artifact, file);
     assert.ok(lstatSync(path).isFile(), `${file} must be a regular file`);
-    const { packageVersion, packagePreview, preRelease, preview, ...identity } = vsixMetadata(path);
+    const { packageVersion, packagePreview, preRelease, preview, description: _description, ...identity } = vsixMetadata(path);
     assert.equal(identity.id, id, `${file} declares extension ${identity.id}`);
     assert.equal(identity.publisher, publisher, `${file} declares publisher ${identity.publisher}`);
     assert.equal(identity.version, versions[format], `${file} declares version ${identity.version}, not ${versions[format]} for ${version}`);
@@ -407,6 +418,7 @@ export function storePackage(name, vsixDirectory, version, manifestPath = resolv
   } else {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     assert.equal(`${manifest.publisher}.${manifest.identity?.internalName}`, store.itemName, `${PUBLISH_MANIFEST} names ${manifest.publisher}.${manifest.identity?.internalName}, not ${store.itemName}`);
+    checkVisualStudioDescription(metadata.description);
   }
   return { path, version: versions[store.format], preRelease: name === "vscode" && versions.vscodePreRelease, sha256: sha256(readFileSync(path)) };
 }
