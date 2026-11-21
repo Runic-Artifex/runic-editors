@@ -10,7 +10,9 @@ param(
     # The dotnet-runic release that the temporary workspace's tool manifest pins for Run Doctor.
     [string]$RunicToolVersion = '0.21.0',
     # The VSIX version that must be installed (run-native-checks.ps1 passes the one it installed).
-    [string]$ExpectedVersion = ''
+    [string]$ExpectedVersion = '',
+    # A NuGet.config copied into the temporary workspace (the runic-sdk release candidate's, README.md).
+    [string]$NuGetConfig = ''
 )
 $ErrorActionPreference = 'Stop'
 trap { ($_.Exception.ToString() + "`n" + $_.ScriptStackTrace + "`n" + $_.InvocationInfo.PositionMessage) | Set-Content "$ReceiptPath.error"; exit 1 }
@@ -163,6 +165,7 @@ $manifest = Get-Content "$root\.config\dotnet-tools.json" -Raw | ConvertFrom-Jso
 $manifest.tools | Add-Member 'dotnet-runic' ([ordered]@{ version = $RunicToolVersion; commands = @('dotnet-runic') })
 New-Item -ItemType Directory "$work\.config" | Out-Null
 $manifest | ConvertTo-Json -Depth 5 | Set-Content "$work\.config\dotnet-tools.json" -Encoding UTF8
+if ($NuGetConfig) { Copy-Item -LiteralPath $NuGetConfig "$work\NuGet.config" }
 $project = "$work\sdk-app\App.csproj"
 $sessionFile = "$work\sdk-app\obj\runic\dev-session.json"
 $ide = $null; $standIn = $null; $preview = $null

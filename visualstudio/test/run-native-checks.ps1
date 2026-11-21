@@ -9,6 +9,9 @@ param(
     [string]$RootSuffix = 'RunicRmf2',
     [string]$ReceiptPath = (Join-Path (Split-Path $PSScriptRoot -Parent) "artifacts\native-host-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss')).json"),
     [string]$RunicToolVersion = '0.21.0',
+    # A NuGet.config for the temporary workspace, such as the runic-sdk release candidate's (README.md, "On the runic-sdk
+    # release candidate"); without it the workspace restores from the machine's NuGet configuration.
+    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })][string]$NuGetConfig = '',
     [ValidateRange(60, 3600)][int]$TimeoutSeconds = 900,
     # Check the VSIX that is already installed (native-host.ps1 still requires its version).
     [switch]$SkipInstall
@@ -54,6 +57,7 @@ $taskName = "RunicDevKit.NativeHost.$([Guid]::NewGuid().ToString('N'))"
 $script = Join-Path $PSScriptRoot 'native-host.ps1'
 $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Executable "{1}" -ReceiptPath "{2}" -RootSuffix {3} -RunicToolVersion {4} -ExpectedVersion {5}' -f `
     $script, $Executable, $ReceiptPath, $RootSuffix, $RunicToolVersion, $identity.Version
+if ($NuGetConfig) { $arguments += ' -NuGetConfig "{0}"' -f (Resolve-Path -LiteralPath $NuGetConfig).Path }
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $arguments
 $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::FromSeconds($TimeoutSeconds + 60))
