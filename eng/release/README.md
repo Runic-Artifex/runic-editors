@@ -139,6 +139,56 @@ the inventory (`verify`), attests the build provenance of both VSIX files and
 version. A rerun keeps a release of this tag and commit, finishes a draft, and
 never modifies a published release. `release.test.mjs` pins this contract.
 
+## Checklist on the runic-sdk candidate
+
+The Windows checklist (the [native Visual Studio check and its manual
+checklist](../../visualstudio/test/README.md)) needs the train's runic-sdk release: its
+template, `dotnet-runic` and npm packages. It runs against the runic-sdk **release
+candidate**, not after the runic-sdk publish (D077.24): the package artifact of the
+runic-sdk release commit's passed CI run, which is exactly what its publish ships.
+runic-sdk's `eng/ci/candidate-feed.mjs` serves it to the Windows machine (runic-sdk
+`eng/release/README.md`, "The editors checklist on the candidate").
+
+| When | What |
+| --- | --- |
+| The runic-sdk release PR's merge queue run has passed (every Windows and macOS leg) | The coordinator runs `candidate-feed.mjs prepare --commit <runic-sdk release commit> --editors-run <this release PR's CI run>`, then `push` and `serve`. The machine gets `runic-candidate\` in the test user's home: the packages, both VSIX files, `NuGet.config`, `candidate.npmrc`, `bunfig.toml` and `Use-Candidate.ps1` |
+| Right after, in parallel with runic-sdk's dry run, publish and indexing | The whole checklist on the candidate: the native check with `-NuGetConfig <home>\runic-candidate\NuGet.config -RunicToolVersion <runic-sdk version>` (and once with the default tool version), and the manual rows 1–16 on `runic-candidate\Use-Candidate.ps1 -New <name> -TemplateArguments '--frontend','react','--package-manager','bun'` |
+| runic-sdk's `indexed` job has passed | The **check on the published packages** below, then the release PR records both and merges |
+| After that | `candidate-feed.mjs clean` |
+
+A project made with `Use-Candidate.ps1` restores the candidate's NuGet packages from its
+folder feed into `runic-candidate\packages` and its `@runic-artifex` npm packages from
+the registry `serve` forwards to `127.0.0.1:48731`, with npm's and Bun's caches inside
+`runic-candidate\`. Nothing global on the machine changes, so a candidate never stands
+in for a published package later, and `clean` removes it all.
+
+**Check on the published packages** (about 5 minutes, after the runic-sdk publish is
+indexed): it covers what only the real registries show. In an empty folder outside
+`runic-candidate\`:
+
+```powershell
+dotnet new install Runic.Application.Templates::<version> --debug:custom-hive .\hive
+dotnet new runic-app -n Published --frontend react --package-manager bun --debug:custom-hive .\hive
+cd Published; dotnet build
+```
+
+The restore and the frontend install come from nuget.org and npm (the machine's caches
+never saw the candidate). Then F5 once in each IDE: in Visual Studio (the experimental
+instance with the VSIX) F5, **Yes**, and the Window shows the page; in VS Code (with
+`runic-devkit.vsix`) F5 (**Runic: Debug the Window**), and the Window shows the page.
+Open one help link of the Doctor section. Remove the folder afterwards.
+
+**What cannot run on the candidate**, and goes into that check:
+
+| Item | Why |
+| --- | --- |
+| The restore from nuget.org and npm (the package signatures nuget.org adds, the indexed versions, npm `latest`) | The candidate comes from a folder feed and a local registry |
+| The template from nuget.org (`dotnet new install Runic.Application.Templates::<version>`) | It is on nuget.org only after the publish |
+| Help links of `dotnet-runic` and the packages (row 13's help link to the tool's README) | They name runic-sdk's `v<version>` tag, which the publish creates; before it they answer 404 |
+
+Every other row of the checklist runs on the candidate. The Translations rows use the
+train's Translations release, which publishes before runic-sdk.
+
 ## Stores
 
 The publish jobs follow D070.11–D070.14. Open VSX is deferred.
@@ -388,7 +438,10 @@ publish on their own):
 1. Before the release PR merges, run the
    [native Visual Studio check](../../visualstudio/test/README.md) on Windows with
    the `visualstudio-vsix` artifact of the candidate commit's CI run, and work
-   through its manual checklist. Record the result in the release PR.
+   through its manual checklist, on the runic-sdk release candidate and then the
+   short check on the published packages
+   ([Checklist on the runic-sdk candidate](#checklist-on-the-runic-sdk-candidate)).
+   Record the result in the release PR.
 2. Dispatch **Release** from `main` with the version and **dry-run** checked. In the
    candidate job's log, `store-publish visualstudio … --dry-run` must show the
    `runic-artifex.runic-devkit-vs` identity from `publishManifest.json`, report the

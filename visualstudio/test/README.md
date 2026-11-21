@@ -29,6 +29,11 @@ as well as from a console:
    The receipt (`-ReceiptPath`, default `visualstudio/artifacts/native-host-<time>.json`), its `.log` and Visual
    Studio's activity log (`.activity.xml`) stay next to each other.
 
+On the runic-sdk release candidate ([release runbook](../../eng/release/README.md#checklist-on-the-runic-sdk-candidate)),
+add `-NuGetConfig <home>\runic-candidate\NuGet.config -RunicToolVersion <runic-sdk version>`: the temporary workspace
+then restores the candidate's `dotnet-runic` from the candidate folder (and everything else from nuget.org) into the
+candidate's own packages folder, and Run Doctor runs it.
+
 Close every Visual Studio instance of that root suffix first: the check starts and quits its own. `-SkipInstall`
 checks the VSIX that is installed already. runic-sdk's `tests/native/Runic.Desktop.WebViewSmoke/run-windows-ui-automation.ps1`
 can also start `native-host.ps1` (`-AutomationScript`) once the VSIX is installed; its timeout is at most 240 s.
@@ -62,8 +67,11 @@ toolchain and minutes, and the follower only reads the session file and checks t
 ## Manual checklist
 
 Run these on the same machine with a real app (`dotnet new runic-app --frontend react --package-manager bun`, the
-release's templates), in the experimental instance with the VSIX installed. Record the Visual Studio version and the
-result of each line in the release PR.
+release's templates), in the experimental instance with the VSIX installed. Before the runic-sdk publish, the app comes
+from the runic-sdk release candidate: `runic-candidate\Use-Candidate.ps1 -New <name> -TemplateArguments
+'--frontend','react','--package-manager','bun'` ([release runbook](../../eng/release/README.md#checklist-on-the-runic-sdk-candidate)).
+Row 13's help link names runic-sdk's release tag, which exists only after the publish: open it in the check on the
+published packages. Record the Visual Studio version and the result of each line in the release PR.
 
 | # | Area | Do | Expect |
 | --- | --- | --- | --- |
