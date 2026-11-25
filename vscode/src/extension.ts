@@ -11,6 +11,8 @@ import { RunicSdk } from "./sdk.js";
 import { ServerCommands, advertisedCommands, commandSource, refactoringRoute, renameOffset, requestedProtocol, runicProtocol, type Refactoring } from "./protocol.js";
 import { isContentModified, resolveOutdatedOnce, retryContentModified, unlistedActionMessage, untilFound, untilListed } from "./refactor-retry.js";
 import { commandId, extensionId, formerCommandId, formerExtensionsNotice, formerSettingsInUse, settingValue } from "./identity.js";
+import { migrateArguments, migrationGuideUri, migrationOffer, migrationOfferShownKey, migrationSummary } from "./migration.js";
+import { toolManifestsAbove } from "./workspace.js";
 import { canonicalLocale, isOverriddenIn, libraryCatalogChoices, libraryInstallPattern, libraryDocumentProject, libraryLocaleChoices, libraryMessageChoices, libraryScheme, messageLine, overrideSourcePath, overridesAddArguments, unsavedDocuments, type LibraryCatalogs } from "./libraries.js";
 
 /**
@@ -420,6 +422,7 @@ export function activate(context: vscode.ExtensionContext) {
   const runicSdk = sdk = new RunicSdk({ dotnetPath: folder => dotnetPath(folder.uri), translationsStatus: (folder, project) => projectStatusFor(folder, project) });
   context.subscriptions.push(runicSdk, { dispose: () => { if (sdk === runicSdk) sdk = undefined; } });
   noticeMovedSettings();
+  void offerMigration(context);
   // The server's runic.* commands (code actions such as "Mark reviewed" run them), routed to the source's folder.
   const commands = serverCommands = new ServerCommands((command, run) => vscode.commands.registerCommand(command, run), async (command, args) =>
     (await clientFor(vscode.Uri.parse(commandSource(args)))).sendRequest("workspace/executeCommand", { command, arguments: args }));
@@ -701,6 +704,53 @@ function noticeFormerExtensions() {
     const reload = "Reload Window";
     if (await vscode.window.showInformationMessage("Uninstalled. Reload the window to finish.", reload) === reload) void vscode.commands.executeCommand("workbench.action.reloadWindow");
   });
+}
+/**
+ * The rename (D079.13, D080.7): a tool manifest of the workspace that still lists dotnet-runic or
+ * dotnet-runic-translations gets one offer per workspace. It runs `dotnet rax migrate` (dry run first, then on
+ * confirmation) only where the manifest already lists RunicArtifex.Tool, whose `migrate` ships with the rename;
+ * otherwise it links the migration guide.
+ */
+async function offerMigration(context: vscode.ExtensionContext) {
+  if (context.workspaceState.get<boolean>(migrationOfferShownKey)) return;
+  const manifests = new Map<string, string>();
+  try {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      if (folder.uri.scheme !== "file") continue;
+      for (const manifest of toolManifestsAbove(folder.uri.fsPath)) manifests.set(manifest.path, manifest.text);
+    }
+    for (const uri of await vscode.workspace.findFiles("**/{.config/dotnet-tools.json,dotnet-tools.json}", "**/{node_modules,bin,obj,artifacts}/**", 50)) {
+      if (uri.scheme !== "file" || manifests.has(uri.fsPath)) continue;
+      manifests.set(uri.fsPath, new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
+    }
+  } catch (error) { output.warn(`Could not read the workspace's tool manifests: ${String(error)}`); return; }
+  const offer = migrationOffer([...manifests].map(([path, text]) => ({ path, text })));
+  if (!offer) return;
+  output.info(`${offer.message} (${offer.manifests.join(", ")})`);
+  await context.workspaceState.update(migrationOfferShownKey, true);
+  const migrate = "Migrate to Runic Artifex", guide = "Migration guide";
+  const choice = await vscode.window.showInformationMessage(offer.message, ...(offer.migrateDirectory ? [migrate] : []), guide);
+  if (choice === guide) { void vscode.env.openExternal(vscode.Uri.parse(migrationGuideUri)); return; }
+  if (choice !== migrate || !offer.migrateDirectory) return;
+  const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(offer.migrateDirectory));
+  const dotnet = dotnetPath(folder?.uri);
+  const run = (dryRun: boolean) => new Promise<string>((resolveRun, rejectRun) => {
+    const args = migrateArguments(dryRun);
+    output.appendLine(`> dotnet ${args.join(" ")}  (in ${offer.migrateDirectory})`);
+    // Exit code 2: something is only reported, not rewritten (D079.10); the report is still on standard output.
+    execFile(dotnet, args, { cwd: offer.migrateDirectory, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, DOTNET_NOLOGO: "1" } }, (error, stdout, stderr) => {
+      output.appendLine(stdout.trim()); if (stderr.trim()) output.appendLine(stderr.trim());
+      if (error && !(error.code === 2 && stdout.trim())) rejectRun(new Error(`dotnet rax migrate failed: ${(stderr || stdout || error.message).trim().split("\n").at(-1)}. See Runic Translations output.`));
+      else resolveRun(stdout);
+    });
+  });
+  try {
+    const plan = await run(true);
+    output.show(true);
+    const apply = "Migrate";
+    if (await vscode.window.showWarningMessage(`rax migrate --dry-run: ${migrationSummary(plan)}. The full report is in the output. Rewrite the project now?`, { modal: true }, apply) !== apply) return;
+    void vscode.window.showInformationMessage(`rax migrate: ${migrationSummary(await run(false))}. Review the changes, then reload the window.`);
+  } catch (error) { void vscode.window.showErrorMessage(String(error)); }
 }
 /** The former runicTranslations.* settings still apply; say where they moved. */
 function noticeMovedSettings() {

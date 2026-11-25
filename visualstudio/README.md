@@ -64,6 +64,33 @@ Keyboard shortcuts assigned to the former **Tools → Runic: …** commands belo
 the former command set; assign them again. Their command names
 (`Tools.RunicPreviewMessage`, `Tools.RunicRestartLanguageServer`) are unchanged.
 
+## Moving to the Runic Artifex tool IDs
+
+Runic Artifex renames its tools (runic-sdk 0.25, Translations 0.17):
+
+| Tool | Former ID and command | Since the rename |
+| --- | --- | --- |
+| Runic SDK tool | `dotnet-runic`, `dotnet runic …` | `RunicArtifex.Tool`, `dotnet rax …` (`rax …` when global) |
+| Translations tool | `dotnet-runic-translations`, `runic-translations` | `RunicArtifex.Translations.Tool`, `rax-translations` |
+
+Runic DevKit runs whichever IDs the solution's tool manifest lists
+(`.config/dotnet-tools.json` or, since .NET 10, `dotnet-tools.json` at the root).
+When a manifest lists both, the new one runs. The dev session file is
+`obj/rax/dev-session.json` with `RunicArtifex.Tool` and `obj/runic/` with
+`dotnet-runic`. A `rax dev` counts as running whether it runs under `dotnet` or
+as the native `rax` program.
+
+When a manifest still lists a former ID, an InfoBar offers the move once per
+session. `rax migrate` rewrites the project: the tool manifest, package
+references, MSBuild names, namespaces, `runic.json` and catalogs. It ships with
+`RunicArtifex.Tool`. Where a manifest already lists that tool, **Migrate to Runic
+Artifex** runs `dotnet rax migrate --dry-run --json` in the manifest's folder,
+writes the report to the **Runic SDK** output pane and asks before it runs
+`dotnet rax migrate`. Commit or stash your changes first: `migrate` refuses a
+dirty Git tree. Without the tool, run it once with
+`dnx RunicArtifex.Tool migrate --dry-run`, then without `--dry-run`. Runic
+DevKit's own command and setting names stay as they are.
+
 ## Where to find it
 
 - **Tools → Runic** has every command.

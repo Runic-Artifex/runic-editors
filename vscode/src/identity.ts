@@ -29,7 +29,11 @@ export function formerExtensionsNotice(installed: (id: string) => boolean): { id
   };
 }
 
-/** New setting → the Translations extension's setting it replaces. */
+/**
+ * New setting → the setting it replaces (here the Translations extension's). The map may chain: the rename (D079.13,
+ * D080.7) moves DevKit's own `runic.*` IDs to `rax.*` in 0.25 by adding `rax.x → runic.x` entries, and `runic.x` keeps
+ * its own former name, so {@link settingValue} reads `rax.x`, then `runic.x`, then `runicTranslations.x`.
+ */
 export const formerSettings: Readonly<Record<string, string>> = {
   "runic.dotnetPath": "runicTranslations.dotnetPath",
   "runic.translations.serverAssembly": "runicTranslations.serverAssembly",
@@ -51,12 +55,18 @@ const isSet = <T>(inspection: SettingInspection<T> | undefined) =>
   inspection !== undefined && (inspection.globalValue !== undefined || inspection.workspaceValue !== undefined || inspection.workspaceFolderValue !== undefined);
 
 /**
- * A setting's value: the new setting when it is set in any scope, else the former setting when that is set, else the
- * new setting's default. `inspect(key)` and `get(key)` read the configuration of the resource.
+ * A setting's value: the new setting when it is set in any scope, else the nearest former setting along `formers` that
+ * is set, else the new setting's default. `inspect(key)` and `get(key)` read the configuration of the resource.
  */
-export function settingValue<T>(key: string, fallback: T, read: { inspect(key: string): SettingInspection<T> | undefined; get(key: string): T | undefined }): T {
-  const former = formerSettings[key];
-  if (!isSet(read.inspect(key)) && former && isSet(read.inspect(former))) return read.get(former) ?? fallback;
+export function settingValue<T>(key: string, fallback: T, read: { inspect(key: string): SettingInspection<T> | undefined; get(key: string): T | undefined },
+  formers: Readonly<Record<string, string>> = formerSettings): T {
+  if (!isSet(read.inspect(key))) {
+    const seen = new Set([key]);
+    for (let former = formers[key]; former && !seen.has(former); former = formers[former]) {
+      seen.add(former);
+      if (isSet(read.inspect(former))) return read.get(former) ?? fallback;
+    }
+  }
   return read.get(key) ?? fallback;
 }
 

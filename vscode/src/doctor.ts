@@ -7,8 +7,8 @@ export interface DoctorReport {
 export const doctorPayloadType = "runic.application.tool.doctor/1";
 
 /** `--fail-on never` reports every completed inspection as a successful envelope, so the checks are always in `payload`. */
-export function doctorArguments(project: string): string[] {
-  return ["runic", "doctor", "--project", project, "--format", "json", "--fail-on", "never"];
+export function doctorArguments(project: string, verb = "runic"): string[] {
+  return [verb, "doctor", "--project", project, "--format", "json", "--fail-on", "never"];
 }
 
 interface Envelope {

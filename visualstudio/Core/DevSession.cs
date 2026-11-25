@@ -125,7 +125,7 @@ public sealed class DevSessionFile
         Dictionary<string, object?>? value;
         try { value = Json.Object(Json.Parse(text)); }
         catch (FormatException) { return null; }
-        if (value == null || Json.String(value, "schema") != DevSessions.Schema) return null;
+        if (value == null || Json.String(value, "schema") is not (DevSessions.Schema or DevSessions.RaxSchema)) return null;
         DevSessionState? state = Json.String(value, "state") switch
         {
             "starting" => DevSessionState.Starting,
@@ -300,12 +300,22 @@ public static class DevSessions
 {
     /// <summary>The session file schema this extension reads; later versions of the schema only add properties.</summary>
     public const string Schema = "runic.application.tool.dev-session/1";
+    /// <summary>The same schema under the rename's names (D079, R5 A8), which <c>rax dev</c> writes to <c>obj/rax/</c>.</summary>
+    public const string RaxSchema = "rax.application.tool.dev-session/1";
 
     /// <summary>How far a process's start time may differ from <c>processStartedAt</c>: APIs report it with different precision.</summary>
     public static readonly TimeSpan StartTimeTolerance = TimeSpan.FromSeconds(1);
 
-    /// <summary>The session file of a project: <c>obj/runic/dev-session.json</c> beside the project file (the default <c>BaseIntermediateOutputPath</c>).</summary>
-    public static string PathFor(string project) => Path.Combine(Path.GetDirectoryName(project) ?? "", "obj", "runic", "dev-session.json");
+    /// <summary>
+    /// The session file of a project: <c>obj/runic/dev-session.json</c> beside the project file (the default
+    /// <c>BaseIntermediateOutputPath</c>), or <c>obj/rax/dev-session.json</c> when the project's tool manifest lists
+    /// <c>RunicArtifex.Tool</c> (R5 A8).
+    /// </summary>
+    public static string PathFor(string project) => PathFor(project, RunicTools.ProjectCoreTool(project)?.Tool);
+
+    /// <summary>The session file of a project whose core tool is <paramref name="tool"/> (null: <c>dotnet-runic</c>).</summary>
+    public static string PathFor(string project, RunicToolId? tool)
+        => Path.Combine(Path.GetDirectoryName(project) ?? "", "obj", tool is { Former: false } ? "rax" : "runic", "dev-session.json");
 
     /// <summary>
     /// The stamp that <c>dotnet runic dev</c> touches when it stops (runic-sdk <c>DevSession.StoppedStampName</c>).
@@ -333,16 +343,28 @@ public static class DevSessions
     /// <summary>Parses a session file; null for another schema or a file that is not a session.</summary>
     public static DevSessionFile? Parse(string text) => DevSessionFile.Parse(text);
 
-    /// <summary>True when <paramref name="arguments"/> (a process's command line) is <c>dotnet runic dev</c>: the tool (<c>dotnet-runic</c>, its DLL or apphost) with <c>dev</c>.</summary>
+    /// <summary>
+    /// The core tool's program names in a command line: <c>dotnet-runic</c> (its DLL or apphost), or after the rename
+    /// <c>rax</c> (the command, the global tool's shim and, under NativeAOT, the native program itself, R5 A7) and
+    /// <c>RunicArtifex.Tool</c> (its DLL or apphost). <c>dotnet rax dev</c> need not run under a <c>dotnet</c> parent, so
+    /// the program alone decides.
+    /// </summary>
+    private static readonly HashSet<string> ToolPrograms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dotnet-runic", "dotnet-runic.dll", "dotnet-runic.exe", "rax", "rax.exe", "RunicArtifex.Tool", "RunicArtifex.Tool.dll", "RunicArtifex.Tool.exe",
+    };
+
+    /// <summary>Images (without <c>.exe</c>) of a running <c>dev</c>: the <c>dotnet</c> host or the tool's own program.</summary>
+    private static readonly HashSet<string> DevImages = new(StringComparer.OrdinalIgnoreCase) { "dotnet", "dotnet-runic", "rax", "RunicArtifex.Tool" };
+
+    /// <summary>True when <paramref name="arguments"/> (a process's command line) is <c>dotnet runic dev</c> or <c>rax dev</c>: the tool's program with <c>dev</c>.</summary>
     public static bool IsDevCommandLine(IReadOnlyList<string> arguments)
     {
         for (int index = 0; index < arguments.Count; index++)
         {
             string name = arguments[index].Replace('\\', '/');
             name = name.Substring(name.LastIndexOf('/') + 1);
-            if (string.Equals(name, "dotnet-runic", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "dotnet-runic.dll", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(name, "dotnet-runic.exe", StringComparison.OrdinalIgnoreCase))
-                return arguments.Skip(index + 1).Contains("dev");
+            if (ToolPrograms.Contains(name)) return arguments.Skip(index + 1).Contains("dev");
         }
         return false;
     }
@@ -351,7 +373,7 @@ public static class DevSessions
     /// Whether the session's <c>dotnet runic dev</c> still runs (runic-sdk's rule): a process with the top-level
     /// <c>processId</c> runs and its start time matches <c>processStartedAt</c> to within a second, so a reused process
     /// ID reads as stopped. A file without <c>processStartedAt</c> (before 0.20) checks the command line where it can be
-    /// read, else the image name (<c>dotnet</c> or <c>dotnet-runic</c>), as VS Code does. A process whose start time cannot
+    /// read, else the image name (<c>dotnet</c>, <c>dotnet-runic</c>, <c>rax</c> or <c>RunicArtifex.Tool</c>), as VS Code does. A process whose start time cannot
     /// be read counts as running.
     /// </summary>
     public static bool IsRunning(DevSessionFile session, IDevSessionSource source)
@@ -361,9 +383,7 @@ public static class DevSessions
         if (session.ProcessStartedAt is { } started)
             return process.StartTime is not { } actual || (actual - started).Duration() <= StartTimeTolerance;
         if (process.CommandLine is { Count: > 0 } commandLine) return IsDevCommandLine(commandLine);
-        return process.ImageName == null
-            || string.Equals(process.ImageName, "dotnet", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(process.ImageName, "dotnet-runic", StringComparison.OrdinalIgnoreCase);
+        return process.ImageName == null || DevImages.Contains(process.ImageName);
     }
 
     /// <summary>The snapshot of a session file's text (null: no file); null when the text is not a session.</summary>

@@ -31,18 +31,19 @@ export function supportsDevSdk022(version: string | undefined): boolean {
 /**
  * The arguments of `dotnet runic dev` for a project. `debugEndpoint` adds `--debug-endpoint` (0.22) to a `dev` with its
  * Window, so a CS-WebUI Window opens its DevTools Protocol port because an IDE asked; `--no-window` needs nothing.
+ * `verb` is the project's core tool (`runic` for `dotnet-runic`, `rax` for `RunicArtifex.Tool`; workspace.ts).
  */
-export function devArguments(project: string, noWindow: boolean, debugEndpoint = false): string[] {
-  return ["runic", "dev", ...(noWindow ? ["--no-window"] : debugEndpoint ? ["--debug-endpoint"] : []), "--project", project];
+export function devArguments(project: string, noWindow: boolean, debugEndpoint = false, verb = "runic"): string[] {
+  return [verb, "dev", ...(noWindow ? ["--no-window"] : debugEndpoint ? ["--debug-endpoint"] : []), "--project", project];
 }
 
 /**
- * The tool manifest's version when it has one, else `<dotnet> runic --version` in the project's directory (within 15
+ * The tool manifest's version when it has one, else `<dotnet> <verb> --version` in the project's directory (within 15
  * seconds); undefined when neither says.
  */
-export function detectToolVersion(dotnet: string, cwd: string, manifestVersion: string | undefined): Promise<string | undefined> {
+export function detectToolVersion(dotnet: string, cwd: string, manifestVersion: string | undefined, verb = "runic"): Promise<string | undefined> {
   if (manifestVersion) return Promise.resolve(manifestVersion);
-  return new Promise(resolveVersion => execFile(dotnet, ["runic", "--version"], { cwd, timeout: 15_000, windowsHide: true, env: { ...process.env, DOTNET_NOLOGO: "1" } },
+  return new Promise(resolveVersion => execFile(dotnet, [verb, "--version"], { cwd, timeout: 15_000, windowsHide: true, env: { ...process.env, DOTNET_NOLOGO: "1" } },
     (error, stdout) => resolveVersion(error ? undefined : parseToolVersion(stdout))));
 }
 

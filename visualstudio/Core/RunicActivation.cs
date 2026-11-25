@@ -15,7 +15,8 @@ namespace RunicArtifex.DevKit.VisualStudio.Core;
 /// Translations' build props, or an active <c>.mf2</c>/<c>.rmf2</c> editor (the language client's content type).</item>
 /// <item><see cref="WorkspaceContext"/>, which a small probe package sets after reading the solution's files with
 /// <see cref="RunicWorkspace.Detect"/>: Runic SDK projects of SDKs without the capability, and Translations
-/// workspaces without a C# project (a <c>runic.json</c>, or a tool manifest with <c>dotnet-runic-translations</c>).</item>
+/// workspaces without a C# project (a <c>runic.json</c>, or a tool manifest with <c>dotnet-runic-translations</c> or,
+/// after the rename, <c>RunicArtifex.Translations.Tool</c>; <see cref="RunicTools"/>).</item>
 /// </list>
 /// </summary>
 public static class RunicActivation
@@ -59,17 +60,19 @@ public sealed class RunicWorkspace
     /// <summary>How deep below the solution directory projects are searched, as VS Code's <c>searchDepth</c>.</summary>
     public const int SearchDepth = 4;
 
-    private RunicWorkspace(IReadOnlyList<string> sdkProjects, IReadOnlyList<string> translationsProjects, IReadOnlyList<string> toolManifests)
+    private RunicWorkspace(IReadOnlyList<string> sdkProjects, IReadOnlyList<string> translationsProjects, IReadOnlyList<string> toolManifests, IReadOnlyList<string> allToolManifests)
     {
-        SdkProjects = sdkProjects; TranslationsProjects = translationsProjects; ToolManifests = toolManifests;
+        SdkProjects = sdkProjects; TranslationsProjects = translationsProjects; ToolManifests = toolManifests; AllToolManifests = allToolManifests;
     }
 
     /// <summary><c>.csproj</c> files of the Runic SDK (<see cref="IsRunicSdkProject"/>), sorted.</summary>
     public IReadOnlyList<string> SdkProjects { get; }
     /// <summary><c>runic.json</c> files, sorted.</summary>
     public IReadOnlyList<string> TranslationsProjects { get; }
-    /// <summary><c>.config/dotnet-tools.json</c> files that declare <c>dotnet-runic-translations</c>, sorted.</summary>
+    /// <summary>Tool manifests (<c>.config/dotnet-tools.json</c> or <c>dotnet-tools.json</c>) that declare a Translations tool, sorted.</summary>
     public IReadOnlyList<string> ToolManifests { get; }
+    /// <summary>Every tool manifest found, sorted (the rename's migration offer reads them).</summary>
+    public IReadOnlyList<string> AllToolManifests { get; }
 
     public bool HasSdkProject => SdkProjects.Count > 0;
     public bool IsTranslationsWorkspace => TranslationsProjects.Count > 0 || ToolManifests.Count > 0;
@@ -85,9 +88,12 @@ public sealed class RunicWorkspace
         => Regex.IsMatch(projectText, @"<RunicApplicationFrontendWindowProject>\s*true\s*<", RegexOptions.IgnoreCase)
         || Regex.IsMatch(projectText, @"<(?:PackageReference|ProjectReference)\b[^>]*\bInclude\s*=\s*""[^""]*\bRunic\.(?:Application|Desktop|Platform)\b[^""]*""", RegexOptions.IgnoreCase);
 
-    /// <summary>A tool manifest (<c>.config/dotnet-tools.json</c>) that declares the <c>dotnet-runic-translations</c> tool.</summary>
+    /// <summary>
+    /// A tool manifest that declares the Translations tool: <c>dotnet-runic-translations</c> or, after the rename,
+    /// <c>RunicArtifex.Translations.Tool</c> (any case).
+    /// </summary>
     public static bool IsTranslationsToolManifest(string manifestText)
-        => Regex.IsMatch(manifestText, @"""dotnet-runic-translations""\s*:", RegexOptions.IgnoreCase);
+        => Regex.IsMatch(manifestText, @"""(?:dotnet-runic-translations|RunicArtifex\.Translations\.Tool)""\s*:", RegexOptions.IgnoreCase);
 
     /// <summary>Reads the solution directory and its subdirectories, at most <paramref name="depth"/> levels down.</summary>
     public static RunicWorkspace Detect(string root, int depth = SearchDepth)
@@ -95,10 +101,14 @@ public sealed class RunicWorkspace
         var sdk = new List<string>();
         var translations = new List<string>();
         var manifests = new List<string>();
+        var allManifests = new List<string>();
         void Visit(string directory, int level)
         {
-            string manifest = Path.Combine(directory, ".config", "dotnet-tools.json");
-            if (File.Exists(manifest) && IsTranslationsToolManifest(Read(manifest))) manifests.Add(manifest);
+            foreach (string manifest in RunicTools.ManifestsIn(directory))
+            {
+                allManifests.Add(manifest);
+                if (IsTranslationsToolManifest(Read(manifest))) manifests.Add(manifest);
+            }
             IEnumerable<string> files, directories;
             try { files = Directory.EnumerateFiles(directory).ToList(); directories = Directory.EnumerateDirectories(directory).ToList(); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return; }
@@ -116,7 +126,7 @@ public sealed class RunicWorkspace
             }
         }
         if (Directory.Exists(root)) Visit(root, 0);
-        return new RunicWorkspace(Sorted(sdk), Sorted(translations), Sorted(manifests));
+        return new RunicWorkspace(Sorted(sdk), Sorted(translations), Sorted(manifests), Sorted(allManifests));
     }
 
     private static IReadOnlyList<string> Sorted(List<string> paths) => paths.OrderBy(path => path, StringComparer.Ordinal).ToList();

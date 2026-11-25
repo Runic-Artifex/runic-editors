@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { importArguments, nearestProjectManifest, projectManifest, serverLaunch, sourceWatchRoots, statusArguments, toolLaunch, xliffExportArguments, xliffImportDryRunArguments } from "../src/server.js";
+import { importArguments, nearestProjectManifest, projectManifest, serverLaunch, sourceWatchRoots, statusArguments, toolLaunch, translationsCommand, xliffExportArguments, xliffImportDryRunArguments } from "../src/server.js";
 import { previewDescription, renderedPreviewHtml, resolvePreviewHtml } from "../src/preview.js";
 import type { Preview } from "../src/preview.js";
 import { PreviewSession, sampleChoices, type PreviewHost, type PreviewState, type Samples } from "../src/preview-session.js";
@@ -35,6 +35,26 @@ test("local tool resolution respects a root manifest and preserves argument boun
     expect(serverLaunch(root, "dotnet custom", "")).toEqual({ command: "dotnet custom", args: ["tool", "run", "runic-translations", "--", "lsp"], cwd: root });
     writeFileSync(join(root, "server with spaces.dll"), "fixture");
     expect(serverLaunch(root, "dotnet", "server with spaces.dll").args).toEqual([join(root, "server with spaces.dll"), "lsp"]);
+  } finally { rmSync(root, { recursive: true }); }
+});
+test("the Translations tool runs as rax-translations or runic-translations, from either manifest location", () => {
+  const root = mkdtempSync(join(tmpdir(), "runic-vscode-rax-"));
+  try {
+    expect(translationsCommand(JSON.stringify({ tools: { "dotnet-runic-translations": { commands: ["runic-translations"] } } }))).toBe("runic-translations");
+    expect(translationsCommand(JSON.stringify({ tools: { "dotnet-runic-translations": { commands: ["runic-translations"] }, "runicartifex.translations.tool": { commands: ["rax-translations"] } } }))).toBe("rax-translations");
+    expect(translationsCommand(JSON.stringify({ tools: { "dotnet-ef": { commands: ["dotnet-ef"] } } }))).toBeUndefined();
+    expect(translationsCommand("not json")).toBeUndefined();
+    // The root dotnet-tools.json of .NET 10.
+    writeFileSync(join(root, "dotnet-tools.json"), JSON.stringify({ isRoot: true, tools: { "runicartifex.translations.tool": { version: "0.17.0", commands: ["rax-translations"] } } }));
+    mkdirSync(join(root, "src"));
+    expect(serverLaunch(join(root, "src"), "dotnet", "")).toEqual({ command: "dotnet", args: ["tool", "run", "rax-translations", "--", "lsp"], cwd: root });
+    // .config/dotnet-tools.json of the same directory is read first.
+    mkdirSync(join(root, ".config"));
+    writeFileSync(join(root, ".config", "dotnet-tools.json"), JSON.stringify({ tools: { "dotnet-runic-translations": { commands: ["runic-translations"] } } }));
+    expect(serverLaunch(root, "dotnet", "").args).toEqual(["tool", "run", "runic-translations", "--", "lsp"]);
+    // A nearer root manifest without the tool ends the search.
+    writeFileSync(join(root, "src", "dotnet-tools.json"), JSON.stringify({ isRoot: true, tools: {} }));
+    expect(() => serverLaunch(join(root, "src"), "dotnet", "")).toThrow("No project-local");
   } finally { rmSync(root, { recursive: true }); }
 });
 test("XLIFF commands run the same local tool with the project's manifest and keep argument boundaries", () => {

@@ -30,6 +30,63 @@ public class ActivationTests
         Check.True(RunicWorkspace.IsTranslationsToolManifest("""{"tools":{"Dotnet-Runic-Translations" :{}}}"""), "NuGet IDs are case-insensitive");
         Check.True(!RunicWorkspace.IsTranslationsToolManifest("""{ "tools": { "dotnet-runic": { "version": "0.21.0" } } }"""), "dotnet-runic only");
         Check.True(!RunicWorkspace.IsTranslationsToolManifest("""{ "tools": { "x": { "description": "not dotnet-runic-translations" } } }"""), "a value, not a tool");
+        Check.True(RunicWorkspace.IsTranslationsToolManifest("""{ "tools": { "runicartifex.translations.tool": { "version": "0.17.0", "commands": [ "rax-translations" ] } } }"""), "RunicArtifex.Translations.Tool");
+        Check.True(!RunicWorkspace.IsTranslationsToolManifest("""{ "tools": { "runicartifex.tool": {} } }"""), "the core tool only");
+    }
+
+    [Test]
+    public void The_core_tool_is_RunicArtifex_Tool_or_dotnet_runic_in_either_manifest_location()
+    {
+        Check.Equal("rax", RunicTools.Find("""{ "tools": { "runicartifex.tool": { "version": "0.25.0", "commands": [ "rax" ] } } }""")?.Tool.Verb);
+        Check.Equal("runic", RunicTools.Find("""{ "tools": { "dotnet-runic": { "version": "0.24.0" } } }""")?.Tool.Verb);
+        Check.Equal("0.25.0", RunicTools.Find("""{ "tools": { "dotnet-runic": { "version": "0.24.0" }, "RunicArtifex.Tool": { "version": "0.25.0" } } }""")?.Version, "the new ID wins mid-migration");
+        Check.Equal(null, RunicTools.Find("""{ "tools": { "dotnet-ef": {} } }"""));
+        Check.Equal(null, RunicTools.Find("not json"));
+        Check.Equal("rax-translations", RunicTools.TranslationsCommand("""{ "tools": { "a": { "commands": [ "runic-translations" ] }, "b": { "commands": [ "rax-translations" ] } } }"""));
+        Check.Equal("runic-translations", RunicTools.TranslationsCommand(TranslationsManifest));
+
+        using var root = new TempDirectory();
+        root.Write("src/App/App.csproj", "<Project />");
+        string project = root.Full("src/App/App.csproj");
+        root.Write("dotnet-tools.json", """{ "isRoot": true, "tools": { "runicartifex.tool": { "version": "0.25.0" } } }""");
+        Check.Equal("0.25.0", RunicSdkProjects.ProjectToolVersion(project), "the root dotnet-tools.json of .NET 10");
+        Check.Equal(root.Full("dotnet-tools.json"), RunicTools.ProjectCoreTool(project)?.Manifest);
+        root.Write(".config/dotnet-tools.json", """{ "tools": { "dotnet-runic": { "version": "0.24.0" } } }""");
+        Check.Equal("0.24.0", RunicSdkProjects.ProjectToolVersion(project), ".config/dotnet-tools.json is read first");
+        root.Write("src/dotnet-tools.json", """{ "isRoot": true, "tools": {} }""");
+        Check.Equal(null, RunicSdkProjects.ProjectToolVersion(project), "a nearer root manifest ends the search");
+        Check.Equal(root.Full("src"), RunicTools.ManifestDirectory(root.Full("src/dotnet-tools.json")));
+        Check.Equal(root.Path, RunicTools.ManifestDirectory(root.Full(".config/dotnet-tools.json")));
+    }
+
+    [Test]
+    public void Former_tool_IDs_get_a_migration_offer_that_runs_rax_migrate_only_where_RunicArtifex_Tool_is_installed()
+    {
+        using (var root = new TempDirectory())
+        {
+            root.Write("dotnet-tools.json", """{ "tools": { "dotnet-runic": { "version": "0.24.0" }, "Dotnet-Runic-Translations": { "version": "0.16.0" } } }""");
+            var workspace = RunicWorkspace.Detect(root.Path);
+            Check.Same(new[] { root.Full("dotnet-tools.json") }, workspace.ToolManifests);
+            var offer = MigrationOffer.For(workspace, root.Path)!;
+            Check.Same(new[] { "dotnet-runic", "dotnet-runic-translations" }, offer.FormerIds);
+            Check.Equal(null, offer.MigrateDirectory);
+            Check.True(offer.Message.Contains("dotnet-runic → RunicArtifex.Tool (rax)"), offer.Message);
+        }
+        using (var root = new TempDirectory())
+        {
+            root.Write("web/.config/dotnet-tools.json", """{ "tools": { "RunicArtifex.Tool": { "version": "0.25.0" }, "dotnet-runic-translations": {} } }""");
+            var offer = MigrationOffer.For(RunicWorkspace.Detect(root.Path), root.Path)!;
+            Check.Same(new[] { "dotnet-runic-translations" }, offer.FormerIds);
+            Check.Equal(root.Full("web"), offer.MigrateDirectory);
+        }
+        using (var root = new TempDirectory())
+        {
+            root.Write(".config/dotnet-tools.json", """{ "tools": { "runicartifex.tool": {}, "runicartifex.translations.tool": {} } }""");
+            Check.Equal(null, MigrationOffer.For(RunicWorkspace.Detect(root.Path), root.Path), "new IDs only");
+        }
+        Check.Same(new[] { "rax", "migrate", "--dry-run", "--json" }, RunicTools.MigrateArguments(dryRun: true));
+        Check.Equal("2 rewritten, 0 moved, 1 reported", MigrationOffer.Summary("""{ "payload": { "rewritten": [ 1, 2 ], "moved": [], "reported": [ 3 ] } }"""));
+        Check.Equal("Nothing to do.", MigrationOffer.Summary("Nothing to do.\n"));
     }
 
     [Test]

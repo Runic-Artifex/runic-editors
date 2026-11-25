@@ -1,9 +1,12 @@
 import { execFile } from "node:child_process";
 import { readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import type { RunicToolId } from "./workspace.js";
 
 /** The session file schema this extension reads; later versions of the schema only add properties. */
 export const devSessionSchema = "runic.application.tool.dev-session/1";
+/** The same schema under the rename's names (D079, R5 A8), which `rax dev` writes to `obj/rax/`. */
+export const raxDevSessionSchema = "rax.application.tool.dev-session/1";
 
 /** `obj/runic/dev-session.json`, which `dotnet runic dev` writes (tools/dotnet-runic/README.md, "Session file"). */
 export interface DevSession {
@@ -30,9 +33,13 @@ export interface DevSession {
 export type DevState = "none" | "starting" | "ready" | "stopped";
 export interface DevSnapshot { state: DevState; session?: DevSession; exited?: boolean }
 
-/** The session file of a project: `obj/runic/dev-session.json` beside the project file (the default `BaseIntermediateOutputPath`). */
-export function devSessionPath(project: string): string {
-  return join(dirname(project), "obj", "runic", "dev-session.json");
+/**
+ * The session file of a project: `obj/runic/dev-session.json` beside the project file (the default
+ * `BaseIntermediateOutputPath`), or `obj/rax/dev-session.json` when the project's core tool is `RunicArtifex.Tool`
+ * (R5 A8; `tool` from workspace.ts `projectCoreTool`).
+ */
+export function devSessionPath(project: string, tool?: RunicToolId): string {
+  return join(dirname(project), "obj", tool && !tool.former ? "rax" : "runic", "dev-session.json");
 }
 
 /**
@@ -65,22 +72,31 @@ export function parseDevSession(text: string): DevSession | undefined {
   try { value = JSON.parse(text); } catch { return undefined; }
   if (!value || typeof value !== "object") return undefined;
   const session = value as Partial<DevSession>;
-  if (session.schema !== devSessionSchema) return undefined;
+  if (session.schema !== devSessionSchema && session.schema !== raxDevSessionSchema) return undefined;
   if (session.state !== "starting" && session.state !== "ready" && session.state !== "stopped") return undefined;
   if (typeof session.processId !== "number" || typeof session.project !== "string") return undefined;
   return session as DevSession;
 }
 
-/** True when `args` (a process's command line) is `dotnet runic dev`: the tool (`dotnet-runic`, its DLL or apphost) with `dev`. */
+/**
+ * The core tool's program in a command line: `dotnet-runic` (its DLL or apphost), or after the rename `rax` (the
+ * command, the global tool's shim and, under NativeAOT, the native program itself, R5 A7) and `RunicArtifex.Tool` (its
+ * DLL or apphost). `dotnet rax dev` need not run under a `dotnet` parent, so the program alone decides.
+ */
+const toolProgram = /^(?:dotnet-runic(?:\.dll|\.exe)?|rax(?:\.exe)?|RunicArtifex\.Tool(?:\.dll|\.exe)?)$/i;
+/** Windows images of a running `dev`: the `dotnet` host, or the tool's own program (apphost, shim or native). */
+const devImages = new Set(["dotnet.exe", "dotnet-runic.exe", "rax.exe", "runicartifex.tool.exe"]);
+
+/** True when `args` (a process's command line) is `dotnet runic dev` or `rax dev`: the tool's program with `dev`. */
 export function isDevCommandLine(args: readonly string[]): boolean {
-  const tool = args.findIndex(arg => /^dotnet-runic(?:\.dll|\.exe)?$/i.test(basename(arg.replaceAll("\\", "/"))));
+  const tool = args.findIndex(arg => toolProgram.test(basename(arg.replaceAll("\\", "/"))));
   return tool >= 0 && args.slice(tool + 1).includes("dev");
 }
 
 /**
  * Whether `pid` is a running `dotnet runic dev`. Linux reads `/proc/<pid>/cmdline` and macOS asks `ps`, so a reused
- * process ID of another program reads as stopped. On Windows the process's image must be `dotnet.exe` or
- * `dotnet-runic.exe` (the command line is not checked there). A process that exists but cannot be inspected counts as running.
+ * process ID of another program reads as stopped. On Windows the process's image must be `dotnet.exe` or the tool's
+ * own program (`dotnet-runic.exe`, `rax.exe`, `RunicArtifex.Tool.exe`; the command line is not checked there). A process that exists but cannot be inspected counts as running.
  */
 export async function isRunningDevProcess(pid: number, platform: NodeJS.Platform = process.platform): Promise<boolean> {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -97,7 +113,7 @@ export async function isRunningDevProcess(pid: number, platform: NodeJS.Platform
     const line = await run("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"]);
     if (line === undefined) return true;
     const image = /^"([^"]+)"/.exec(line.trim())?.[1]?.toLowerCase();
-    return image === "dotnet.exe" || image === "dotnet-runic.exe";
+    return image !== undefined && devImages.has(image);
   }
   return true;
 }

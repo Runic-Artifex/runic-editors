@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { manifestDirectory, toolManifestsAbove, translationsTools } from "./workspace.js";
 
 export interface ServerLaunch { command: string; args: string[]; cwd: string }
 /**
@@ -116,6 +117,17 @@ export function importArguments(project: string, from: "resx" | "i18next", sourc
   return ["import", "--from", from, source, "--project", project, ...(options.overwrite ? ["--overwrite"] : []), ...(options.dryRun ? ["--dry-run"] : [])];
 }
 
+/**
+ * The Translations command a tool manifest's text declares: `rax-translations` before `runic-translations` (the rename,
+ * D080.7), by the tools' `commands`, or undefined.
+ */
+export function translationsCommand(manifestText: string): string | undefined {
+  let manifest: { tools?: Record<string, { commands?: unknown }> };
+  try { manifest = JSON.parse(manifestText); } catch { return undefined; }
+  const commands = Object.values(manifest?.tools ?? {}).flatMap(tool => Array.isArray(tool?.commands) ? tool.commands : []);
+  return translationsTools.map(tool => tool.command).find(command => commands.includes(command));
+}
+
 /** Runs the same local tool as the language server with other arguments (the `xliff`, `status` and `import` commands). */
 export function toolLaunch(root: string, dotnet: string, assembly: string, toolArguments: readonly string[]): ServerLaunch {
   if (assembly) {
@@ -123,18 +135,9 @@ export function toolLaunch(root: string, dotnet: string, assembly: string, toolA
     if (!existsSync(path)) throw new Error(`Runic server assembly does not exist: ${path}`);
     return { command: dotnet, args: [path, ...toolArguments], cwd: root };
   }
-  let directory = root;
-  while (true) {
-    const path = join(directory, ".config", "dotnet-tools.json");
-    if (existsSync(path)) {
-      const manifest = JSON.parse(readFileSync(path, "utf8"));
-      if (Object.values(manifest.tools ?? {}).some((tool: unknown) => Array.isArray((tool as { commands?: unknown }).commands) && (tool as { commands: unknown[] }).commands.includes("runic-translations")))
-        return { command: dotnet, args: ["tool", "run", "runic-translations", "--", ...toolArguments], cwd: directory };
-      if (manifest.isRoot) break;
-    }
-    const parent = dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
+  for (const { path, text } of toolManifestsAbove(root)) {
+    const command = translationsCommand(text);
+    if (command) return { command: dotnet, args: ["tool", "run", command, "--", ...toolArguments], cwd: manifestDirectory(path) };
   }
-  throw new Error("No project-local runic-translations tool was found. Add it to .config/dotnet-tools.json and run dotnet tool restore, or configure runic.translations.serverAssembly for SDK development.");
+  throw new Error("No project-local runic-translations tool was found. Add it to .config/dotnet-tools.json (or dotnet-tools.json) and run dotnet tool restore, or configure runic.translations.serverAssembly for SDK development.");
 }

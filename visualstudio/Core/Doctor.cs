@@ -70,9 +70,13 @@ public static class Doctor
     /// <summary>VS Code's diagnostic source for doctor problems.</summary>
     public const string Source = "runic doctor";
 
-    /// <summary><c>--fail-on never</c> reports every completed inspection as a successful envelope, so the checks are always in <c>payload</c>.</summary>
-    public static IReadOnlyList<string> Arguments(string project)
-        => new[] { "runic", "doctor", "--project", project, "--format", "json", "--fail-on", "never" };
+    /// <summary>
+    /// <c>--fail-on never</c> reports every completed inspection as a successful envelope, so the checks are always in
+    /// <c>payload</c>. <paramref name="verb"/>: <c>runic</c> or <c>rax</c>, by default from the project's tool manifest
+    /// (<see cref="RunicTools.VerbFor"/>).
+    /// </summary>
+    public static IReadOnlyList<string> Arguments(string project, string? verb = null)
+        => new[] { verb ?? RunicTools.VerbFor(project), "doctor", "--project", project, "--format", "json", "--fail-on", "never" };
 
     /// <summary>
     /// The doctor report of a <c>runic.commandline/1</c> envelope: its payload, or the payload of a failed envelope's

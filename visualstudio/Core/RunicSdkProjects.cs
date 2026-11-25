@@ -64,31 +64,14 @@ public static class RunicSdkProjects
         return Find(files);
     }
 
-    /// <summary>The <c>dotnet-runic</c> version a tool manifest (<c>.config/dotnet-tools.json</c>) pins, or null.</summary>
-    public static string? ToolVersion(string manifestText)
-    {
-        try
-        {
-            var tool = Json.Object(Json.Get(Json.Object(Json.Get(Json.Object(Json.Parse(manifestText)), "tools")), "dotnet-runic"));
-            return Json.String(tool, "version");
-        }
-        catch (FormatException) { return null; }
-    }
+    /// <summary>The core tool version (<c>RunicArtifex.Tool</c> or <c>dotnet-runic</c>) a tool manifest pins, or null.</summary>
+    public static string? ToolVersion(string manifestText) => RunicTools.Find(manifestText)?.Version;
 
-    /// <summary>The <c>dotnet-runic</c> version of the nearest tool manifest at or above the project's directory, if any.</summary>
-    public static string? ProjectToolVersion(string project)
-    {
-        for (string? directory = Path.GetDirectoryName(project); !string.IsNullOrEmpty(directory); directory = Path.GetDirectoryName(directory))
-        {
-            string manifest = Path.Combine(directory, ".config", "dotnet-tools.json");
-            if (!File.Exists(manifest)) continue;
-            string text;
-            try { text = File.ReadAllText(manifest); } catch (IOException) { continue; } catch (UnauthorizedAccessException) { continue; }
-            if (ToolVersion(text) is { } version) return version;
-            try { if (Json.Boolean(Json.Object(Json.Parse(text)), "isRoot") == true) return null; } catch (FormatException) { }
-        }
-        return null;
-    }
+    /// <summary>
+    /// The core tool version of the nearest tool manifest (<c>.config/dotnet-tools.json</c> or <c>dotnet-tools.json</c>)
+    /// at or above the project's directory that lists the tool, if any.
+    /// </summary>
+    public static string? ProjectToolVersion(string project) => RunicTools.ProjectCoreTool(project)?.Version;
 
     internal static string HelpRef(string? toolVersion)
         => toolVersion != null && ToolVersionPattern.IsMatch(toolVersion) ? "v" + toolVersion : "main";

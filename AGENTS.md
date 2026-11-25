@@ -20,6 +20,10 @@ runic-translations-sdk to CI. The VS Code extension's Runic SDK features run the
 project's `dotnet-runic` tool and read the contracts runic-sdk documents (the dev
 session file, doctor JSON, the development source map); the host test uses
 fixtures for them, not a build of runic-sdk.
+Both extensions accept the tool IDs before and after the rename (D079, D080.7):
+`dotnet-runic` / `dotnet runic` and `RunicArtifex.Tool` / `dotnet rax`,
+`runic-translations` and `rax-translations`, in `.config/dotnet-tools.json` or
+`dotnet-tools.json` (`vscode/src/workspace.ts`, `visualstudio/Core/RunicTools.cs`).
 
 Match verification to the changed behavior. Run the focused checks of the
 extension you changed (CONTRIBUTING.md); GitHub owns the Windows build and the

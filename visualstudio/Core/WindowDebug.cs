@@ -373,7 +373,7 @@ public static class DevToolVersions
     public static bool SupportsStopOnInput(string? version) => SupportsDebugEndpoint(version);
 
     /// <summary>
-    /// The tool manifest's version when it has one, else <c>&lt;dotnet&gt; runic --version</c> in the project's directory
+    /// The tool manifest's version when it has one, else <c>&lt;dotnet&gt; runic|rax --version</c> in the project's directory
     /// (within 15 seconds); null when neither says.
     /// </summary>
     public static async Task<string?> DetectAsync(string dotnet, string project, string? manifestVersion, CancellationToken cancellationToken)
@@ -381,7 +381,7 @@ public static class DevToolVersions
         if (manifestVersion != null) return manifestVersion;
         try
         {
-            var result = await ToolProcess.RunAsync(dotnet, new[] { "runic", "--version" }, Path.GetDirectoryName(project) ?? Environment.CurrentDirectory, TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+            var result = await ToolProcess.RunAsync(dotnet, new[] { RunicTools.VerbFor(project), "--version" }, Path.GetDirectoryName(project) ?? Environment.CurrentDirectory, TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             return result.ExitCode == 0 ? ParseVersionOutput(result.Output) : null;
         }
         catch (Exception error) when (error is InvalidOperationException or TimeoutException) { return null; }

@@ -187,16 +187,11 @@ internal sealed class ServerLaunch
                 throw new ServerLaunchException(ServerStartProblem.AssemblyMissing, $"{assembly.Source} must identify an existing absolute tool DLL; {assembly.Path} is not one.");
             return new ServerLaunch(directory, Quote(assembly.Path) + " lsp", usesToolManifest: false);
         }
-        for (string? current = directory; current != null; current = Path.GetDirectoryName(current))
-        {
-            string manifest = Path.Combine(current, ".config", "dotnet-tools.json");
-            if (!File.Exists(manifest)) continue;
-            var json = JObject.Parse(File.ReadAllText(manifest));
-            foreach (var tool in (json["tools"] as JObject ?? new JObject()).Properties())
-                if (tool.Value["commands"] is JArray commands && commands.ToObject<string[]>() is string[] names && Array.IndexOf(names, "runic-translations") >= 0)
-                    return new ServerLaunch(current, "tool run runic-translations -- lsp", usesToolManifest: true);
-            if (json.Value<bool?>("isRoot") == true) break;
-        }
+        // rax-translations (RunicArtifex.Translations.Tool) or runic-translations, in .config/dotnet-tools.json or
+        // dotnet-tools.json (RunicTools; the rename, D080.7).
+        foreach (var (manifest, text) in RunicTools.ManifestsAbove(directory))
+            if (RunicTools.TranslationsCommand(text) is { } command)
+                return new ServerLaunch(RunicTools.ManifestDirectory(manifest), "tool run " + command + " -- lsp", usesToolManifest: true);
         throw new ServerLaunchException(ServerStartProblem.ToolMissing, "No project-local runic-translations tool manifest found. Restore the local tool before opening MF2 resources.");
     }
     // Windows CommandLineToArgvW escaping; ProcessStartInfo on .NET Framework has no ArgumentList.
