@@ -46,12 +46,13 @@ public sealed class TranslationsToolResult
 /// </summary>
 public static class TranslationsTool
 {
-    public const string ToolMissing = "No project-local runic-translations tool was found. Add it to .config/dotnet-tools.json and run dotnet tool restore, or set " + RunicSettings.ServerAssemblyOption + " for SDK development.";
+    public const string ToolMissing = "No project-local runic-translations tool was found. Add it to .config/dotnet-tools.json (or dotnet-tools.json) and run dotnet tool restore, or set " + RunicSettings.ServerAssemblyOption + " for SDK development.";
 
     /// <summary>
     /// The local tool for <paramref name="toolArguments"/>: a configured server assembly (<c>dotnet &lt;dll&gt; …</c>),
-    /// else <c>dotnet tool run runic-translations -- …</c> in the nearest <c>.config/dotnet-tools.json</c> at or above
-    /// <paramref name="directory"/> that declares the command, stopping at a manifest with <c>isRoot</c>.
+    /// else <c>dotnet tool run rax-translations|runic-translations -- …</c> in the nearest tool manifest
+    /// (<c>.config/dotnet-tools.json</c> or <c>dotnet-tools.json</c>) at or above <paramref name="directory"/> that
+    /// declares the command, stopping at a manifest with <c>isRoot</c>.
     /// </summary>
     public static TranslationsToolLaunch Find(string directory, string dotnet, ServerAssemblySetting? assembly, IReadOnlyList<string> toolArguments)
     {
@@ -61,17 +62,12 @@ public static class TranslationsTool
                 throw new InvalidOperationException($"{assembly.Source} must identify an existing absolute tool DLL; {assembly.Path} is not one.");
             return new TranslationsToolLaunch(dotnet, new[] { assembly.Path }.Concat(toolArguments).ToList(), directory);
         }
-        for (string? current = directory; !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current))
+        foreach (var (manifest, text) in RunicTools.ManifestsAbove(directory))
         {
-            string manifest = Path.Combine(current, ".config", "dotnet-tools.json");
-            if (!File.Exists(manifest)) continue;
-            Dictionary<string, object?>? json;
-            try { json = Json.Object(Json.Parse(File.ReadAllText(manifest))); }
+            try { Json.Parse(text); }
             catch (FormatException error) { throw new InvalidOperationException($"{manifest} is not valid JSON: {error.Message}"); }
-            var tools = Json.Object(Json.Get(json, "tools"));
-            if (tools != null && tools.Values.Any(tool => Json.Array(Json.Get(Json.Object(tool), "commands"))?.Contains("runic-translations") == true))
-                return new TranslationsToolLaunch(dotnet, new[] { "tool", "run", "runic-translations", "--" }.Concat(toolArguments).ToList(), current!);
-            if (Json.Boolean(json, "isRoot") == true) break;
+            if (RunicTools.TranslationsCommand(text) is { } command)
+                return new TranslationsToolLaunch(dotnet, new[] { "tool", "run", command, "--" }.Concat(toolArguments).ToList(), RunicTools.ManifestDirectory(manifest));
         }
         throw new InvalidOperationException(ToolMissing);
     }

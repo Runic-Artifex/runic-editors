@@ -10,7 +10,7 @@ import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type Doctor
 import { locationText, newestSourceMap, parseSourceMap, sourceMapTree, type SourceLocation, type SourceTreeNode } from "./source-map.js";
 import { coverageLine, errorSummary, type StatusResult } from "./status.js";
 import { parseRunProperties, runPropertiesArguments, templateTaskLabels, templateWindowConfiguration, windowLaunchConfiguration } from "./window-debug.js";
-import { detectWorkspace, projectRunicToolVersion, type WorkspaceKind } from "./workspace.js";
+import { detectWorkspace, formerCoreTool, projectCoreTool, projectRunicToolVersion, type WorkspaceKind } from "./workspace.js";
 
 /** What the Runic SDK features need from the rest of the extension. */
 export interface SdkHost {
@@ -84,7 +84,7 @@ export class RunicSdk implements vscode.Disposable {
   constructor(private readonly host: SdkHost) {
     this.log = vscode.window.createOutputChannel("Runic", { log: true });
     this.statusItem.name = "Runic dev"; this.statusItem.command = "runic.dev.actions";
-    const sessionWatcher = vscode.workspace.createFileSystemWatcher("**/obj/runic/dev-session.json");
+    const sessionWatcher = vscode.workspace.createFileSystemWatcher("**/obj/{runic,rax}/dev-session.json");
     const sourceMapWatcher = vscode.workspace.createFileSystemWatcher("**/obj/**/runic-bridge/sources.json");
     const projectWatcher = vscode.workspace.createFileSystemWatcher("**/{*.csproj,runic.json}");
     const refreshSessions = () => { void this.refreshSessions(); };
@@ -160,7 +160,7 @@ export class RunicSdk implements vscode.Disposable {
       for (const project of kind.sdkProjects) {
         seen.add(project);
         if (!this.projects.has(project)) {
-          const state: ProjectState = { project, folder, follower: new DevSessionFollower(project, fileSystemSource, devSessionPath(project), message => this.log.info(message)) };
+          const state: ProjectState = { project, folder, follower: new DevSessionFollower(project, fileSystemSource, devSessionPath(project, projectCoreTool(project)?.tool), message => this.log.info(message)) };
           state.follower.onDidChange(snapshot => this.sessionChanged(state, snapshot));
           this.projects.set(project, state);
         }
@@ -245,6 +245,8 @@ export class RunicSdk implements vscode.Disposable {
   /** A task of the extension's `runic` type; `dev` gets the `$runic-dev` problem matcher, as the template's task does. */
   private task(state: ProjectState, command: RunicTaskDefinition["command"], noWindow = false, definition?: RunicTaskDefinition, toolVersion = projectRunicToolVersion(state.project)): vscode.Task {
     const dotnet = this.host.dotnetPath(state.folder);
+    // `dotnet runic` (dotnet-runic) or `dotnet rax` (RunicArtifex.Tool), by what the project's tool manifest lists.
+    const verb = (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb;
     const several = [...this.projects.values()].filter(item => item.folder === state.folder).length > 1;
     const suffix = several ? ` (${basename(state.project)})` : "";
     const cwd = dirname(state.project);
@@ -254,7 +256,7 @@ export class RunicSdk implements vscode.Disposable {
       // dotnet-runic 0.22: --debug-endpoint (D070.17) and the stop request on dev's input (WIN-06), through a terminal of the
       // extension's own that holds dev's standard input. An older or unknown tool runs as a process task, as before.
       const sdk022 = supportsDevSdk022(toolVersion);
-      const args = devArguments(state.project, noWindow, sdk022);
+      const args = devArguments(state.project, noWindow, sdk022, verb);
       const execution = sdk022
         ? new vscode.CustomExecution(async () => {
           const problems = new DevProblems(cwd, noWindow);
@@ -271,15 +273,15 @@ export class RunicSdk implements vscode.Disposable {
       const matcher = sdk022 ? (noWindow ? "$runic-dev-terminal-no-window" : "$runic-dev-terminal") : (noWindow ? "$runic-dev-no-window" : "$runic-dev");
       task = new vscode.Task(definition, state.folder, noWindow ? `dev --no-window${suffix}` : `dev${suffix}`, "runic", execution, matcher);
       task.isBackground = true;
-      task.detail = noWindow ? "dotnet runic dev --no-window: the frontend only; F5 starts the Window" : "dotnet runic dev: the development server and the Window";
+      task.detail = noWindow ? `dotnet ${verb} dev --no-window: the frontend only; F5 starts the Window` : `dotnet ${verb} dev: the development server and the Window`;
     } else if (command === "build") {
       task = new vscode.Task(definition, state.folder, `build${suffix}`, "runic",
         new vscode.ProcessExecution(dotnet, ["build", state.project, "-p:GenerateFullPaths=true", "-consoleLoggerParameters:NoSummary;ForceNoAlign"], { cwd }), "$msCompile");
       task.group = vscode.TaskGroup.Build;
       task.detail = "dotnet build";
     } else {
-      task = new vscode.Task(definition, state.folder, `doctor${suffix}`, "runic", new vscode.ProcessExecution(dotnet, ["runic", "doctor", "--project", state.project], { cwd }), []);
-      task.detail = "dotnet runic doctor";
+      task = new vscode.Task(definition, state.folder, `doctor${suffix}`, "runic", new vscode.ProcessExecution(dotnet, [verb, "doctor", "--project", state.project], { cwd }), []);
+      task.detail = `dotnet ${verb} doctor`;
     }
     return task;
   }
@@ -321,7 +323,7 @@ export class RunicSdk implements vscode.Disposable {
       await this.waitFor(state, current => !isActive(current), 30000);
     }
     const task = await this.workspaceTask(state, noWindow ? templateTaskLabels.devNoWindow : templateTaskLabels.dev)
-      ?? this.task(state, "dev", noWindow, undefined, await detectToolVersion(this.host.dotnetPath(state.folder), dirname(state.project), projectRunicToolVersion(state.project)));
+      ?? this.task(state, "dev", noWindow, undefined, await detectToolVersion(this.host.dotnetPath(state.folder), dirname(state.project), projectRunicToolVersion(state.project), (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb));
     this.log.info(`Starting ${task.source === "Workspace" ? `the workspace task "${task.name}"` : `dotnet runic dev${noWindow ? " --no-window" : ""}`} for ${state.project}`);
     state.execution = await vscode.tasks.executeTask(task);
     return state;
@@ -458,7 +460,7 @@ export class RunicSdk implements vscode.Disposable {
     if (!state) return;
     state.doctorRunning = true; this.doctorView.refresh();
     try {
-      const args = doctorArguments(state.project);
+      const args = doctorArguments(state.project, (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb);
       this.log.info(`> dotnet ${args.join(" ")}`);
       const stdout = await vscode.window.withProgress({ location: { viewId: "runic.doctor" }, title: "dotnet runic doctor" }, () =>
         execText(this.host.dotnetPath(state.folder), args, dirname(state.project), true));

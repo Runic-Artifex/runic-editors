@@ -39,11 +39,15 @@ public static class DevOutput
     /// <summary>
     /// The arguments of <c>dotnet runic dev</c> for a project, as VS Code's task runs it. <paramref name="debugEndpoint"/>
     /// adds <c>--debug-endpoint</c> (0.22) to a <c>dev</c> with its Window, so a CS-WebUI Window opens its DevTools
-    /// Protocol port because an IDE asked (D070.17); <c>--no-window</c> needs nothing.
+    /// Protocol port because an IDE asked (D070.17); <c>--no-window</c> needs nothing. <paramref name="verb"/> is the
+    /// project's core tool (<c>runic</c> or <c>rax</c>; default: by its tool manifest, <see cref="RunicTools.VerbFor"/>).
     /// </summary>
-    public static IReadOnlyList<string> Arguments(string project, bool noWindow, bool debugEndpoint = false)
-        => noWindow ? new[] { "runic", "dev", "--no-window", "--project", project }
-            : debugEndpoint ? new[] { "runic", "dev", "--debug-endpoint", "--project", project } : new[] { "runic", "dev", "--project", project };
+    public static IReadOnlyList<string> Arguments(string project, bool noWindow, bool debugEndpoint = false, string? verb = null)
+    {
+        verb ??= RunicTools.VerbFor(project);
+        return noWindow ? new[] { verb, "dev", "--no-window", "--project", project }
+            : debugEndpoint ? new[] { verb, "dev", "--debug-endpoint", "--project", project } : new[] { verb, "dev", "--project", project };
+    }
 
     /// <summary>The line without terminal colour codes.</summary>
     public static string Plain(string line) => Escape.Replace(line, "");

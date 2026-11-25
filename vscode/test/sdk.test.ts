@@ -7,10 +7,11 @@ import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { detectToolVersion, devArguments, forceStop, onDevEnd, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
-import { DevSessionFollower, devSessionPath, devSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
+import { DevSessionFollower, devSessionPath, devSessionSchema, raxDevSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
 import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, readyPattern } from "../src/dev-problems.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
-import { detectWorkspace, isRunicSdkProject, projectRunicToolVersion, runicToolVersion } from "../src/workspace.js";
+import { coreTool, detectWorkspace, formerCoreTool, formerToolIds, isRunicSdkProject, manifestTool, projectCoreTool, projectRunicToolVersion, runicToolVersion } from "../src/workspace.js";
+import { migrateArguments, migrationOffer, migrationProbeDirectory, migrationSummary, raxVersionArguments } from "../src/migration.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor } from "../src/doctor.js";
 import { codeValue, diagnosticHelpUri, isRunicCode } from "../src/diagnostics.js";
 import { formerSettingsInUse, settingValue, type SettingInspection } from "../src/identity.js";
@@ -73,6 +74,64 @@ test("the project's dotnet-runic version comes from the nearest tool manifest", 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("the core tool is RunicArtifex.Tool (rax) or dotnet-runic (runic), in either manifest location", () => {
+  // dotnet tool install writes the ID in lower case; NuGet IDs are case-insensitive.
+  expect(manifestTool(JSON.stringify({ tools: { "runicartifex.tool": { version: "0.25.0", commands: ["rax"] } } }))).toEqual({ tool: coreTool, version: "0.25.0" });
+  expect(manifestTool(JSON.stringify({ tools: { "dotnet-runic": { version: "0.24.0", commands: ["dotnet-runic"] } } }))?.tool).toBe(formerCoreTool);
+  // Mid-migration a manifest lists both; the new tool runs.
+  expect(manifestTool(JSON.stringify({ tools: { "dotnet-runic": { version: "0.24.0" }, "RunicArtifex.Tool": { version: "0.25.0" } } }))?.version).toBe("0.25.0");
+  expect(manifestTool(JSON.stringify({ tools: { "dotnet-ef": { version: "9.0.0" } } }))).toBeUndefined();
+  expect(coreTool.verb).toBe("rax"); expect(formerCoreTool.verb).toBe("runic");
+  expect(devArguments("/a/App.csproj", false, true, coreTool.verb)).toEqual(["rax", "dev", "--debug-endpoint", "--project", "/a/App.csproj"]);
+  expect(devArguments("/a/App.csproj", true)).toEqual(["runic", "dev", "--no-window", "--project", "/a/App.csproj"]);
+  expect(doctorArguments("/a/App.csproj", "rax")[0]).toBe("rax");
+  const root = temporary("rax-tool");
+  try {
+    mkdirSync(join(root, "src", "App"), { recursive: true });
+    const project = join(root, "src", "App", "App.csproj");
+    // The root dotnet-tools.json (.NET 10's dotnet new tool-manifest).
+    writeFileSync(join(root, "dotnet-tools.json"), JSON.stringify({ isRoot: true, tools: { "runicartifex.tool": { version: "0.25.0", commands: ["rax"] } } }));
+    expect(projectCoreTool(project)).toEqual({ tool: coreTool, version: "0.25.0", manifest: join(root, "dotnet-tools.json") });
+    expect(devSessionPath(project, projectCoreTool(project)?.tool)).toBe(join(root, "src", "App", "obj", "rax", "dev-session.json"));
+    // .config/dotnet-tools.json is read first in the same directory.
+    mkdirSync(join(root, ".config"));
+    writeFileSync(join(root, ".config", "dotnet-tools.json"), JSON.stringify({ tools: { "dotnet-runic": { version: "0.24.0", commands: ["dotnet-runic"] } } }));
+    expect(projectCoreTool(project)?.tool).toBe(formerCoreTool);
+    expect(devSessionPath(project, formerCoreTool)).toBe(join(root, "src", "App", "obj", "runic", "dev-session.json"));
+    // A nearer root manifest without a Runic tool ends the search.
+    writeFileSync(join(root, "src", "dotnet-tools.json"), JSON.stringify({ isRoot: true, tools: {} }));
+    expect(projectCoreTool(project)).toBeUndefined();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("former tool IDs get a migration offer only where RunicArtifex.Tool is available", () => {
+  const former = JSON.stringify({ tools: { "dotnet-runic": { version: "0.24.0" }, "Dotnet-Runic-Translations": { version: "0.16.0" } } });
+  const manifest = join("/w", ".config", "dotnet-tools.json");
+  expect(formerToolIds(former)).toEqual(["dotnet-runic", "dotnet-runic-translations"]);
+  // New IDs only: nothing to migrate.
+  expect(migrationOffer([{ path: manifest, text: JSON.stringify({ tools: { "runicartifex.tool": {} } }) }])).toBeUndefined();
+  // An old ID only, and no rax resolves (0.24, before the rename ships): no offer, not even the guide.
+  expect(migrationProbeDirectory([{ path: manifest, text: former }])).toBe("/w");
+  expect(migrationOffer([{ path: manifest, text: former }])).toBeUndefined();
+  // An old ID and a rax that resolves (dotnet rax --version or a global rax --version): the offer runs it.
+  const global = migrationOffer([{ path: manifest, text: former }], { directory: "/w", program: "rax" })!;
+  expect(global.formerIds).toEqual(["dotnet-runic", "dotnet-runic-translations"]);
+  expect(global.runner).toEqual({ directory: "/w", program: "rax" });
+  expect(global.message).toContain("dotnet-runic → RunicArtifex.Tool (rax)");
+  // An old ID next to RunicArtifex.Tool in the manifest: offered without a probe.
+  const listed = [{ path: manifest, text: JSON.stringify({ tools: { "RunicArtifex.Tool": { version: "0.25.0" }, "dotnet-runic-translations": {} } }) }];
+  expect(migrationProbeDirectory(listed)).toBeUndefined();
+  const runnable = migrationOffer(listed)!;
+  expect(runnable.formerIds).toEqual(["dotnet-runic-translations"]);
+  expect(runnable.runner).toEqual({ directory: "/w", program: "dotnet" });
+  expect(raxVersionArguments("dotnet")).toEqual(["rax", "--version"]);
+  expect(raxVersionArguments("rax")).toEqual(["--version"]);
+  expect(migrateArguments(true)).toEqual(["rax", "migrate", "--dry-run", "--json"]);
+  expect(migrateArguments(false, "rax")).toEqual(["migrate", "--json"]);
+  expect(migrationSummary(JSON.stringify({ payload: { rewritten: [1, 2], moved: [], reported: [3] } }))).toBe("2 rewritten, 0 moved, 1 reported");
+  expect(migrationSummary("Nothing to do.\n")).toBe("Nothing to do.");
+});
+
 // ---- Session file follower -------------------------------------------------------------------------------------------
 
 test("the session file parses only for its schema", () => {
@@ -83,6 +142,7 @@ test("the session file parses only for its schema", () => {
   // Later versions only add properties.
   expect(parseDevSession(JSON.stringify({ ...session(), added: { anything: true } }))?.state).toBe("ready");
   expect(devSessionPath("/app/App.csproj")).toBe(join("/app", "obj", "runic", "dev-session.json"));
+  expect(parseDevSession(JSON.stringify({ ...session(), schema: raxDevSessionSchema }))?.state).toBe("ready");
 });
 
 test("dotnet runic dev's command line is recognized as the DLL, the apphost or the tool name", () => {
@@ -90,6 +150,12 @@ test("dotnet runic dev's command line is recognized as the DLL, the apphost or t
   expect(isDevCommandLine(["/home/u/.dotnet/tools/dotnet-runic", "dev"])).toBe(true);
   expect(isDevCommandLine(["C:\\Users\\u\\.nuget\\packages\\dotnet-runic\\0.20.0\\tools\\net10.0\\any\\dotnet-runic.exe", "dev"])).toBe(true);
   expect(isDevCommandLine(["/usr/share/dotnet/dotnet", "exec", "/x/dotnet-runic.dll", "doctor"])).toBe(false);
+  // After the rename: RunicArtifex.Tool's DLL under dotnet, the rax shim, and under NativeAOT rax itself with no dotnet parent.
+  expect(isDevCommandLine(["/usr/share/dotnet/dotnet", "exec", "/home/u/.nuget/packages/runicartifex.tool/0.25.0/tools/net10.0/any/RunicArtifex.Tool.dll", "dev"])).toBe(true);
+  expect(isDevCommandLine(["/home/u/.nuget/packages/runicartifex.tool/0.25.0/tools/net10.0/linux-x64/rax", "dev", "--no-window"])).toBe(true);
+  expect(isDevCommandLine(["C:\\Users\\u\\.dotnet\\tools\\rax.exe", "dev"])).toBe(true);
+  expect(isDevCommandLine(["/usr/bin/rax", "doctor"])).toBe(false);
+  expect(isDevCommandLine(["/usr/bin/raxx", "dev"])).toBe(false);
   expect(isDevCommandLine(["node", "vite", "dev"])).toBe(false);
   expect(isDevCommandLine(["/app/bin/Debug/net10.0/App"])).toBe(false);
 });
@@ -364,6 +430,11 @@ test("former runicTranslations settings apply while the new settings are not set
   expect(settingValue("runic.dotnetPath", "dotnet", configuration({ "runic.dotnetPath": { defaultValue: "dotnet", workspaceValue: "/new/dotnet" }, "runicTranslations.dotnetPath": { globalValue: "/old/dotnet" } }))).toBe("/new/dotnet");
   expect(settingValue("runic.translations.serverAssembly", "", configuration({ "runicTranslations.serverAssembly": { workspaceFolderValue: "server.dll" } }))).toBe("server.dll");
   expect(formerSettingsInUse(key => key === "runicTranslations.trace.server" ? { globalValue: "verbose" } : undefined)).toEqual(["runicTranslations.trace.server"]);
+  // 0.25's rax.* IDs (D080.7) chain onto runic.* and its own former name.
+  const chain = { "rax.dotnetPath": "runic.dotnetPath", "runic.dotnetPath": "runicTranslations.dotnetPath" };
+  expect(settingValue("rax.dotnetPath", "dotnet", configuration({ "runic.dotnetPath": { globalValue: "/runic/dotnet" }, "runicTranslations.dotnetPath": { globalValue: "/old/dotnet" } }), chain)).toBe("/runic/dotnet");
+  expect(settingValue("rax.dotnetPath", "dotnet", configuration({ "runicTranslations.dotnetPath": { globalValue: "/old/dotnet" } }), chain)).toBe("/old/dotnet");
+  expect(settingValue("rax.dotnetPath", "dotnet", configuration({ "rax.dotnetPath": { defaultValue: "dotnet" } }), { ...chain, "runicTranslations.dotnetPath": "rax.dotnetPath" })).toBe("dotnet");
 });
 
 test("the Window launch configuration runs what dotnet run starts, with the session's environment", () => {

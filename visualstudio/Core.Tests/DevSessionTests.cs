@@ -98,6 +98,23 @@ public class DevSessionTests
         Check.Equal(null, DevSessions.Parse("[]"));
         Check.Equal(null, DevSessions.Parse(text.Replace("\"processId\": 41250,", "")));
         Check.Equal(Path.Combine(Path.GetDirectoryName("/app/App.csproj")!, "obj", "runic", "dev-session.json"), DevSessions.PathFor("/app/App.csproj"));
+        Check.Equal("ready", DevSessions.Parse(text.Replace(DevSessions.Schema, DevSessions.RaxSchema))?.State.ToString().ToLowerInvariant());
+    }
+
+    [Test]
+    public void After_the_rename_the_session_file_is_under_obj_rax_when_the_manifest_lists_RunicArtifex_Tool()
+    {
+        using var root = new TempDirectory();
+        root.Write("App/App.csproj", "<Project />");
+        string project = root.Full("App/App.csproj");
+        Check.Equal(root.Full("App/obj/runic/dev-session.json"), DevSessions.PathFor(project, null));
+        root.Write("dotnet-tools.json", """{ "isRoot": true, "tools": { "runicartifex.tool": { "version": "0.25.0", "commands": [ "rax" ] } } }""");
+        Check.Equal(root.Full("App/obj/rax/dev-session.json"), DevSessions.PathFor(project));
+        Check.Same(new[] { "rax", "dev", "--no-window", "--project", project }, DevOutput.Arguments(project, noWindow: true));
+        Check.Equal("rax", Doctor.Arguments(project)[0]);
+        root.Write(".config/dotnet-tools.json", """{ "tools": { "dotnet-runic": { "version": "0.24.0", "commands": [ "dotnet-runic" ] } } }""");
+        Check.Equal(root.Full("App/obj/runic/dev-session.json"), DevSessions.PathFor(project));
+        Check.Same(new[] { "runic", "dev", "--project", project }, DevOutput.Arguments(project, noWindow: false));
     }
 
     [Test]
@@ -109,6 +126,12 @@ public class DevSessionTests
         Check.True(!DevSessions.IsDevCommandLine(new[] { "/usr/share/dotnet/dotnet", "exec", "/x/dotnet-runic.dll", "doctor" }), "doctor");
         Check.True(!DevSessions.IsDevCommandLine(new[] { "node", "vite", "dev" }), "vite");
         Check.True(!DevSessions.IsDevCommandLine(new[] { "/app/bin/Debug/net10.0/App" }), "app");
+        // After the rename: RunicArtifex.Tool's DLL under dotnet, the rax shim, and under NativeAOT rax itself (R5 A7: no dotnet parent).
+        Check.True(DevSessions.IsDevCommandLine(new[] { "/usr/share/dotnet/dotnet", "exec", "/home/u/.nuget/packages/runicartifex.tool/0.25.0/tools/net10.0/any/RunicArtifex.Tool.dll", "dev" }), "RunicArtifex.Tool.dll");
+        Check.True(DevSessions.IsDevCommandLine(new[] { "/home/u/.nuget/packages/runicartifex.tool/0.25.0/tools/net10.0/linux-x64/rax", "dev", "--no-window" }), "native rax");
+        Check.True(DevSessions.IsDevCommandLine(new[] { @"C:\Users\u\.dotnet\tools\rax.exe", "dev" }), "rax.exe");
+        Check.True(!DevSessions.IsDevCommandLine(new[] { "/usr/bin/rax", "doctor" }), "rax doctor");
+        Check.True(!DevSessions.IsDevCommandLine(new[] { "/usr/bin/raxx", "dev" }), "lookalike");
     }
 
     [Test]
@@ -132,6 +155,10 @@ public class DevSessionTests
         Check.True(!DevSessions.IsRunning(old, source), "another command line");
         source.Processes[41250] = new DevProcessInfo(DateTimeOffset.UtcNow, "dotnet-runic");
         Check.True(DevSessions.IsRunning(old, source), "image dotnet-runic");
+        source.Processes[41250] = new DevProcessInfo(DateTimeOffset.UtcNow, "rax");
+        Check.True(DevSessions.IsRunning(old, source), "the rax image (NativeAOT, no dotnet parent)");
+        source.Processes[41250] = new DevProcessInfo(DateTimeOffset.UtcNow, "RunicArtifex.Tool");
+        Check.True(DevSessions.IsRunning(old, source), "the RunicArtifex.Tool apphost");
         source.Processes[41250] = new DevProcessInfo(DateTimeOffset.UtcNow, "notepad");
         Check.True(!DevSessions.IsRunning(old, source), "image notepad");
     }

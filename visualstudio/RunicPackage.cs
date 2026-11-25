@@ -43,6 +43,8 @@ public sealed class RunicPackage : AsyncPackage
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
         _ = JoinableTaskFactory.RunAsync(() => FormerExtensionNotice.ShowIfInstalledAsync(this, DisposalToken));
+        // The rename (D079.13): offers rax migrate, or its guide, for a solution whose tool manifests list the former tool IDs.
+        _ = JoinableTaskFactory.RunAsync(() => FormerToolNotice.ShowIfNeededAsync(this, DisposalToken));
         await CommandRegistrar.RegisterAsync(this, cancellationToken);
         // Follows the dev session files and advises the pre-F5 guard (DevSession/).
         _ = JoinableTaskFactory.RunAsync(() => DevSession.DevSessionService.Instance.InitializeAsync(this, DisposalToken));
