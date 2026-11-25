@@ -129,9 +129,15 @@ public static class RunicTools
         try { return Json.Boolean(Json.Object(Json.Parse(manifestText)), "isRoot") == true; } catch (FormatException) { return false; }
     }
 
-    /// <summary><c>dotnet rax migrate</c>: first <c>--dry-run --json</c> (the report only), then the run that writes.</summary>
-    public static IReadOnlyList<string> MigrateArguments(bool dryRun)
-        => dryRun ? new[] { Core.Verb, "migrate", "--dry-run", "--json" } : new[] { Core.Verb, "migrate", "--json" };
+    /// <summary>
+    /// <c>rax migrate</c>: first <c>--dry-run --json</c> (the report only), then the run that writes; <c>dotnet rax …</c>
+    /// (<paramref name="globalRax"/> false) or a global <c>rax …</c>.
+    /// </summary>
+    public static IReadOnlyList<string> MigrateArguments(bool dryRun, bool globalRax = false)
+        => (globalRax ? new string[0] : new[] { Core.Verb }).Concat(new[] { "migrate" }).Concat(dryRun ? new[] { "--dry-run", "--json" } : new[] { "--json" }).ToList();
+
+    /// <summary><c>rax --version</c> through <c>dotnet</c> or a global <c>rax</c>: the probe for <see cref="MigrationOffer.For(IEnumerable{ValueTuple{string, string}}, MigrateRunner?)"/>.</summary>
+    public static IReadOnlyList<string> RaxVersionArguments(bool globalRax) => globalRax ? new[] { "--version" } : new[] { Core.Verb, "--version" };
 
     private static Dictionary<string, object?>? Tools(string manifestText)
     {
@@ -146,22 +152,31 @@ public static class RunicTools
     }
 }
 
+/// <summary>How <c>rax migrate</c> runs: in <see cref="Directory"/>, as <c>dotnet rax …</c> or a global <c>rax …</c>.</summary>
+public sealed class MigrateRunner
+{
+    public MigrateRunner(string directory, bool globalRax) { Directory = directory; GlobalRax = globalRax; }
+    public string Directory { get; }
+    public bool GlobalRax { get; }
+}
+
 /// <summary>
 /// The offer to move a solution to the Runic Artifex tool IDs (D079.13, D080.7; VS Code: <c>vscode/src/migration.ts</c>).
-/// <c>rax migrate</c> ships with the rename in <c>RunicArtifex.Tool</c>; DevKit runs it only where a manifest with a
-/// former ID already lists that tool, and otherwise links <see cref="RunicTools.MigrationGuide"/>.
+/// <c>rax migrate</c> ships with the rename in <c>RunicArtifex.Tool</c>, so the offer exists only where that tool is
+/// available: a manifest with a former ID also lists it, or <c>dotnet rax --version</c> / <c>rax --version</c> runs.
+/// Before the rename ships nothing shows.
 /// </summary>
 public sealed class MigrationOffer
 {
-    private MigrationOffer(IReadOnlyList<string> manifests, IReadOnlyList<string> formerIds, string? migrateDirectory)
+    private MigrationOffer(IReadOnlyList<string> manifests, IReadOnlyList<string> formerIds, MigrateRunner runner)
     {
-        Manifests = manifests; FormerIds = formerIds; MigrateDirectory = migrateDirectory;
+        Manifests = manifests; FormerIds = formerIds; Runner = runner;
     }
 
     public IReadOnlyList<string> Manifests { get; }
     public IReadOnlyList<string> FormerIds { get; }
-    /// <summary>Where to run <c>dotnet rax migrate</c>, or null when only the guide can be offered.</summary>
-    public string? MigrateDirectory { get; }
+    /// <summary>Where and how <c>rax migrate</c> runs.</summary>
+    public MigrateRunner Runner { get; }
 
     public string Message
     {
@@ -169,26 +184,46 @@ public sealed class MigrationOffer
         {
             var names = FormerIds.Select(id => id == RunicTools.FormerCore.Id
                 ? "dotnet-runic → RunicArtifex.Tool (rax)" : "dotnet-runic-translations → RunicArtifex.Translations.Tool (rax-translations)");
-            return "This solution's tool manifest uses the former Runic tool IDs. Runic Artifex renames them: " + string.Join("; ", names) + ". "
-                + (MigrateDirectory != null ? "rax migrate rewrites the project; DevKit shows its dry run first." : "rax migrate, which ships with the rename, rewrites the project; the migration guide has the steps.");
+            return "This solution's tool manifest uses the former Runic tool IDs. Runic Artifex renames them: " + string.Join("; ", names)
+                + ". rax migrate rewrites the project; DevKit shows its dry run first.";
         }
     }
 
-    /// <summary>The offer for a solution's tool manifests, or null when none lists a former ID.</summary>
-    public static MigrationOffer? For(IEnumerable<(string Path, string Text)> manifests)
+    private static List<(string Path, string Text, IReadOnlyList<string> Former)> Former(IEnumerable<(string Path, string Text)> manifests)
+        => manifests.Select(manifest => (manifest.Path, manifest.Text, Former: RunicTools.FormerIds(manifest.Text))).Where(manifest => manifest.Former.Count > 0).ToList();
+
+    /// <summary>
+    /// Where to look for a <c>rax</c> the manifests don't list, or null: the folder of the first manifest with a former
+    /// ID, when no manifest with a former ID also lists <c>RunicArtifex.Tool</c>. The caller runs <c>dotnet rax
+    /// --version</c>, then <c>rax --version</c> there, and passes what resolved to <see cref="For(IEnumerable{ValueTuple{string, string}}, MigrateRunner?)"/>.
+    /// </summary>
+    public static string? ProbeDirectory(IEnumerable<(string Path, string Text)> manifests)
     {
-        var found = manifests.Select(manifest => (manifest.Path, manifest.Text, Former: RunicTools.FormerIds(manifest.Text))).Where(manifest => manifest.Former.Count > 0).ToList();
-        if (found.Count == 0) return null;
-        var ids = new[] { RunicTools.FormerCore.Id, RunicTools.FormerTranslations.Id }.Where(id => found.Any(manifest => manifest.Former.Contains(id))).ToList();
-        var runnable = found.FirstOrDefault(manifest => RunicTools.Find(manifest.Text)?.Tool == RunicTools.Core);
-        return new MigrationOffer(found.Select(manifest => manifest.Path).ToList(), ids, runnable.Path != null ? RunicTools.ManifestDirectory(runnable.Path) : null);
+        var found = Former(manifests);
+        if (found.Count == 0 || found.Any(manifest => RunicTools.Find(manifest.Text)?.Tool == RunicTools.Core)) return null;
+        return RunicTools.ManifestDirectory(found[0].Path);
     }
 
-    /// <summary>The offer for the tool manifests in and below <paramref name="root"/> (as <see cref="RunicWorkspace.Detect"/> reads them) and above it.</summary>
-    public static MigrationOffer? For(RunicWorkspace workspace, string root)
-        => For(workspace.AllToolManifests.Select(path => (Path: path, Text: RunicTools.ReadManifest(path)))
+    /// <summary>
+    /// The offer for a solution's tool manifests, or null: when none lists a former ID, or when <c>RunicArtifex.Tool</c>
+    /// is available neither in a manifest with a former ID nor as <paramref name="resolved"/>.
+    /// </summary>
+    public static MigrationOffer? For(IEnumerable<(string Path, string Text)> manifests, MigrateRunner? resolved = null)
+    {
+        var found = Former(manifests);
+        if (found.Count == 0) return null;
+        var listed = found.FirstOrDefault(manifest => RunicTools.Find(manifest.Text)?.Tool == RunicTools.Core);
+        var runner = listed.Path != null ? new MigrateRunner(RunicTools.ManifestDirectory(listed.Path), globalRax: false) : resolved;
+        if (runner == null) return null;
+        var ids = new[] { RunicTools.FormerCore.Id, RunicTools.FormerTranslations.Id }.Where(id => found.Any(manifest => manifest.Former.Contains(id))).ToList();
+        return new MigrationOffer(found.Select(manifest => manifest.Path).ToList(), ids, runner);
+    }
+
+    /// <summary>The tool manifests in and below <paramref name="root"/> (as <see cref="RunicWorkspace.Detect"/> reads them) and above it.</summary>
+    public static IReadOnlyList<(string Path, string Text)> SolutionManifests(RunicWorkspace workspace, string root)
+        => workspace.AllToolManifests.Select(path => (Path: path, Text: RunicTools.ReadManifest(path)))
             .Concat(RunicTools.ManifestsAbove(Path.GetDirectoryName(root)))
-            .GroupBy(manifest => manifest.Path, StringComparer.OrdinalIgnoreCase).Select(group => group.First()));
+            .GroupBy(manifest => manifest.Path, StringComparer.OrdinalIgnoreCase).Select(group => group.First()).ToList();
 
     /// <summary>
     /// A one-line summary of <c>rax migrate --json</c>'s report (D079.10: rewritten, moved, reported but not changed):

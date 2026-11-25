@@ -90,16 +90,17 @@ When a manifest lists both, the new one runs. The dev session file is
 `dotnet-runic`. A `rax dev` counts as running whether it runs under `dotnet` or
 as the native `rax` program.
 
-When a manifest still lists a former ID, a notification offers the move once per
-workspace. `rax migrate` rewrites the project: the tool manifest, package
-references, MSBuild names, namespaces, `runic.json` and catalogs. It ships with
-`RunicArtifex.Tool`. Where a manifest already lists that tool, **Migrate to Runic
-Artifex** runs `dotnet rax migrate --dry-run --json` in the manifest's folder,
-writes the report to the **Runic Translations** output channel and asks before it runs
-`dotnet rax migrate`. Commit or stash your changes first: `migrate` refuses a
-dirty Git tree. Without the tool, run it once with
-`dnx RunicArtifex.Tool migrate --dry-run`, then without `--dry-run`. Runic
-DevKit's own command and setting names stay as they are.
+When a manifest still lists a former ID and `RunicArtifex.Tool` is available
+(a tool manifest lists it, or `dotnet rax --version` or `rax --version` runs),
+a notification offers the move once per workspace. Before the rename ships it shows
+nothing. `rax migrate` rewrites the project: the tool manifest, package
+references, MSBuild names, namespaces, `runic.json` and catalogs. **Migrate to
+Runic Artifex** runs `rax migrate --dry-run --json` in the manifest's folder,
+writes the report to the **Runic Translations** output channel and asks before it runs `rax migrate`.
+Commit or stash your changes first: `migrate` refuses a dirty Git tree. Without
+the tool, run it once with `dnx RunicArtifex.Tool migrate --dry-run`, then
+without `--dry-run`. Runic DevKit's own command and setting names stay as they
+are.
 
 ## Runic SDK features
 

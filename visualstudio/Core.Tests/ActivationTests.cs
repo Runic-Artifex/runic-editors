@@ -60,31 +60,40 @@ public class ActivationTests
     }
 
     [Test]
-    public void Former_tool_IDs_get_a_migration_offer_that_runs_rax_migrate_only_where_RunicArtifex_Tool_is_installed()
+    public void Former_tool_IDs_get_a_migration_offer_only_where_RunicArtifex_Tool_is_available()
     {
         using (var root = new TempDirectory())
         {
             root.Write("dotnet-tools.json", """{ "tools": { "dotnet-runic": { "version": "0.24.0" }, "Dotnet-Runic-Translations": { "version": "0.16.0" } } }""");
             var workspace = RunicWorkspace.Detect(root.Path);
             Check.Same(new[] { root.Full("dotnet-tools.json") }, workspace.ToolManifests);
-            var offer = MigrationOffer.For(workspace, root.Path)!;
+            var manifests = MigrationOffer.SolutionManifests(workspace, root.Path);
+            Check.Equal(root.Path, MigrationOffer.ProbeDirectory(manifests));
+            // An old ID only, and no rax resolves (0.24, before the rename ships): no offer, not even the guide.
+            Check.Equal(null, MigrationOffer.For(manifests), "old IDs only");
+            // An old ID and a rax that resolves (here a global rax --version): the offer runs it.
+            var offer = MigrationOffer.For(manifests, new MigrateRunner(root.Path, globalRax: true))!;
             Check.Same(new[] { "dotnet-runic", "dotnet-runic-translations" }, offer.FormerIds);
-            Check.Equal(null, offer.MigrateDirectory);
+            Check.True(offer.Runner.GlobalRax && offer.Runner.Directory == root.Path, "the resolved global rax");
             Check.True(offer.Message.Contains("dotnet-runic → RunicArtifex.Tool (rax)"), offer.Message);
         }
         using (var root = new TempDirectory())
         {
             root.Write("web/.config/dotnet-tools.json", """{ "tools": { "RunicArtifex.Tool": { "version": "0.25.0" }, "dotnet-runic-translations": {} } }""");
-            var offer = MigrationOffer.For(RunicWorkspace.Detect(root.Path), root.Path)!;
+            var manifests = MigrationOffer.SolutionManifests(RunicWorkspace.Detect(root.Path), root.Path);
+            Check.Equal(null, MigrationOffer.ProbeDirectory(manifests), "listed: no probe");
+            var offer = MigrationOffer.For(manifests)!;
             Check.Same(new[] { "dotnet-runic-translations" }, offer.FormerIds);
-            Check.Equal(root.Full("web"), offer.MigrateDirectory);
+            Check.True(!offer.Runner.GlobalRax && offer.Runner.Directory == root.Full("web"), "dotnet rax from the manifest's folder");
         }
         using (var root = new TempDirectory())
         {
             root.Write(".config/dotnet-tools.json", """{ "tools": { "runicartifex.tool": {}, "runicartifex.translations.tool": {} } }""");
-            Check.Equal(null, MigrationOffer.For(RunicWorkspace.Detect(root.Path), root.Path), "new IDs only");
+            Check.Equal(null, MigrationOffer.For(MigrationOffer.SolutionManifests(RunicWorkspace.Detect(root.Path), root.Path)), "new IDs only");
         }
         Check.Same(new[] { "rax", "migrate", "--dry-run", "--json" }, RunicTools.MigrateArguments(dryRun: true));
+        Check.Same(new[] { "migrate", "--json" }, RunicTools.MigrateArguments(dryRun: false, globalRax: true));
+        Check.Same(new[] { "rax", "--version" }, RunicTools.RaxVersionArguments(globalRax: false));
         Check.Equal("2 rewritten, 0 moved, 1 reported", MigrationOffer.Summary("""{ "payload": { "rewritten": [ 1, 2 ], "moved": [], "reported": [ 3 ] } }"""));
         Check.Equal("Nothing to do.", MigrationOffer.Summary("Nothing to do.\n"));
     }

@@ -15,8 +15,9 @@ namespace RunicArtifex.DevKit.VisualStudio.Migration;
 /// <summary>
 /// The rename (D079.13, D080.7): when the solution's tool manifests still list <c>dotnet-runic</c> or
 /// <c>dotnet-runic-translations</c>, an InfoBar offers the move to <c>RunicArtifex.Tool</c> once per session (VS Code:
-/// <c>offerMigration</c>). It runs <c>dotnet rax migrate</c> (dry run, then on confirmation) only where a manifest already
-/// lists <c>RunicArtifex.Tool</c>, whose <c>migrate</c> ships with the rename; otherwise it links the migration guide.
+/// <c>offerMigration</c>), but only where <c>RunicArtifex.Tool</c>, whose <c>migrate</c> ships with the rename, is
+/// available: a manifest lists it, or <c>dotnet rax --version</c> / <c>rax --version</c> runs. Before the rename ships
+/// nothing shows. It runs <c>rax migrate</c> as a dry run first, then on confirmation.
 /// </summary>
 internal static class FormerToolNotice
 {
@@ -31,17 +32,21 @@ internal static class FormerToolNotice
             await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             if (await package.GetServiceAsync(typeof(SVsSolution)) is not IVsSolution solution
                 || ErrorHandler.Failed(solution.GetSolutionInfo(out string directory, out _, out _)) || string.IsNullOrEmpty(directory)) return;
+            string dotnet = await RunicSdkState.DotnetAsync(cancellationToken);
             await TaskScheduler.Default;
-            var offer = MigrationOffer.For(RunicWorkspace.Detect(directory), directory);
+            var manifests = MigrationOffer.SolutionManifests(RunicWorkspace.Detect(directory), directory);
+            MigrateRunner? resolved = null;
+            if (MigrationOffer.ProbeDirectory(manifests) is { } probe)
+                resolved = await ResolvesAsync(dotnet, probe, globalRax: false, cancellationToken) ? new MigrateRunner(probe, globalRax: false)
+                    : await ResolvesAsync(dotnet, probe, globalRax: true, cancellationToken) ? new MigrateRunner(probe, globalRax: true) : null;
+            var offer = MigrationOffer.For(manifests, resolved);
             if (offer == null || Interlocked.Exchange(ref shown, 1) == 1) return;
             SdkOutput.WriteLine(offer.Message + " (" + string.Join(", ", offer.Manifests) + ")");
             await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             if (await package.GetServiceAsync(typeof(SVsShell)) is not IVsShell shell
                 || await package.GetServiceAsync(typeof(SVsInfoBarUIFactory)) is not IVsInfoBarUIFactory factory) return;
             if (ErrorHandler.Failed(shell.GetProperty((int)__VSSPROPID7.VSSPROPID_MainWindowInfoBarHost, out object value)) || value is not IVsInfoBarHost host) return;
-            var actions = offer.MigrateDirectory != null
-                ? new IVsInfoBarActionItem[] { new InfoBarButton(Migrate), new InfoBarHyperlink(Guide) }
-                : new IVsInfoBarActionItem[] { new InfoBarHyperlink(Guide) };
+            var actions = new IVsInfoBarActionItem[] { new InfoBarButton(Migrate), new InfoBarHyperlink(Guide) };
             var model = new InfoBarModel(new[] { new InfoBarTextSpan(offer.Message) }, actions, KnownMonikers.StatusInformation, isCloseButtonVisible: true);
             var element = factory.CreateInfoBar(model);
             element.Advise(new Events(package, offer), out _);
@@ -54,16 +59,30 @@ internal static class FormerToolNotice
         }
     }
 
-    /// <summary><c>dotnet rax migrate --dry-run --json</c>, the report in the Runic SDK pane, then the run on confirmation.</summary>
-    private static async Task MigrateAsync(AsyncPackage package, string directory)
+    /// <summary>Whether <c>dotnet rax --version</c> (or a global <c>rax --version</c>) runs in <paramref name="directory"/>.</summary>
+    private static async Task<bool> ResolvesAsync(string dotnet, string directory, bool globalRax, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await ToolProcess.RunAsync(globalRax ? "rax" : dotnet, RunicTools.RaxVersionArguments(globalRax), directory, TimeSpan.FromSeconds(15), cancellationToken);
+            return result.ExitCode == 0;
+        }
+        catch (Exception error) when (error is InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception) { return false; }
+    }
+
+    /// <summary><c>rax migrate --dry-run --json</c>, the report in the Runic SDK pane, then the run on confirmation.</summary>
+    private static async Task MigrateAsync(AsyncPackage package, MigrateRunner runner)
     {
         string dotnet = await RunicSdkState.DotnetAsync(package.DisposalToken);
+        string program = runner.GlobalRax ? "rax" : dotnet, directory = runner.Directory;
         await TaskScheduler.Default;
         async Task<string?> RunAsync(bool dryRun)
         {
-            var arguments = RunicTools.MigrateArguments(dryRun);
-            SdkOutput.WriteLine("> " + dotnet + " " + string.Join(" ", arguments) + "  (in " + directory + ")");
-            var result = await ToolProcess.RunAsync(dotnet, arguments, directory, TimeSpan.FromMinutes(5), package.DisposalToken);
+            var arguments = RunicTools.MigrateArguments(dryRun, runner.GlobalRax);
+            SdkOutput.WriteLine("> " + program + " " + string.Join(" ", arguments) + "  (in " + directory + ")");
+            ToolProcessResult result;
+            try { result = await ToolProcess.RunAsync(program, arguments, directory, TimeSpan.FromMinutes(5), package.DisposalToken); }
+            catch (Exception error) when (error is InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception) { SdkOutput.WriteLine(error.Message); return null; }
             if (result.Output.Trim().Length > 0) SdkOutput.WriteLine(result.Output.Trim());
             if (result.Error.Trim().Length > 0) SdkOutput.WriteLine(result.Error.Trim());
             // Exit code 2: something is only reported, not rewritten (D079.10); the report is still on standard output.
@@ -74,7 +93,7 @@ internal static class FormerToolNotice
         await package.JoinableTaskFactory.SwitchToMainThreadAsync();
         if (plan == null)
         {
-            VsShellUtilities.ShowMessageBox(package, "dotnet rax migrate --dry-run failed; the Runic SDK output pane has its output.", RunicPackage.Title,
+            VsShellUtilities.ShowMessageBox(package, "rax migrate --dry-run failed; the Runic SDK output pane has its output.", RunicPackage.Title,
                 OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
             return;
         }
@@ -83,7 +102,7 @@ internal static class FormerToolNotice
         await TaskScheduler.Default;
         string? done = await RunAsync(dryRun: false);
         await package.JoinableTaskFactory.SwitchToMainThreadAsync();
-        VsShellUtilities.ShowMessageBox(package, done != null ? "rax migrate: " + MigrationOffer.Summary(done) + ". Review the changes, then reload the solution." : "dotnet rax migrate failed; the Runic SDK output pane has its output.",
+        VsShellUtilities.ShowMessageBox(package, done != null ? "rax migrate: " + MigrationOffer.Summary(done) + ". Review the changes, then reload the solution." : "rax migrate failed; the Runic SDK output pane has its output.",
             RunicPackage.Title, done != null ? OLEMSGICON.OLEMSGICON_INFO : OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
     }
 
@@ -103,9 +122,9 @@ internal static class FormerToolNotice
                 VsShellUtilities.OpenSystemBrowser(RunicTools.MigrationGuide);
                 return;
             }
-            if (actionItem.Text != Migrate || offer.MigrateDirectory is not { } directory) return;
+            if (actionItem.Text != Migrate) return;
             infoBarUIElement.Close();
-            package.JoinableTaskFactory.RunAsync(() => MigrateAsync(package, directory)).FileAndForget("RunicDevKit/Migrate");
+            package.JoinableTaskFactory.RunAsync(() => MigrateAsync(package, offer.Runner)).FileAndForget("RunicDevKit/Migrate");
         }
     }
 }

@@ -11,7 +11,7 @@ import { DevSessionFollower, devSessionPath, devSessionSchema, raxDevSessionSche
 import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, readyPattern } from "../src/dev-problems.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
 import { coreTool, detectWorkspace, formerCoreTool, formerToolIds, isRunicSdkProject, manifestTool, projectCoreTool, projectRunicToolVersion, runicToolVersion } from "../src/workspace.js";
-import { migrateArguments, migrationOffer, migrationSummary } from "../src/migration.js";
+import { migrateArguments, migrationOffer, migrationProbeDirectory, migrationSummary, raxVersionArguments } from "../src/migration.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor } from "../src/doctor.js";
 import { codeValue, diagnosticHelpUri, isRunicCode } from "../src/diagnostics.js";
 import { formerSettingsInUse, settingValue, type SettingInspection } from "../src/identity.js";
@@ -104,19 +104,30 @@ test("the core tool is RunicArtifex.Tool (rax) or dotnet-runic (runic), in eithe
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("former tool IDs get a migration offer that runs rax migrate only where RunicArtifex.Tool is installed", () => {
+test("former tool IDs get a migration offer only where RunicArtifex.Tool is available", () => {
   const former = JSON.stringify({ tools: { "dotnet-runic": { version: "0.24.0" }, "Dotnet-Runic-Translations": { version: "0.16.0" } } });
+  const manifest = join("/w", ".config", "dotnet-tools.json");
   expect(formerToolIds(former)).toEqual(["dotnet-runic", "dotnet-runic-translations"]);
-  expect(migrationOffer([{ path: "/w/.config/dotnet-tools.json", text: JSON.stringify({ tools: { "runicartifex.tool": {} } }) }])).toBeUndefined();
-  const guide = migrationOffer([{ path: "/w/.config/dotnet-tools.json", text: former }])!;
-  expect(guide.formerIds).toEqual(["dotnet-runic", "dotnet-runic-translations"]);
-  expect(guide.migrateDirectory).toBeUndefined();
-  expect(guide.message).toContain("dotnet-runic → RunicArtifex.Tool (rax)");
-  const runnable = migrationOffer([{ path: join("/w", ".config", "dotnet-tools.json"), text: JSON.stringify({ tools: { "RunicArtifex.Tool": { version: "0.25.0" }, "dotnet-runic-translations": {} } }) }])!;
+  // New IDs only: nothing to migrate.
+  expect(migrationOffer([{ path: manifest, text: JSON.stringify({ tools: { "runicartifex.tool": {} } }) }])).toBeUndefined();
+  // An old ID only, and no rax resolves (0.24, before the rename ships): no offer, not even the guide.
+  expect(migrationProbeDirectory([{ path: manifest, text: former }])).toBe("/w");
+  expect(migrationOffer([{ path: manifest, text: former }])).toBeUndefined();
+  // An old ID and a rax that resolves (dotnet rax --version or a global rax --version): the offer runs it.
+  const global = migrationOffer([{ path: manifest, text: former }], { directory: "/w", program: "rax" })!;
+  expect(global.formerIds).toEqual(["dotnet-runic", "dotnet-runic-translations"]);
+  expect(global.runner).toEqual({ directory: "/w", program: "rax" });
+  expect(global.message).toContain("dotnet-runic → RunicArtifex.Tool (rax)");
+  // An old ID next to RunicArtifex.Tool in the manifest: offered without a probe.
+  const listed = [{ path: manifest, text: JSON.stringify({ tools: { "RunicArtifex.Tool": { version: "0.25.0" }, "dotnet-runic-translations": {} } }) }];
+  expect(migrationProbeDirectory(listed)).toBeUndefined();
+  const runnable = migrationOffer(listed)!;
   expect(runnable.formerIds).toEqual(["dotnet-runic-translations"]);
-  expect(runnable.migrateDirectory).toBe("/w");
+  expect(runnable.runner).toEqual({ directory: "/w", program: "dotnet" });
+  expect(raxVersionArguments("dotnet")).toEqual(["rax", "--version"]);
+  expect(raxVersionArguments("rax")).toEqual(["--version"]);
   expect(migrateArguments(true)).toEqual(["rax", "migrate", "--dry-run", "--json"]);
-  expect(migrateArguments(false)).toEqual(["rax", "migrate", "--json"]);
+  expect(migrateArguments(false, "rax")).toEqual(["migrate", "--json"]);
   expect(migrationSummary(JSON.stringify({ payload: { rewritten: [1, 2], moved: [], reported: [3] } }))).toBe("2 rewritten, 0 moved, 1 reported");
   expect(migrationSummary("Nothing to do.\n")).toBe("Nothing to do.");
 });

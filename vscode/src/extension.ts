@@ -11,7 +11,7 @@ import { RunicSdk } from "./sdk.js";
 import { ServerCommands, advertisedCommands, commandSource, refactoringRoute, renameOffset, requestedProtocol, runicProtocol, type Refactoring } from "./protocol.js";
 import { isContentModified, resolveOutdatedOnce, retryContentModified, unlistedActionMessage, untilFound, untilListed } from "./refactor-retry.js";
 import { commandId, extensionId, formerCommandId, formerExtensionsNotice, formerSettingsInUse, settingValue } from "./identity.js";
-import { migrateArguments, migrationGuideUri, migrationOffer, migrationOfferShownKey, migrationSummary } from "./migration.js";
+import { migrateArguments, migrationGuideUri, migrationOffer, migrationOfferShownKey, migrationProbeDirectory, migrationSummary, raxVersionArguments, type MigrateRunner } from "./migration.js";
 import { toolManifestsAbove } from "./workspace.js";
 import { canonicalLocale, isOverriddenIn, libraryCatalogChoices, libraryInstallPattern, libraryDocumentProject, libraryLocaleChoices, libraryMessageChoices, libraryScheme, messageLine, overrideSourcePath, overridesAddArguments, unsavedDocuments, type LibraryCatalogs } from "./libraries.js";
 
@@ -707,9 +707,9 @@ function noticeFormerExtensions() {
 }
 /**
  * The rename (D079.13, D080.7): a tool manifest of the workspace that still lists dotnet-runic or
- * dotnet-runic-translations gets one offer per workspace. It runs `dotnet rax migrate` (dry run first, then on
- * confirmation) only where the manifest already lists RunicArtifex.Tool, whose `migrate` ships with the rename;
- * otherwise it links the migration guide.
+ * dotnet-runic-translations gets one offer per workspace, but only where RunicArtifex.Tool, whose `migrate` ships with
+ * the rename, is available: a manifest lists it, or `dotnet rax --version` / `rax --version` runs. Before the rename
+ * ships nothing shows. The offer runs `rax migrate` as a dry run first, then on confirmation.
  */
 async function offerMigration(context: vscode.ExtensionContext) {
   if (context.workspaceState.get<boolean>(migrationOfferShownKey)) return;
@@ -724,23 +724,30 @@ async function offerMigration(context: vscode.ExtensionContext) {
       manifests.set(uri.fsPath, new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
     }
   } catch (error) { output.warn(`Could not read the workspace's tool manifests: ${String(error)}`); return; }
-  const offer = migrationOffer([...manifests].map(([path, text]) => ({ path, text })));
+  const list = [...manifests].map(([path, text]) => ({ path, text }));
+  const probe = migrationProbeDirectory(list);
+  const dotnetFor = (directory: string) => dotnetPath(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(directory))?.uri);
+  const resolves = (program: MigrateRunner["program"], directory: string) => new Promise<boolean>(resolveRun =>
+    execFile(program === "dotnet" ? dotnetFor(directory) : "rax", raxVersionArguments(program), { cwd: directory, timeout: 15_000, windowsHide: true, env: { ...process.env, DOTNET_NOLOGO: "1" } }, error => resolveRun(!error)));
+  const resolved: MigrateRunner | undefined = probe === undefined ? undefined
+    : await resolves("dotnet", probe) ? { directory: probe, program: "dotnet" } : await resolves("rax", probe) ? { directory: probe, program: "rax" } : undefined;
+  const offer = migrationOffer(list, resolved);
   if (!offer) return;
   output.info(`${offer.message} (${offer.manifests.join(", ")})`);
   await context.workspaceState.update(migrationOfferShownKey, true);
   const migrate = "Migrate to Runic Artifex", guide = "Migration guide";
-  const choice = await vscode.window.showInformationMessage(offer.message, ...(offer.migrateDirectory ? [migrate] : []), guide);
+  const choice = await vscode.window.showInformationMessage(offer.message, migrate, guide);
   if (choice === guide) { void vscode.env.openExternal(vscode.Uri.parse(migrationGuideUri)); return; }
-  if (choice !== migrate || !offer.migrateDirectory) return;
-  const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(offer.migrateDirectory));
-  const dotnet = dotnetPath(folder?.uri);
+  if (choice !== migrate) return;
+  const { directory, program } = offer.runner;
+  const command = program === "dotnet" ? dotnetFor(directory) : "rax";
   const run = (dryRun: boolean) => new Promise<string>((resolveRun, rejectRun) => {
-    const args = migrateArguments(dryRun);
-    output.appendLine(`> dotnet ${args.join(" ")}  (in ${offer.migrateDirectory})`);
+    const args = migrateArguments(dryRun, program);
+    output.appendLine(`> ${program} ${args.join(" ")}  (in ${directory})`);
     // Exit code 2: something is only reported, not rewritten (D079.10); the report is still on standard output.
-    execFile(dotnet, args, { cwd: offer.migrateDirectory, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, DOTNET_NOLOGO: "1" } }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd: directory, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, DOTNET_NOLOGO: "1" } }, (error, stdout, stderr) => {
       output.appendLine(stdout.trim()); if (stderr.trim()) output.appendLine(stderr.trim());
-      if (error && !(error.code === 2 && stdout.trim())) rejectRun(new Error(`dotnet rax migrate failed: ${(stderr || stdout || error.message).trim().split("\n").at(-1)}. See Runic Translations output.`));
+      if (error && !(error.code === 2 && stdout.trim())) rejectRun(new Error(`rax migrate failed: ${(stderr || stdout || error.message).trim().split("\n").at(-1)}. See Runic Translations output.`));
       else resolveRun(stdout);
     });
   });
