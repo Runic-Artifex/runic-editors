@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    // The template's first profile.
+    "Acme.Mock": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    },
+    /* /mock through a profile, with a working directory and variables. */
+    "Mock data": {
+      "commandName": "Project",
+      "commandLineArgs": "/mock /config:\"C:\\Program Files\\Acme\\dev.json\"",
+      "workingDirectory": "data",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Staging",
+        "ACME_DATA": "%ACME_ROOT%\\mock",
+        "ACME_PORT": 5000,
+      },
+    },
+    "Installed": {
+      "commandName": "Executable",
+      "executablePath": "C:\\Program Files\\Acme\\Acme.Mock.exe",
+      "commandLineArgs": "/installed"
+    }
+  }
+}

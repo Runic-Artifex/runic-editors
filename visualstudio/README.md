@@ -228,7 +228,26 @@ the .NET code and the page in one session:
    it asks before it restarts it with `--no-window`.
 2. It builds the project as F5 does.
 3. It starts the program `dotnet run` would start under the .NET debugger, with
-   the session file's `window.environment` and a DevTools Protocol port:
+   the active launch profile applied as F5 applies it:
+   - **Arguments:** the project's (`StartArguments`, which the SDK turns into
+     `RunArguments`), then the profile's `commandLineArgs`. They are passed as
+     written, in one command line, so `/mock` and
+     `/config:"C:\Program Files\Acme\dev.json"` reach the app unchanged.
+   - **Variables:** Visual Studio's, `DOTNET_ENVIRONMENT=Development`, the
+     profile's `environmentVariables`, then the session file's
+     `window.environment`.
+   - **Working directory:** the profile's `workingDirectory` (relative to the
+     project folder), else `RunWorkingDirectory`, else the project folder.
+
+   The active profile is the one on the toolbar (the project's
+   `ActiveDebugProfile`), else the first in `Properties/launchSettings.json`.
+   Only `"commandName": "Project"` profiles apply; with another kind, or without
+   a `launchSettings.json`, the Window gets the project's arguments only. An
+   argument for Debug builds only, such as `/mock`, belongs in `StartArguments`
+   in a `PropertyGroup` with `Condition="'$(Configuration)' == 'Debug'"`, because
+   a launch profile has no configuration conditions.
+
+   It also gets a DevTools Protocol port:
    - **WebView2** (Runic Desktop on Windows): a free loopback port, added to
      `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (a value that already names a port
      keeps it).
@@ -513,7 +532,7 @@ work when the settings are empty; set them before starting Visual Studio.
 | Only Window projects are `dev` targets | Dev Session section, the dev commands, F5's question, Debug the Window and Attach to the Page; "No Window project" for a solution of libraries and tests | The same since #73 |
 | Frontend dependencies (runic-sdk 0.24): one row per package with owner, state, watcher and failure | Dev Session section, from the session file's `dependencies` or the build's `frontend-graph.json`; F5 builds them through MSBuild | Dev Session view, plus Build Frontend Dependencies, the fresh-clone install offer and quick fixes for the dependency diagnostics |
 | F5 with `dev --no-window` | Pre-F5 question: start `dev --no-window` (then launch once it is ready) or continue without it | `runic` debug type starts it |
-| Debug the Window: .NET and page breakpoints in one session | Tools → Runic, tool window toolbar: starts `dev --no-window`, builds, launches the Window under the .NET debugger with the session file's Window environment and a DevTools Protocol port, then attaches the JavaScript debugger over CDP (no 30-second limit) | `runic` debug type (`coreclr`) and the template's compound with the `msedge` attach |
+| Debug the Window: .NET and page breakpoints in one session | Tools → Runic, tool window toolbar: starts `dev --no-window`, builds, launches the Window under the .NET debugger with the active launch profile, the session file's Window environment and a DevTools Protocol port, then attaches the JavaScript debugger over CDP (no 30-second limit) | `runic` debug type (`coreclr`) and the template's compound with the `msedge` attach |
 | Attach to the Page (JavaScript) | Tools → Runic, tool window toolbar: the session file's WebView2 and CS-WebUI (0.22) `debugEndpoints` and the Windows Debug the Window started; a picker when there are several | Attach configuration |
 | Install | Visual Studio Marketplace (final versions), VSIX | VS Code Marketplace (release candidates as pre-releases), VSIX |
 

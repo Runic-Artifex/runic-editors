@@ -199,4 +199,56 @@ public static class CommandLine
         }
         return result.Append('\\', slashes * 2).Append('"').ToString();
     }
+
+    /// <summary>
+    /// The arguments a program gets from the command line <paramref name="text"/>, by the rules .NET applies to
+    /// <see cref="ProcessStartInfo.Arguments"/> (Windows' <c>CommandLineToArgvW</c>), which is how <c>dotnet run</c> turns
+    /// <c>RunArguments</c> into arguments: <c>/config:"C:\Program Files\x"</c> is one argument, <c>"C:\data\new"</c>
+    /// keeps its backslashes.
+    /// </summary>
+    public static IReadOnlyList<string> Split(string? text) => Tokens(text).Select(token => token.Value).ToList();
+
+    /// <summary><see cref="Split"/>'s arguments with where each starts in <paramref name="text"/>.</summary>
+    public static IReadOnlyList<(string Value, int Start)> Tokens(string? text)
+    {
+        var result = new List<(string, int)>();
+        string line = text ?? "";
+        int i = 0;
+        while (i < line.Length)
+        {
+            while (i < line.Length && line[i] is ' ' or '\t') i++;
+            if (i >= line.Length) break;
+            int start = i;
+            var value = new StringBuilder();
+            bool quoted = false;
+            while (i < line.Length)
+            {
+                int slashes = 0;
+                while (i < line.Length && line[i] == '\\') { i++; slashes++; }
+                if (slashes > 0)
+                {
+                    if (i >= line.Length || line[i] != '"') value.Append('\\', slashes);
+                    else
+                    {
+                        value.Append('\\', slashes / 2);
+                        if (slashes % 2 != 0) { value.Append('"'); i++; }
+                    }
+                    continue;
+                }
+                char character = line[i];
+                if (character == '"')
+                {
+                    if (quoted && i + 1 < line.Length && line[i + 1] == '"') { value.Append('"'); i++; }
+                    else quoted = !quoted;
+                    i++;
+                    continue;
+                }
+                if (character is ' ' or '\t' && !quoted) break;
+                value.Append(character);
+                i++;
+            }
+            result.Add((value.ToString(), start));
+        }
+        return result;
+    }
 }

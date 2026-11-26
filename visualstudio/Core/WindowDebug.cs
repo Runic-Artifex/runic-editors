@@ -99,16 +99,22 @@ public sealed class RunProperties
 /// <summary>The program, arguments and directory of the Window, as <c>dotnet run</c> would start it.</summary>
 public sealed class WindowProgram
 {
-    public WindowProgram(string program, IReadOnlyList<string> arguments, string workingDirectory)
+    public WindowProgram(string program, string commandLineArguments, string workingDirectory, string? profile = null)
     {
-        Program = program; Arguments = arguments; WorkingDirectory = workingDirectory;
+        Program = program; CommandLineArguments = commandLineArguments; WorkingDirectory = workingDirectory; Profile = profile;
     }
 
     public string Program { get; }
-    public IReadOnlyList<string> Arguments { get; }
+    /// <summary>
+    /// The arguments as one command line (<c>VsDebugTargetInfo4.bstrArg</c> takes one), as the project and the profile
+    /// write them: never split and quoted again, so <c>/config:"C:\Program Files\x"</c> keeps its quotes and backslashes.
+    /// </summary>
+    public string CommandLineArguments { get; }
+    /// <summary>The arguments the program gets from <see cref="CommandLineArguments"/> (<see cref="CommandLine.Split"/>).</summary>
+    public IReadOnlyList<string> Arguments => CommandLine.Split(CommandLineArguments);
     public string WorkingDirectory { get; }
-    /// <summary>The arguments as one command line.</summary>
-    public string CommandLineArguments => string.Join(" ", Arguments.Select(CommandLine.Quote));
+    /// <summary>The name of the launch profile applied, or null.</summary>
+    public string? Profile { get; }
 }
 
 /// <summary>Which page engine Debug the Window opens a DevTools Protocol port for.</summary>
@@ -160,36 +166,57 @@ public static class WindowDebug
         return new RunProperties(Json.String(properties, "RunCommand"), Json.String(properties, "RunArguments"), Json.String(properties, "RunWorkingDirectory"), Json.String(properties, "TargetPath"));
     }
 
-    /// <summary>Splits MSBuild's <c>RunArguments</c> the way a shell would for plain and double-quoted arguments.</summary>
-    public static IReadOnlyList<string> SplitArguments(string? text)
-    {
-        var result = new List<string>();
-        foreach (Match match in Regex.Matches(text ?? "", @"""((?:[^""\\]|\\.)*)""|(\S+)"))
-            result.Add(match.Groups[1].Success ? Regex.Replace(match.Groups[1].Value, @"\\(.)", "$1") : match.Groups[2].Value);
-        return result;
-    }
-
     /// <summary>
-    /// The program <c>dotnet run</c> starts: the application host, or the DLL's <see cref="RunProperties.TargetPath"/>
-    /// when <c>RunCommand</c> is <c>dotnet</c> (then the debugger runs it on the shared host).
+    /// The program <c>dotnet run</c> starts, with the active launch profile applied as Visual Studio's F5 applies it
+    /// (design/ide-run-debug §3.3, D084.2):
+    /// <list type="bullet">
+    /// <item>the program: the application host, or the DLL's <see cref="RunProperties.TargetPath"/> when <c>RunCommand</c>
+    /// is <c>dotnet</c> (then the debugger runs it on the shared host, and <c>RunArguments</c>' leading
+    /// <c>exec "&lt;dll&gt;"</c> is left out);</item>
+    /// <item>the arguments: the project's <c>RunArguments</c> (from <c>StartArguments</c>), then the profile's
+    /// <c>commandLineArgs</c>, joined as written, never split and quoted again;</item>
+    /// <item>the directory: the profile's <c>workingDirectory</c> against the project folder, else
+    /// <c>RunWorkingDirectory</c>, else the project folder.</item>
+    /// </list>
+    /// Without a profile it is what <c>dotnet run</c> would start.
     /// </summary>
-    public static WindowProgram Program(string project, RunProperties properties)
+    public static WindowProgram Program(string project, RunProperties properties, LaunchProfile? profile = null)
     {
         string? command = properties.RunCommand?.Trim();
         if (string.IsNullOrEmpty(command)) throw new InvalidOperationException($"The project has no RunCommand; is {Path.GetFileName(project)} an executable?");
         string name = command!.Replace('\\', '/');
         name = name.Substring(name.LastIndexOf('/') + 1);
         bool viaDotnet = Regex.IsMatch(name, "^dotnet(?:\\.exe)?$", RegexOptions.IgnoreCase);
-        var arguments = SplitArguments(properties.RunArguments).ToList();
-        if (viaDotnet)
-        {
-            if (arguments.Count > 0 && arguments[0] == "exec") arguments.RemoveAt(0);
-            if (arguments.Count > 0 && arguments[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) arguments.RemoveAt(0);
-        }
+        string arguments = (properties.RunArguments ?? "").Trim();
+        if (viaDotnet) arguments = WithoutDotnetExec(arguments);
         string? program = viaDotnet ? properties.TargetPath : command;
         if (string.IsNullOrEmpty(program)) throw new InvalidOperationException("The project names no program to debug.");
-        string directory = properties.RunWorkingDirectory?.Trim() is { Length: > 0 } run ? run : Path.GetDirectoryName(project) ?? "";
-        return new WindowProgram(program!, arguments, directory);
+        string folder = Path.GetDirectoryName(project) ?? "";
+        string directory = properties.RunWorkingDirectory?.Trim() is { Length: > 0 } run ? run : folder;
+        if (profile != null)
+        {
+            if (profile.CommandLineArgs?.Trim() is { Length: > 0 } extra) arguments = arguments.Length == 0 ? extra : arguments + " " + extra;
+            if (profile.WorkingDirectory?.Trim() is { Length: > 0 } relative) directory = Resolve(folder, relative);
+        }
+        return new WindowProgram(program!, arguments, directory, profile?.Name);
+    }
+
+    /// <summary><c>RunArguments</c> without <c>dotnet</c>'s leading <c>exec</c> and <c>"&lt;dll&gt;"</c>; the rest as written.</summary>
+    private static string WithoutDotnetExec(string arguments)
+    {
+        var tokens = CommandLine.Tokens(arguments);
+        int skip = 0;
+        if (skip < tokens.Count && tokens[skip].Value == "exec") skip++;
+        if (skip < tokens.Count && tokens[skip].Value.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) skip++;
+        return skip == 0 ? arguments : skip < tokens.Count ? arguments.Substring(tokens[skip].Start).Trim() : "";
+    }
+
+    /// <summary><paramref name="directory"/> against <paramref name="folder"/> (an absolute path stays as it is).</summary>
+    private static string Resolve(string folder, string directory)
+    {
+        string combined = Path.Combine(folder, directory);
+        try { return Path.GetFullPath(combined); }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { return combined; }
     }
 
     /// <summary>
@@ -211,9 +238,12 @@ public static class WindowDebug
     /// The Window's environment and port. CS-WebUI when the session asks for its port (<c>RUNIC_WEBUI_REMOTE_DEBUGGING_PORT</c>
     /// in <c>window.environment</c>, 9225 with <c>--no-window</c> since 0.22; <c>0</c> becomes <paramref name="freePort"/>);
     /// otherwise WebView2, whose port goes into <c>WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS</c>, merged with the session's or
-    /// Visual Studio's value. <c>DOTNET_ENVIRONMENT</c> defaults to Development, as <c>dev</c> sets it.
+    /// Visual Studio's value. The variables, from lowest to highest (design/ide-run-debug §3.3): Visual Studio's,
+    /// <c>DOTNET_ENVIRONMENT=Development</c> (as <c>dev</c> sets it; the session's own value counts as this default), the
+    /// launch profile's <paramref name="profile"/> variables, then the session's Runic variables and the port. A profile
+    /// that sets <c>RUNIC_WEBUI_REMOTE_DEBUGGING_PORT</c> (the template's CS-WebUI profile) asks for CS-WebUI too.
     /// </summary>
-    public static WindowDebugPlan Plan(IReadOnlyDictionary<string, string> visualStudio, IReadOnlyDictionary<string, string>? session, Func<int> freePort)
+    public static WindowDebugPlan Plan(IReadOnlyDictionary<string, string> visualStudio, IReadOnlyDictionary<string, string>? session, Func<int> freePort, IReadOnlyList<KeyValuePair<string, string>>? profile = null)
     {
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in visualStudio) environment[pair.Key] = pair.Value;
@@ -223,10 +253,16 @@ public static class WindowDebug
             if (environment.TryGetValue(key, out string? old) && old == value) return;
             environment[key] = value; added[key] = value;
         }
-        Set(EnvironmentVariable, "Development");
-        foreach (var pair in session ?? new Dictionary<string, string>()) Set(pair.Key, pair.Value);
+        session ??= new Dictionary<string, string>();
+        var sessionDefault = session.Where(pair => string.Equals(pair.Key, EnvironmentVariable, StringComparison.OrdinalIgnoreCase)).ToList();
+        Set(EnvironmentVariable, sessionDefault.Count > 0 ? sessionDefault[0].Value : "Development");
+        foreach (var pair in profile ?? Array.Empty<KeyValuePair<string, string>>()) Set(pair.Key, pair.Value);
+        foreach (var pair in session)
+            if (!string.Equals(pair.Key, EnvironmentVariable, StringComparison.OrdinalIgnoreCase)) Set(pair.Key, pair.Value);
 
-        if (session != null && session.TryGetValue(WebUiPortVariable, out string? webUi))
+        string? webUi = session.TryGetValue(WebUiPortVariable, out string? sessionPort) ? sessionPort
+            : profile?.LastOrDefault(pair => string.Equals(pair.Key, WebUiPortVariable, StringComparison.OrdinalIgnoreCase)).Value;
+        if (webUi != null)
         {
             int port = int.TryParse(webUi.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int fixedPort) && fixedPort is > 0 and < 65536 ? fixedPort : freePort();
             Set(WebUiPortVariable, port.ToString(System.Globalization.CultureInfo.InvariantCulture));
