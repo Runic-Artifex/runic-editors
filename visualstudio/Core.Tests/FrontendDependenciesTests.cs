@@ -115,7 +115,8 @@ public class FrontendDependenciesTests
     [Test]
     public void The_graph_file_sits_in_obj_runic_and_in_obj_rax_first_for_RunicArtifex_Tool()
     {
-        string obj = Path.Combine("/repo/App", "obj");
+        // The directory as the code takes it: on Windows, Path.GetDirectoryName turns the slashes into backslashes.
+        string obj = Path.Combine(Path.GetDirectoryName("/repo/App/App.csproj")!, "obj");
         Check.Same(new[] { Path.Combine(obj, "runic", "frontend-graph.json") }, FrontendDependencies.GraphPaths("/repo/App/App.csproj", null));
         Check.Same(new[] { Path.Combine(obj, "rax", "frontend-graph.json"), Path.Combine(obj, "runic", "frontend-graph.json") },
             FrontendDependencies.GraphPaths("/repo/App/App.csproj", RunicTools.Core));
