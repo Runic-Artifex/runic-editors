@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
 import { execFile, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { detectToolVersion, devArguments, forceStop, onDevEnd, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, type DevStop } from "./dev-process.js";
+import { dependencyFixes, addWorkspaceMember, propertyLine, removeJsonProperty, type DependencyFix } from "./dependency-fixes.js";
+import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, installCommand, needsBuild, projectFrontendDirectory, readFrontendGraph, unbuiltDependencies, withOwners, type DependencyList, type DevDependency, type FrontendInstall } from "./dependencies.js";
 import { DevProblems, LineSplitter } from "./dev-problems.js";
 import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
@@ -28,6 +30,10 @@ interface ProjectState {
   devTerminal?: DevTerminal;
   /** The Problems of that terminal's `dev`, kept after it ends until the next `dev` of the project starts. */
   devProblems?: DevProblems;
+  /** The frontend packages the page depends on: from the running session, else the build's graph file (S8). */
+  dependencies?: DependencyList;
+  /** The frontend's install, when its packages are not installed (a fresh clone); DevKit only offers it. */
+  install?: FrontendInstall;
 }
 
 interface RunicTaskDefinition extends vscode.TaskDefinition { type: "runic"; command: "dev" | "doctor" | "build"; noWindow?: boolean; project?: string }
@@ -38,6 +44,8 @@ const doctorSource = "runic doctor";
 /** A node of the Runic views; `project` names the Runic SDK project it belongs to. */
 class Node extends vscode.TreeItem {
   children?: () => Node[];
+  /** The folder of a frontend dependency's row. */
+  packageDirectory?: string;
   constructor(label: string | vscode.TreeItemLabel, readonly project?: string, collapsible = vscode.TreeItemCollapsibleState.None) { super(label, collapsible); }
 }
 
@@ -72,6 +80,12 @@ export class RunicSdk implements vscode.Disposable {
   private readonly doctorDiagnostics = vscode.languages.createDiagnosticCollection("runic-doctor");
   private readonly devDiagnostics = vscode.languages.createDiagnosticCollection("runic-dev");
   private readonly statusItem = vscode.window.createStatusBarItem("runic.dev", vscode.StatusBarAlignment.Left, 99);
+  /** The fresh-clone offer: install the frontend packages, or build the dependency packages; it runs only on a click (D081.4). */
+  private readonly dependencyItem = vscode.window.createStatusBarItem("runic.dependencies", vscode.StatusBarAlignment.Left, 98);
+  /** What the dependency status item offers while it shows (the host test reads it). */
+  private dependencyOffer?: { text: string; command: string; project: string };
+  /** The Runic SDK projects that are not Window projects (libraries, tests): not `dev` targets. */
+  private libraries: string[] = [];
   private readonly devView = new Provider(() => this.devRoots());
   private readonly viewModelsView = new Provider(() => this.viewModelRoots());
   private readonly doctorView = new Provider(() => this.doctorRoots());
@@ -87,10 +101,14 @@ export class RunicSdk implements vscode.Disposable {
     const sessionWatcher = vscode.workspace.createFileSystemWatcher("**/obj/{runic,rax}/dev-session.json");
     const sourceMapWatcher = vscode.workspace.createFileSystemWatcher("**/obj/**/runic-bridge/sources.json");
     const projectWatcher = vscode.workspace.createFileSystemWatcher("**/{*.csproj,runic.json}");
+    const graphWatcher = vscode.workspace.createFileSystemWatcher("**/obj/{runic,rax}/frontend-graph.json");
+    const reloadDependencies = () => this.loadDependencies();
     const refreshSessions = () => { void this.refreshSessions(); };
     const reloadSourceMaps = () => { if (this.sourceMapTimer) clearTimeout(this.sourceMapTimer); this.sourceMapTimer = setTimeout(() => { this.sourceMapTimer = undefined; this.loadSourceMaps(); }, 200); };
     const rescan = () => this.scheduleRescan();
-    this.disposables.push(this.log, this.doctorDiagnostics, this.devDiagnostics, this.statusItem, sessionWatcher, sourceMapWatcher, projectWatcher,
+    this.dependencyItem.name = "Runic frontend dependencies";
+    this.disposables.push(this.log, this.doctorDiagnostics, this.devDiagnostics, this.statusItem, this.dependencyItem, sessionWatcher, sourceMapWatcher, projectWatcher, graphWatcher,
+      graphWatcher.onDidCreate(reloadDependencies), graphWatcher.onDidChange(reloadDependencies), graphWatcher.onDidDelete(reloadDependencies),
       sessionWatcher.onDidCreate(refreshSessions), sessionWatcher.onDidChange(refreshSessions), sessionWatcher.onDidDelete(refreshSessions),
       sourceMapWatcher.onDidCreate(reloadSourceMaps), sourceMapWatcher.onDidChange(reloadSourceMaps), sourceMapWatcher.onDidDelete(reloadSourceMaps),
       projectWatcher.onDidCreate(rescan), projectWatcher.onDidDelete(rescan), projectWatcher.onDidChange(uri => { if (uri.path.endsWith(".csproj")) rescan(); }),
@@ -118,6 +136,8 @@ export class RunicSdk implements vscode.Disposable {
       }, vscode.DebugConfigurationProviderTriggerKind.Dynamic),
       vscode.tasks.onDidEndTask(event => {
         for (const state of this.projects.values()) if (state.execution === event.execution) { state.execution = undefined; void state.follower.refresh(); }
+        // A build or an install may have built or installed the frontend packages.
+        this.loadDependencies();
       }),
       vscode.languages.registerCodeActionsProvider({ scheme: "file" }, { provideCodeActions: (document, _range, context) => this.codeActions(document, context) },
         { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
@@ -130,6 +150,11 @@ export class RunicSdk implements vscode.Disposable {
       vscode.commands.registerCommand("runic.dev.openSessionFile", (target?: unknown) => this.guard(async () => { const state = await this.pick(target); if (state) await vscode.window.showTextDocument(vscode.Uri.file(state.follower.path)); })),
       vscode.commands.registerCommand("runic.dev.actions", () => this.guard(() => this.actions())),
       vscode.commands.registerCommand("runic.doctor.run", (target?: unknown) => this.guard(() => this.runDoctor(target))),
+      vscode.commands.registerCommand("runic.dependencies.build", (target?: unknown) => this.guard(() => this.buildDependencies(target))),
+      vscode.commands.registerCommand("runic.dependencies.install", (target?: unknown) => this.guard(() => this.installDependencies(target))),
+      vscode.commands.registerCommand("runic.dependencies.openPackage", (target?: unknown, property?: string) => this.guard(() => this.openPackage(target, property))),
+      vscode.commands.registerCommand("runic.dependencies.show", (label?: string) => this.guard(() => this.showDependency(label))),
+      vscode.commands.registerCommand("runic.dependencies.run", (cwd: string, args: string[]) => this.guard(() => this.runPackageManager(cwd, args))),
       vscode.commands.registerCommand("runic.viewModels.refresh", () => { this.loadSourceMaps(); }),
       vscode.commands.registerCommand("runic.openSourceLocation", (location: SourceLocation) => this.guard(() => openLocation(location))),
       vscode.commands.registerCommand("runic.translations.refreshStatusView", () => this.translationsView.refresh()),
@@ -153,11 +178,13 @@ export class RunicSdk implements vscode.Disposable {
   rescan() {
     this.kinds.clear();
     const seen = new Set<string>();
+    const libraries: string[] = [];
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       if (folder.uri.scheme !== "file") continue;
       const kind = detectWorkspace(folder.uri.fsPath);
       this.kinds.set(folder.uri.toString(), kind);
-      for (const project of kind.sdkProjects) {
+      libraries.push(...kind.sdkProjects.filter(project => !kind.windowProjects.includes(project)));
+      for (const project of kind.windowProjects) {
         seen.add(project);
         if (!this.projects.has(project)) {
           const state: ProjectState = { project, folder, follower: new DevSessionFollower(project, fileSystemSource, devSessionPath(project, projectCoreTool(project)?.tool), message => this.log.info(message)) };
@@ -167,11 +194,12 @@ export class RunicSdk implements vscode.Disposable {
       }
     }
     for (const project of [...this.projects.keys()]) if (!seen.has(project)) { this.projects.delete(project); this.doctorDiagnostics.delete(vscode.Uri.file(project)); this.publishDevProblems(); }
+    this.libraries = libraries.sort();
     const kinds = [...this.kinds.values()];
-    void vscode.commands.executeCommand("setContext", "runic.sdkProject", this.projects.size > 0);
+    void vscode.commands.executeCommand("setContext", "runic.sdkProject", kinds.some(kind => kind.sdkProjects.length > 0));
     void vscode.commands.executeCommand("setContext", "runic.translationsProject", kinds.some(kind => kind.translationsProjects.length > 0));
     this.loadSourceMaps();
-    this.scanned = this.refreshSessions().then(() => undefined);
+    this.scanned = this.refreshSessions().then(() => this.loadDependencies());
     this.devView.refresh(); this.doctorView.refresh(); this.translationsView.refresh();
     this.updateStatus();
   }
@@ -183,8 +211,58 @@ export class RunicSdk implements vscode.Disposable {
   private sessionChanged(state: ProjectState, snapshot: DevSnapshot) {
     this.log.info(`${basename(state.project)}: dotnet runic dev ${devStateLabel(snapshot)}${snapshot.session ? ` (process ${snapshot.session.processId})` : ""}`);
     void vscode.commands.executeCommand("setContext", "runic.devActive", [...this.projects.values()].some(item => isActive(item.follower.snapshot)));
-    this.devView.refresh();
+    this.loadDependencies();
     this.updateStatus();
+  }
+
+  /**
+   * Reads each Window project's frontend dependencies (the running session's `dependencies`, else the graph file) and
+   * whether its frontend's packages are installed, then updates the Dev Session view and the fresh-clone offer. It
+   * reads files only; nothing is installed or built here (D081.4).
+   */
+  private loadDependencies() {
+    const owners = this.libraries.flatMap(project => {
+      let projectText = "";
+      try { projectText = readFileSync(project, "utf8"); } catch { return []; }
+      const directory = projectFrontendDirectory(project, projectText);
+      return directory ? [{ project, directory }] : [];
+    });
+    for (const state of this.projects.values()) {
+      const snapshot = state.follower.snapshot;
+      const tool = projectCoreTool(state.project)?.tool;
+      state.dependencies = withOwners(dependencyList(snapshot.session, isActive(snapshot), () => readFrontendGraph(frontendGraphPaths(state.project, tool))), owners);
+      state.install = undefined;
+      if (isActive(snapshot)) continue;
+      let projectText = "";
+      try { projectText = readFileSync(state.project, "utf8"); } catch { /* Unreadable: Frontend beside it. */ }
+      const frontend = state.dependencies?.workspace?.application ?? snapshot.session?.frontend?.directory ?? projectFrontendDirectory(state.project, projectText);
+      const install = frontend ? frontendInstall(frontend, state.folder.uri.fsPath) : undefined;
+      if (install?.needed) state.install = install;
+    }
+    this.devView.refresh();
+    this.updateDependencyStatus();
+  }
+
+  /** The status bar's offer: install the frontend packages of a fresh clone, else build its unbuilt dependency packages. */
+  private updateDependencyStatus() {
+    const states = [...this.projects.values()];
+    const installing = states.find(state => state.install?.lockFile);
+    const unbuilt = states.map(state => ({ state, packages: unbuiltDependencies(state.dependencies) })).find(entry => entry.packages.length > 0);
+    if (installing?.install) {
+      const install = installing.install;
+      this.dependencyItem.text = "$(package) Install frontend dependencies";
+      this.dependencyItem.tooltip = `${basename(installing.project)}: the frontend packages are not installed. Click to run '${installCommand(install.packageManager).join(" ")}' in ${install.root}; DevKit never runs it by itself.`;
+      this.dependencyItem.command = { title: "Install frontend dependencies", command: "runic.dependencies.install", arguments: [installing.project] };
+      this.dependencyItem.show();
+      this.dependencyOffer = { text: this.dependencyItem.text, command: "runic.dependencies.install", project: installing.project };
+    } else if (unbuilt) {
+      const names = unbuilt.packages.map(item => item.ownerName ? `${item.ownerName}'s package` : dependencyLabel(item));
+      this.dependencyItem.text = `$(tools) Build frontend dependencies`;
+      this.dependencyItem.tooltip = `${names.join(", ")} ${names.length === 1 ? "is" : "are"} not built. Click to run dotnet build ${basename(unbuilt.state.project)}, which builds ${names.length === 1 ? "it" : "them"}.`;
+      this.dependencyItem.command = { title: "Build frontend dependencies", command: "runic.dependencies.build", arguments: [unbuilt.state.project] };
+      this.dependencyItem.show();
+      this.dependencyOffer = { text: this.dependencyItem.text, command: "runic.dependencies.build", project: unbuilt.state.project };
+    } else { this.dependencyItem.hide(); this.dependencyOffer = undefined; }
   }
 
   private updateStatus() {
@@ -219,7 +297,9 @@ export class RunicSdk implements vscode.Disposable {
       return state;
     }
     const states = [...this.projects.values()];
-    if (!states.length) throw new Error("This workspace has no Runic SDK project (a .csproj of a Runic Views Window).");
+    if (!states.length) throw new Error(this.libraries.length
+      ? `This workspace has no Window project that dotnet runic dev can run; ${this.libraries.map(project => basename(project)).join(", ")} ${this.libraries.length === 1 ? "is a library or test project" : "are library or test projects"}.`
+      : "This workspace has no Runic SDK project (a .csproj of a Runic Views Window).");
     if (states.length === 1) return states[0];
     const active = vscode.window.activeTextEditor?.document.uri.fsPath;
     const containing = active ? states.filter(state => !relative(dirname(state.project), active).startsWith("..")) : [];
@@ -386,6 +466,8 @@ export class RunicSdk implements vscode.Disposable {
         { label: "$(play) Start dotnet runic dev --no-window", description: "the frontend only", command: "runic.dev.startNoWindow" }]),
       { label: "$(debug-alt) Debug the Window", description: "F5 with dotnet runic dev --no-window", command: "runic.dev.debugWindow" },
       ...(snapshot.state === "ready" && snapshot.session?.frontend?.url ? [{ label: "$(globe) Open the development server", description: snapshot.session.frontend.url, command: "runic.dev.openBrowser" }] : []),
+      ...(state.install?.lockFile ? [{ label: "$(package) Install frontend dependencies", description: installCommand(state.install.packageManager).join(" "), command: "runic.dependencies.install" }] : []),
+      ...(state.dependencies?.dependencies.length ? [{ label: "$(tools) Build frontend dependencies", description: `dotnet build ${basename(state.project)}`, command: "runic.dependencies.build" }] : []),
       { label: "$(checklist) Run dotnet runic doctor", command: "runic.doctor.run" },
       { label: "$(output) Show the Runic output", command: "runic.showOutput" },
     ];
@@ -477,6 +559,97 @@ export class RunicSdk implements vscode.Disposable {
     } finally { state.doctorRunning = false; this.doctorView.refresh(); }
   }
 
+  // ---- Frontend dependencies (S8) ------------------------------------------------------------------------------------
+
+  /**
+   * "Build frontend dependencies": `dotnet build` of the Window project (the template's `build` task when it has one).
+   * The Views targets build every frontend package the page depends on, after the workspace's locked install, so the
+   * command has no install or build logic of its own.
+   */
+  async buildDependencies(target: unknown) {
+    const state = await this.pick(target);
+    if (!state) return;
+    const task = await this.workspaceTask(state, templateTaskLabels.build) ?? this.task(state, "build");
+    this.log.info(`Building the frontend dependencies of ${state.project} with ${task.source === "Workspace" ? `the workspace task "${task.name}"` : "dotnet build"}`);
+    await vscode.tasks.executeTask(task);
+  }
+
+  /**
+   * "Install frontend dependencies" of a fresh clone: the locked install the Views targets run (`bun install
+   * --frozen-lockfile --ignore-scripts`, `pnpm install --frozen-lockfile --ignore-scripts`, `npm ci --ignore-scripts`)
+   * at the workspace root, as a task, after a confirmation that names it. Only on a click (D081.4); `dotnet build` and
+   * F5 install through MSBuild anyway.
+   */
+  async installDependencies(target: unknown) {
+    const state = await this.pick(target);
+    if (!state) return;
+    this.loadDependencies();
+    let projectText = "";
+    try { projectText = readFileSync(state.project, "utf8"); } catch { /* Frontend beside it. */ }
+    const frontend = state.dependencies?.workspace?.application ?? state.follower.snapshot.session?.frontend?.directory ?? projectFrontendDirectory(state.project, projectText);
+    const install = frontend ? frontendInstall(frontend, state.folder.uri.fsPath) : undefined;
+    if (!install) throw new Error(`${basename(state.project)} has no frontend package.json to install.`);
+    if (!install.lockFile) throw new Error(`The frontend workspace ${install.root} has no lock file, so its install would not be locked (RUNICBRIDGE026). Run '${install.packageManager} install' there and commit the lock file.`);
+    const args = installCommand(install.packageManager);
+    const run = "Install";
+    if (await vscode.window.showInformationMessage(`Run '${args.join(" ")}' in ${install.root}?`, { modal: true, detail: "It installs the frontend packages from the lock file without running their install scripts, as dotnet build does." }, run) !== run) return;
+    await this.runPackageManager(install.root, args);
+  }
+
+  /** Runs a package manager command (an install) as a task in a folder; its terminal shows the output. */
+  async runPackageManager(cwd: string, args: string[]) {
+    if (!Array.isArray(args) || !args.length || !/^(npm|pnpm|bun)$/.test(args[0])) throw new Error("Only npm, pnpm or bun runs here.");
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(cwd)) ?? vscode.TaskScope.Workspace;
+    const task = new vscode.Task({ type: "runic-install", command: args.join(" "), cwd }, folder, `${args.slice(0, 2).join(" ")} (${basename(cwd)})`, "runic", new vscode.ShellExecution(args[0], args.slice(1), { cwd }), []);
+    task.detail = `${args.join(" ")} in ${cwd}`;
+    this.log.info(`> ${args.join(" ")} (in ${cwd})`);
+    await vscode.tasks.executeTask(task);
+  }
+
+  /** Opens a dependency's package.json (a view row, or a path), at a property when given. */
+  async openPackage(target: unknown, property?: string) {
+    const directory = target instanceof Node ? target.packageDirectory : typeof target === "string" ? target : undefined;
+    if (!directory) return;
+    const file = /\.(json|ya?ml)$/i.test(directory) ? directory : resolve(directory, "package.json");
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+    const line = property ? propertyLine(document.getText(), property) : 0;
+    await vscode.window.showTextDocument(document, { selection: new vscode.Range(line, 0, line, 0), preview: true });
+  }
+
+  /** Shows the Dev Session view, and the package.json of the dependency a RAPPDEV1018 line names (`[shared-ui]`). */
+  async showDependency(label?: string) {
+    await vscode.commands.executeCommand("runic.devSession.focus");
+    if (!label) return;
+    const dependency = [...this.projects.values()].flatMap(state => state.dependencies?.dependencies ?? [])
+      .find(item => item.package === label || basename(item.directory) === label);
+    if (dependency) await this.openPackage(dependency.directory);
+  }
+
+  /** The code action of one dependency fix (dependency-fixes.ts) for a diagnostic of `document`. */
+  private dependencyAction(fix: DependencyFix, document: vscode.TextDocument, diagnostic: vscode.Diagnostic): vscode.CodeAction | undefined {
+    const action = new vscode.CodeAction(fix.title, vscode.CodeActionKind.QuickFix);
+    action.diagnostics = [diagnostic];
+    switch (fix.kind) {
+      case "open": action.command = { title: fix.title, command: "runic.dependencies.openPackage", arguments: [fix.file, fix.property] }; break;
+      case "build": action.command = { title: fix.title, command: "runic.dependencies.build", arguments: [this.projects.has(document.uri.fsPath) ? document.uri.fsPath : undefined] }; break;
+      case "run": action.command = { title: fix.title, command: "runic.dependencies.run", arguments: [fix.cwd, fix.args] }; break;
+      case "url": action.command = { title: fix.title, command: "vscode.open", arguments: [vscode.Uri.parse(fix.url)] }; break;
+      case "showDependency": action.command = { title: fix.title, command: "runic.dependencies.show", arguments: [fix.label] }; break;
+      case "removePackageManager": case "addWorkspaceMember": {
+        let text: string;
+        try { text = readFileSync(fix.file, "utf8"); } catch { return undefined; }
+        const change = fix.kind === "removePackageManager" ? removeJsonProperty(text, "packageManager") : addWorkspaceMember(text, fix.member);
+        if (!change) return undefined;
+        const uri = vscode.Uri.file(fix.file);
+        const position = (offset: number) => { const lines = text.slice(0, offset).split("\n"); return new vscode.Position(lines.length - 1, lines.at(-1)!.length); };
+        action.edit = new vscode.WorkspaceEdit();
+        action.edit.replace(uri, new vscode.Range(position(change.start), position(change.end)), change.text);
+        break;
+      }
+    }
+    return action;
+  }
+
   /** Failing and warning checks become Problems on the project file, with the remediation in the message. */
   private publishDoctorDiagnostics(state: ProjectState, report: DoctorReport) {
     const version = projectRunicToolVersion(state.project);
@@ -524,6 +697,9 @@ export class RunicSdk implements vscode.Disposable {
         actions.push(rerun);
       } else if (code && isRunicCode(code)) {
         if (version === null) version = document.uri.scheme === "file" ? projectRunicToolVersion(document.uri.fsPath) : undefined;
+        const fixes = dependencyFixes(code, diagnostic.message).map(fix => this.dependencyAction(fix, document, diagnostic)).filter((action): action is vscode.CodeAction => !!action);
+        if (fixes.length) fixes[0].isPreferred = true;
+        actions.push(...fixes);
         const help = new vscode.CodeAction(`Show ${code} in the Runic diagnostics catalog`, vscode.CodeActionKind.QuickFix);
         help.command = { title: help.title, command: "vscode.open", arguments: [vscode.Uri.parse(diagnosticHelpUri(code, version))] };
         help.diagnostics = [diagnostic];
@@ -548,6 +724,9 @@ export class RunicSdk implements vscode.Disposable {
   }
 
   private devRoots(): Node[] {
+    if (!this.projects.size && this.libraries.length)
+      return [node("No Window project", { icon: "info", description: this.libraries.map(project => basename(project)).join(", "),
+        tooltip: "dotnet runic dev runs a Window project (RunicApplicationFrontendWindowProject, or an executable). The projects found here are libraries or tests; open the folder of the Window project that references them." })];
     return this.perProject(state => this.devDetails(state), state => devStateLabel(state.follower.snapshot), state => isActive(state.follower.snapshot) ? "runicProject.active" : "runicProject.stopped");
   }
 
@@ -559,7 +738,7 @@ export class RunicSdk implements vscode.Disposable {
     const items: Node[] = [node(`dotnet runic dev: ${devStateLabel(snapshot)}`, { project, icon, contextValue: isActive(snapshot) ? "runicDev.active" : "runicDev.stopped",
       tooltip: snapshot.exited ? `The session file says "${session?.state}", but process ${session?.processId} is no longer dotnet runic dev, so the session counts as stopped.` : state.follower.path,
       command: session ? { title: "Open the session file", command: "runic.dev.openSessionFile", arguments: [project] } : undefined })];
-    if (!session || !isActive(snapshot)) return items;
+    if (!session || !isActive(snapshot)) return [...items, ...this.dependencyRows(state)];
     const frontend = session.frontend;
     if (frontend?.url) items.push(node(`Development server: ${frontend.url}`, { project, icon: "globe", description: frontend.developmentServer ?? undefined, command: { title: "Open", command: "vscode.open", arguments: [vscode.Uri.parse(frontend.url)] } }));
     else if (frontend) items.push(node("Frontend: watcher", { project, icon: "eye", description: frontend.outputDirectory }));
@@ -569,7 +748,37 @@ export class RunicSdk implements vscode.Disposable {
     for (const page of session.pages ?? []) if (page.url) items.push(node(`Page: ${page.document}`, { project, icon: "file-code", description: page.url, command: { title: "Open", command: "vscode.open", arguments: [vscode.Uri.parse(page.url)] } }));
     for (const endpoint of session.debugEndpoints ?? []) items.push(node(`Debug endpoint: ${endpoint.engine}`, { project, icon: "debug", description: `${endpoint.protocol} ${endpoint.url}` }));
     if (frontend?.generatedDirectory) items.push(node("Generated clients", { project, icon: "folder", description: vscode.workspace.asRelativePath(frontend.generatedDirectory), command: { title: "Reveal", command: "revealInExplorer", arguments: [vscode.Uri.file(frontend.generatedDirectory)] } }));
-    return items;
+    return [...items, ...this.dependencyRows(state)];
+  }
+
+  /**
+   * The fresh-clone install offer, the workspace's problems the graph shows, and the dependency tree: one row per
+   * frontend package with its owner, state and watcher, and a failure's message below it.
+   */
+  private dependencyRows(state: ProjectState): Node[] {
+    const project = state.project;
+    const rows: Node[] = [];
+    const install = state.install;
+    if (install) rows.push(node("Frontend packages: not installed", { project, icon: new vscode.ThemeIcon("package", new vscode.ThemeColor("problemsWarningIcon.foreground")),
+      description: install.lockFile ? `${install.packageManager} · Install` : `${install.packageManager} · no lock file`,
+      tooltip: install.lockFile ? `Click to run '${installCommand(install.packageManager).join(" ")}' in ${install.root}. dotnet build and F5 also install them.`
+        : `${install.root} has no lock file, so the build stops with RUNICBRIDGE026. Run '${install.packageManager} install' there and commit the lock file.`,
+      command: install.lockFile ? { title: "Install frontend dependencies", command: "runic.dependencies.install", arguments: [project] } : undefined }));
+    const list = state.dependencies;
+    const workspace = list?.workspace;
+    if (workspace && !workspace.member) rows.push(node("Frontend: not a member of its workspace", { project, icon: new vscode.ThemeIcon("warning", new vscode.ThemeColor("problemsWarningIcon.foreground")),
+      description: workspace.root, tooltip: `${workspace.application} is below the workspace at ${workspace.root}, whose workspaces don't include it (RUNICBRIDGE087).`,
+      command: { title: "Open package.json", command: "runic.dependencies.openPackage", arguments: [workspace.root, "workspaces"] } }));
+    if (workspace && !workspace.lockFile && workspace.root !== workspace.application) rows.push(node("Frontend workspace: no lock file", { project, icon: new vscode.ThemeIcon("warning", new vscode.ThemeColor("problemsWarningIcon.foreground")),
+      description: workspace.root, tooltip: `The workspace at ${workspace.root} has no lock file, so its install would not be locked (RUNICBRIDGE026).` }));
+    if (!list?.dependencies.length) return rows;
+    const unbuilt = list.dependencies.filter(needsBuild).length;
+    const source = list.source === "session" ? "from dotnet runic dev" : list.source === "graph" ? "from the last build" : "from the last dev session";
+    rows.push(node("Frontend dependencies", { project, icon: "references", contextValue: "runicDependencies", id: `${project}#dependencies`,
+      description: `${list.dependencies.length} package${list.dependencies.length === 1 ? "" : "s"}${unbuilt ? `, ${unbuilt} not built` : ""}`,
+      tooltip: `The frontend packages ${basename(project)}'s page imports, dependencies first, ${source}. dotnet build builds them.`,
+      children: () => list.dependencies.map(dependency => dependencyNode(project, dependency)) }));
+    return rows;
   }
 
   private viewModelRoots(): Node[] {
@@ -641,6 +850,12 @@ export class RunicSdk implements vscode.Disposable {
       },
       viewModels: (project: string) => { this.loadSourceMaps(); return this.projects.get(project)?.sourceTree; },
       runDoctor: (project: string) => this.runDoctor(project),
+      libraries: () => [...this.libraries],
+      dependencies: (project: string) => { this.loadDependencies(); return this.projects.get(project)?.dependencies; },
+      install: (project: string) => this.projects.get(project)?.install,
+      dependencyStatus: () => this.dependencyOffer,
+      /** The Dev Session view's rows, as label, description and children. */
+      devTree: async () => { const flat = (items: Node[]): unknown[] => items.map(item => ({ label: item.label, description: item.description, children: flat(item.children?.() ?? []) })); return flat(await this.devRoots()); },
       codeActions: (document: vscode.TextDocument, diagnostics: vscode.Diagnostic[]) => this.codeActions(document, { diagnostics, triggerKind: vscode.CodeActionTriggerKind.Invoke, only: undefined }),
     };
   }
@@ -654,6 +869,36 @@ export class RunicSdk implements vscode.Disposable {
 }
 
 const memberIcons: Record<string, string> = { state: "symbol-property", setter: "symbol-property", commandState: "symbol-boolean", command: "symbol-method", interaction: "symbol-event", request: "symbol-interface" };
+
+const dependencyIcons: Record<string, vscode.ThemeIcon> = {
+  built: new vscode.ThemeIcon("pass", new vscode.ThemeColor("testing.iconPassed")),
+  building: new vscode.ThemeIcon("sync~spin"),
+  failed: new vscode.ThemeIcon("error", new vscode.ThemeColor("problemsErrorIcon.foreground")),
+  "missing-output": new vscode.ThemeIcon("warning", new vscode.ThemeColor("problemsWarningIcon.foreground")),
+  source: new vscode.ThemeIcon("file-code"),
+  "not-built": new vscode.ThemeIcon("circle-slash"),
+};
+
+/** One frontend package of the dependency tree; its row opens its package.json. */
+function dependencyNode(project: string, dependency: DevDependency): Node {
+  const watch = dependencyWatchLabel(dependency);
+  const tooltip = new vscode.MarkdownString();
+  tooltip.appendMarkdown(`**${dependencyLabel(dependency)}** (${dependency.kind})`);
+  tooltip.appendText(`\n\n${dependency.owner ? `The frontend package of ${dependency.ownerName ?? basename(dependency.owner)} (${dependency.owner})` : "A workspace package that no .NET project owns"}.\n${dependency.directory}`);
+  if (dependency.specifier) tooltip.appendText(`\nImported as ${dependency.specifier}`);
+  if (dependency.buildCommand) tooltip.appendText(`\nBuild: ${dependency.buildCommand}`);
+  if (dependency.watchCommand) tooltip.appendText(`\nWatch: ${dependency.watchCommand}`);
+  if (dependency.state === "missing-output") tooltip.appendText(`\nMissing: ${dependency.exports.filter(file => !existsSync(file)).join(", ") || "an exported file"}. Build frontend dependencies builds it.`);
+  if (dependency.message) tooltip.appendText(`\n\n${dependency.message}`);
+  const item = node(dependencyLabel(dependency), {
+    project, icon: dependencyIcons[dependency.state] ?? "circle-outline", tooltip, contextValue: `runicDependency.${dependency.state}`, id: `${project}#dependency:${dependency.directory}`,
+    description: [dependency.ownerName, dependencyStateLabel(dependency), watch].filter(Boolean).join(" · "),
+    command: { title: "Open package.json", command: "runic.dependencies.openPackage", arguments: [dependency.directory] },
+    children: dependency.message ? () => [node(dependency.message!, { project, icon: "error", tooltip: dependency.message! })] : undefined,
+  });
+  item.packageDirectory = dependency.directory;
+  return item;
+}
 
 function checkNode(project: string, check: DoctorCheck): Node {
   const icon = check.status === "fail" ? new vscode.ThemeIcon("error", new vscode.ThemeColor("problemsErrorIcon.foreground"))

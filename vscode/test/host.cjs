@@ -300,8 +300,12 @@ async function runicSdk(api, fs) {
   const project = path.join(appFolder.uri.fsPath, 'App.csproj');
   assert.deepEqual(sdk.workspaceKind(translations.uri).sdkProjects, [], 'The Translations-only folder must have no Runic SDK project');
   assert.deepEqual(sdk.workspaceKind(translations.uri).translationsProjects, [path.join(translations.uri.fsPath, 'runic.json')]);
-  assert.deepEqual(sdk.workspaceKind(appFolder.uri).sdkProjects, [project]);
+  const library = path.join(appFolder.uri.fsPath, 'SharedUi', 'SharedUi.csproj');
+  assert.deepEqual(sdk.workspaceKind(appFolder.uri).sdkProjects, [project, library]);
+  // Only the Window project is a dev target; the client library is listed as one that is not (S8).
+  assert.deepEqual(sdk.workspaceKind(appFolder.uri).windowProjects, [project]);
   assert.deepEqual(sdk.projects(), [project]);
+  assert.deepEqual(sdk.libraries(), [library]);
   assert.equal(sdk.devState(project).state, 'none');
   await waitFor(() => /Runic dev: not started/.test(sdk.devLabel()), () => `Status bar: ${sdk.devLabel()}`);
   stage = 'tasks';
@@ -333,8 +337,24 @@ async function runicSdk(api, fs) {
     webRoot: path.join(appFolder.uri.fsPath, 'bin', 'Debug', 'net10.0', 'www'), pages: [], window: { owner: 'ide', program: 'App', processId: null, starts: 0, environment: { DOTNET_ENVIRONMENT: 'Development' } }, debugEndpoints: [] };
   write(session);
   await waitFor(() => sdk.devState(project).state === 'starting', () => `The session file's starting state was not followed: ${JSON.stringify(sdk.devState(project))}`);
-  write({ ...session, state: 'ready', frontend: { ...session.frontend, url: 'http://127.0.0.1:5173/', port: 5173 } });
+  // A session before runic-sdk 0.24 has no dependencies[]: no dependency rows, and nothing else changes.
+  assert.equal(sdk.dependencies(project), undefined);
+  assert.ok(!(await sdk.devTree()).some(row => row.label === 'Frontend dependencies'));
+  const sharedUiDirectory = path.join(appFolder.uri.fsPath, 'shared-ui');
+  const failedDependency = { package: '@acme/shared-ui', directory: sharedUiDirectory, kind: 'compiled', owner: library, ownerName: 'SharedUi', specifier: '@acme/shared-ui/generated',
+    buildCommand: 'bun run --bun build', watchCommand: null, exports: [path.join(sharedUiDirectory, 'dist', 'index.js')], state: 'failed', watch: 'rebuild',
+    message: 'shared-ui/src/about-panel.ts(42,31): error TS1109: Expression expected.' };
+  write({ ...session, state: 'ready', frontend: { ...session.frontend, url: 'http://127.0.0.1:5173/', port: 5173 }, dependencies: [failedDependency] });
   await waitFor(() => sdk.devState(project).state === 'ready', 'The session file\'s ready state was not followed');
+  stage = 'dependency tree from the session file (S8)';
+  await waitFor(() => sdk.dependencies(project)?.source === 'session', () => `The session's dependencies were not read: ${JSON.stringify(sdk.dependencies(project))}`);
+  const sessionRows = (await sdk.devTree()).find(row => row.label === 'Frontend dependencies');
+  assert.ok(sessionRows, 'The Dev Session view must list the frontend dependencies');
+  assert.equal(sessionRows.description, '1 package, 1 not built');
+  assert.deepEqual(sessionRows.children.map(row => [row.label, row.description]), [['@acme/shared-ui', 'SharedUi · failed · rebuilt on change']]);
+  assert.equal(sessionRows.children[0].children[0].label, failedDependency.message);
+  // A running dev reports its own failures; the status bar offers nothing for them.
+  assert.equal(sdk.dependencyStatus(), undefined);
   await waitFor(() => sdk.devLabel().endsWith('Runic dev: ready'), () => `Status bar: ${sdk.devLabel()}`);
   // dotnet runic dev killed: the file keeps "ready", and its process is gone.
   process.kill(pid, 'SIGKILL');
@@ -375,7 +395,67 @@ async function runicSdk(api, fs) {
   const help = sdk.codeActions(csproj, [bridge]);
   assert.equal(help[0].title, 'Show RUNICBRIDGE013 in the Runic diagnostics catalog');
   assert.equal(String(help[0].command.arguments[0]), 'https://github.com/Runic-Artifex/runic-sdk/blob/main/docs/diagnostics.md#runicbridge013');
-  console.log('PASS Runic SDK: workspace detection, tasks, session file liveness, ViewModels tree, doctor and code actions.');
+  await frontendDependencies(sdk, appFolder, project, csproj, fs, path);
+  console.log('PASS Runic SDK: workspace detection, tasks, session file liveness, ViewModels tree, doctor and code actions, frontend dependencies.');
+}
+/** S8: the dependency tree from the graph file, the fresh-clone offers and the quick fixes of the dependency diagnostics. */
+async function frontendDependencies(sdk, appFolder, project, csproj, fs, path) {
+  const root = appFolder.uri.fsPath;
+  const sharedUi = path.join(root, 'shared-ui');
+  stage = 'dependency tree from the graph file (S8)';
+  // dev has stopped; the build's graph (rax.frontend-graph/1) says what is on disk.
+  const graphFile = path.join(root, 'obj', 'runic', 'frontend-graph.json');
+  fs.writeFileSync(graphFile, JSON.stringify({ schema: 'rax.frontend-graph/1', workspaceRoot: root, packageManager: 'bun', lockFile: path.join(root, 'bun.lock'), member: true,
+    application: { directory: path.join(root, 'Frontend'), package: 'app-frontend', kind: 'compiled', build: 'bun run --bun build', watch: null, exports: [], generatedExport: null, outputs: [] },
+    members: [{ directory: path.join(root, 'Frontend'), package: 'app-frontend' }, { directory: sharedUi, package: '@acme/shared-ui' }],
+    packages: [{ directory: sharedUi, package: '@acme/shared-ui', kind: 'compiled', build: 'bun run --bun build', watch: null, exports: ['./dist/index.js'], generatedExport: null, outputs: ['dist'] }] }));
+  await waitFor(() => sdk.dependencies(project)?.source === 'graph', () => `The graph file was not read: ${JSON.stringify(sdk.dependencies(project))}`);
+  assert.deepEqual(sdk.dependencies(project).dependencies.map(item => [item.package, item.state, item.ownerName]), [['@acme/shared-ui', 'missing-output', 'SharedUi']]);
+  const graphRows = (await sdk.devTree()).find(row => row.label === 'Frontend dependencies');
+  assert.deepEqual(graphRows.children.map(row => [row.label, row.description]), [['@acme/shared-ui', 'SharedUi · not built']]);
+  await waitFor(() => sdk.dependencyStatus()?.command === 'runic.dependencies.build', () => `The status bar must offer the build: ${JSON.stringify(sdk.dependencyStatus())}`);
+  assert.equal(sdk.dependencyStatus().text, '$(tools) Build frontend dependencies');
+  fs.mkdirSync(path.join(sharedUi, 'dist'));
+  fs.writeFileSync(path.join(sharedUi, 'dist', 'index.js'), 'export {};\n');
+  assert.equal(sdk.dependencies(project).dependencies[0].state, 'built');
+  assert.equal(sdk.dependencyStatus(), undefined, 'A built package needs no offer');
+  stage = 'fresh clone: install offered, never run (D081.4)';
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['Frontend', 'shared-ui'], packageManager: 'bun@1.4.4' }, null, 2));
+  fs.writeFileSync(path.join(root, 'Frontend', 'package.json'), JSON.stringify({ name: 'app-frontend', private: true, dependencies: { '@acme/shared-ui': 'workspace:*' } }, null, 2));
+  sdk.dependencies(project);
+  assert.equal(sdk.install(project)?.lockFile, undefined, 'Without a lock file nothing is installed');
+  assert.equal(sdk.dependencyStatus(), undefined);
+  assert.ok((await sdk.devTree()).some(row => row.label === 'Frontend packages: not installed' && row.description === 'bun · no lock file'));
+  fs.writeFileSync(path.join(root, 'bun.lock'), '{}\n');
+  sdk.dependencies(project);
+  assert.deepEqual(sdk.dependencyStatus(), { text: '$(package) Install frontend dependencies', command: 'runic.dependencies.install', project });
+  assert.equal(fs.existsSync(path.join(root, 'node_modules')), false, 'DevKit must not install by itself');
+  fs.mkdirSync(path.join(root, 'node_modules'));
+  sdk.dependencies(project);
+  assert.equal(sdk.dependencyStatus(), undefined);
+  stage = 'quick fixes of the dependency diagnostics';
+  const diagnostic = (code, message) => { const item = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), message, vscode.DiagnosticSeverity.Error); item.code = code; return item; };
+  const titles = actions => actions.map(action => action.title);
+  const member = path.join(sharedUi, 'package.json');
+  const mismatch = sdk.codeActions(csproj, [diagnostic('RUNICBRIDGE089', `${member} declares npm (packageManager), but its workspace ${root} uses bun (packageManager bun@1.4.4 in ${path.join(root, 'package.json')}), so the build installs and builds it with bun. Remove the member's packageManager or make it match the workspace's.`)]);
+  assert.equal(mismatch[0].title, `Remove packageManager from ${member} (the workspace uses bun)`);
+  assert.equal(mismatch[0].isPreferred, true);
+  assert.ok(await vscode.workspace.applyEdit(mismatch[0].edit));
+  const memberDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(member));
+  assert.equal(JSON.parse(memberDocument.getText()).packageManager, undefined);
+  assert.equal(JSON.parse(memberDocument.getText()).name, '@acme/shared-ui');
+  await memberDocument.save();
+  const missing = sdk.codeActions(csproj, [diagnostic('RUNICBRIDGE088', `${path.join(root, 'Frontend')} depends on @acme/shared-ui (${sharedUi}), the frontend package of SharedUi, but its package.json exports ./dist/index.js, which do not exist: SharedUi's build of the package did not write them. Make its build script write them, or correct exports in its package.json.`)]);
+  assert.deepEqual(titles(missing), ['Build frontend dependencies (dotnet build)', "Open @acme/shared-ui's exports", 'Show RUNICBRIDGE088 in the Runic diagnostics catalog']);
+  assert.deepEqual(missing[0].command, { title: 'Build frontend dependencies (dotnet build)', command: 'runic.dependencies.build', arguments: [project] });
+  await vscode.commands.executeCommand(missing[1].command.command, ...missing[1].command.arguments);
+  await waitFor(() => vscode.window.activeTextEditor?.document.uri.fsPath === member, 'Open the exports did not open shared-ui/package.json');
+  const lock = sdk.codeActions(csproj, [diagnostic('RUNICBRIDGE026', `The frontend ${path.join(root, 'Frontend')} is a member of the bun workspace at ${root}, which has no bun.lock, so the workspace install would not be locked. Run 'bun install' in ${root} and commit bun.lock, or set RunicApplicationFrontendAllowUnlockedInstall=true to install without one.`)]);
+  assert.deepEqual(lock[0].command, { title: `Create bun.lock: run 'bun install --ignore-scripts' in ${root}`, command: 'runic.dependencies.run', arguments: [root, ['bun', 'install', '--ignore-scripts']] });
+  const runtime = sdk.codeActions(csproj, [diagnostic('RUNICBRIDGE090', `The frontend workspace ${root} uses bun (packageManager bun@1.4.4 in ${path.join(root, 'package.json')}), and the build runs 'bun' to resolve it, but 'bun' did not run: it is not on PATH. Install Bun 1.4.4 or later, or set RunicApplicationFrontendPackageManager or RunicApplicationFrontendCodegenRuntime.`)]);
+  assert.equal(String(runtime[0].command.arguments[0]), 'https://bun.sh/docs/installation');
+  const watcher = sdk.codeActions(csproj, [diagnostic('RAPPDEV1018', '[shared-ui] bun run --bun build exited with code 1: src/about-panel.ts(42,31): error TS1109: Expression expected.')]);
+  assert.deepEqual(watcher[0].command.arguments, ['shared-ui']);
 }
 /** Retries a request the server answered with ContentModified: a just-started server may still be reading its documents, or a watched-file change arrived while it was pending. */
 async function retryModified(request, attempts = 20, also) {

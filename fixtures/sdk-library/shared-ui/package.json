@@ -1,0 +1,12 @@
+{
+  "name": "@acme/shared-ui",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@10.9.0",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p ."
+  }
+}
