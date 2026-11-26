@@ -49,7 +49,7 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         command.Visible = true;
-        command.Enabled = RunicSdkState.Instance.Projects.Count > 0 && !Run.IsRunning;
+        command.Enabled = RunicSdkState.Instance.DevTargets.Count > 0 && !Run.IsRunning;
     }
 
     public override async Task ExecuteAsync(RunicPackage package, CancellationToken cancellationToken)

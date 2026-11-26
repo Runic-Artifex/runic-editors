@@ -25,7 +25,7 @@ internal sealed class AttachToPageCommand : RunicCommandHandler
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         command.Visible = true;
-        command.Enabled = RunicSdkState.Instance.Projects.Count > 0;
+        command.Enabled = RunicSdkState.Instance.DevTargets.Count > 0;
     }
 
     public override async Task ExecuteAsync(RunicPackage package, CancellationToken cancellationToken)

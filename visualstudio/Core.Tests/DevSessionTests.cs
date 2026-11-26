@@ -757,7 +757,7 @@ public class DevSessionTests
     }
 
     [Test]
-    public void A_dev_command_acts_on_the_only_project_the_active_documents_or_the_startup_project()
+    public void A_dev_command_acts_on_the_only_Window_project_the_active_documents_or_the_startup_project()
     {
         string root = Path.GetTempPath();
         string app = Path.Combine(root, "app", "App.csproj"), tool = Path.Combine(root, "tool", "Tool.csproj");

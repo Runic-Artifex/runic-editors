@@ -12,6 +12,8 @@ public enum RowIcon
     Healthy, NotHealthy, Pass, Warning, Error, Running, NotRun, Fix,
     // The Dev Session section.
     DevReady, DevStarting, DevStopped, Globe, Watcher, Window, IdeWindow, Page, DebugEndpoint, Folder,
+    // A note, such as the Dev Session section's "No Window project".
+    Info,
 }
 
 /// <summary>What activating (double-clicking, Enter, Open C# Member) a row does.</summary>
@@ -45,9 +47,14 @@ public sealed class TreeRow
 /// <summary>What the tool window knows about one Runic SDK project of the solution.</summary>
 public sealed class SdkProjectState
 {
-    public SdkProjectState(string project) { Project = project; }
+    public SdkProjectState(string project, bool isWindow = true) { Project = project; IsWindow = isWindow; }
 
     public string Project { get; }
+    /// <summary>
+    /// True for a Window project (<see cref="RunicSdkProjects.IsWindowProject"/>), a <c>dotnet runic dev</c> target;
+    /// false for a library or test project, which the ViewModels and Doctor sections list but dev never targets.
+    /// </summary>
+    public bool IsWindow { get; set; }
     public string? SourceMapPath { get; private set; }
     public IReadOnlyList<SourceTreeNode>? SourceTree { get; private set; }
     public string? SourceMapError { get; private set; }
@@ -81,6 +88,28 @@ public static class SdkSections
     public const string NoSdkProject = "This solution has no Runic SDK project (a .csproj of a Runic Views Window or one that references Runic.Application, Runic.Desktop or Runic.Platform).";
     public const string ViewModelsWelcome = "No development source map yet. Build the project, or start dotnet runic dev, to list its ViewModels and Bridge members.";
     public const string DoctorWelcome = "dotnet runic doctor checks this machine and the project: the .NET SDK, the JavaScript runtime, lock files, the Window host's runtime and more.";
+
+    /// <summary>The tooltip of the Dev Session section's "No Window project" row (VS Code's Dev Session view).</summary>
+    public const string NoWindowProjectTooltip = "dotnet runic dev runs a Window project (RunicApplicationFrontendWindowProject, or an executable). The projects found here are libraries or tests; open the solution or folder of the Window project that references them.";
+
+    /// <summary>
+    /// Why no dev command has a target: no Runic SDK project at all, or only libraries and test projects (VS Code's
+    /// <c>pick</c> message).
+    /// </summary>
+    public static string NoWindowProject(IReadOnlyList<string> libraries)
+    {
+        if (libraries.Count == 0) return NoSdkProject;
+        string names = string.Join(", ", libraries.Select(Path.GetFileName));
+        return $"This solution has no Window project that dotnet runic dev can run; {names} {(libraries.Count == 1 ? "is a library or test project" : "are library or test projects")}.";
+    }
+
+    /// <summary>The projects <c>dotnet runic dev</c>, F5's guard and Debug the Window act on: the Window projects.</summary>
+    public static IReadOnlyList<string> DevTargets(IReadOnlyList<SdkProjectState> projects)
+        => projects.Where(state => state.IsWindow).Select(state => state.Project).ToList();
+
+    /// <summary>The libraries and test projects, which are no dev target.</summary>
+    public static IReadOnlyList<string> Libraries(IReadOnlyList<SdkProjectState> projects)
+        => projects.Where(state => !state.IsWindow).Select(state => state.Project).ToList();
 
     public static IReadOnlyList<TreeRow> ViewModels(IReadOnlyList<SdkProjectState> projects) => PerProject(projects, state =>
     {

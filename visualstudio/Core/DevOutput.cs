@@ -190,8 +190,9 @@ public static class DevGuard
 
     /// <summary>
     /// The project the guard asks about when a launch command runs: the first startup project (in the solution's
-    /// startup order) that is a Runic SDK project, as <paramref name="sdkProjects"/> spells it (the dev session's key). Null while the debugger is not in design mode (F5 then continues a
-    /// running session) and when no startup project is a Runic SDK project.
+    /// startup order) that is a Window project, as <paramref name="sdkProjects"/> (<see cref="SdkSections.DevTargets"/>)
+    /// spells it (the dev session's key). Null while the debugger is not in design mode (F5 then continues a running
+    /// session) and when no startup project is a Window project: a library or test project is no dev target.
     /// </summary>
     public static string? Target(IReadOnlyList<string> startupProjects, IReadOnlyList<string> sdkProjects, bool debuggerInDesignMode)
     {
@@ -230,18 +231,20 @@ public static class DevGuard
     }
 }
 
-/// <summary>Which Runic SDK project a dev command without a target acts on.</summary>
+/// <summary>Which Window project a dev command without a target acts on.</summary>
 public static class DevTargets
 {
-    public const string Ambiguous = "This solution has several Runic SDK projects. Open a file of the one to use, or make it the startup project.";
+    public const string Ambiguous = "This solution has several Window projects. Open a file of the one to use, or make it the startup project.";
 
     /// <summary>
-    /// The only project; with several, the one containing the active document, else the startup project when it is one
-    /// (Visual Studio has no quick pick; VS Code asks). Throws <see cref="InvalidOperationException"/> when none fits.
+    /// Of the Window projects (<see cref="SdkSections.DevTargets"/>; a library or test project is never one), the only
+    /// one; with several, the one containing the active document, else the startup project when it is one (Visual
+    /// Studio has no quick pick; VS Code asks). Throws <see cref="InvalidOperationException"/> when none fits, naming
+    /// <paramref name="libraries"/> when the solution has only those (<see cref="SdkSections.NoWindowProject"/>).
     /// </summary>
-    public static string Pick(IReadOnlyList<string> projects, string? activeDocument, IReadOnlyList<string>? startupProjects)
+    public static string Pick(IReadOnlyList<string> projects, string? activeDocument, IReadOnlyList<string>? startupProjects, IReadOnlyList<string>? libraries = null)
     {
-        if (projects.Count == 0) throw new InvalidOperationException(SdkSections.NoSdkProject);
+        if (projects.Count == 0) throw new InvalidOperationException(SdkSections.NoWindowProject(libraries ?? Array.Empty<string>()));
         if (projects.Count == 1) return projects[0];
         if (!string.IsNullOrEmpty(activeDocument))
         {

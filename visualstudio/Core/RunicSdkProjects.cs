@@ -13,6 +13,10 @@ public static class RunicSdkProjects
 {
     private static readonly Regex WindowProject = new(@"<RunicApplicationFrontendWindowProject>\s*true\s*<", RegexOptions.IgnoreCase);
     private static readonly Regex SdkReference = new(@"<(?:PackageReference|ProjectReference)\b[^>]*\bInclude\s*=\s*""[^""]*\bRunic\.(?:Application|Desktop|Platform)\b[^""]*""", RegexOptions.IgnoreCase);
+    private static readonly Regex NotWindow = new(@"<(?:RunicApplicationFrontendClientLibrary|IsTestProject)>\s*true\s*<", RegexOptions.IgnoreCase);
+    private static readonly Regex TestReference = new(@"<(?:PackageReference|ProjectReference)\b[^>]*\bInclude\s*=\s*""[^""]*\b(?:Microsoft\.NET\.Test\.Sdk|TUnit|xunit(?:\.v3)?|NUnit|MSTest(?:\.Sdk)?|Runic\.Application\.Testing)\b[^""]*""", RegexOptions.IgnoreCase);
+    private static readonly Regex OutputType = new(@"<OutputType(?:\s[^>]*)?>\s*([A-Za-z]+)\s*<", RegexOptions.IgnoreCase);
+    private static readonly Regex WebOrWorkerSdk = new(@"<Project\b[^>]*\bSdk\s*=\s*""Microsoft\.NET\.Sdk\.(?:Web|Worker)\b", RegexOptions.IgnoreCase);
     private static readonly Regex ToolVersionPattern = new(@"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$");
 
     /// <summary>
@@ -21,6 +25,32 @@ public static class RunicSdkProjects
     /// project that references only Runic Translations packages is not one.
     /// </summary>
     public static bool IsSdkProject(string projectText) => WindowProject.IsMatch(projectText) || SdkReference.IsMatch(projectText);
+
+    /// <summary>
+    /// True for a Runic SDK project that <c>dotnet runic dev</c> can run, a Window project (VS Code:
+    /// <c>isWindowProject</c>): one that sets <c>RunicApplicationFrontendWindowProject</c>, or an executable
+    /// (<c>OutputType</c> <c>Exe</c> or <c>WinExe</c>, or the Web and Worker SDKs without an <c>OutputType</c>) that is
+    /// neither a client library (<c>RunicApplicationFrontendClientLibrary</c>) nor a test project (<c>IsTestProject</c>,
+    /// or a reference to a test framework or <c>Runic.Application.Testing</c>). <c>dev</c> stops on a library with
+    /// RAPPDEV1005, so a library is no dev target; the ViewModels and Doctor sections still list it.
+    /// </summary>
+    public static bool IsWindowProject(string projectText)
+    {
+        if (!IsSdkProject(projectText)) return false;
+        if (WindowProject.IsMatch(projectText)) return true;
+        if (NotWindow.IsMatch(projectText) || TestReference.IsMatch(projectText)) return false;
+        var outputs = OutputType.Matches(projectText).Cast<Match>().Select(match => match.Groups[1].Value).ToList();
+        if (outputs.Count > 0) return outputs.Any(output => output.Equals("Exe", StringComparison.OrdinalIgnoreCase) || output.Equals("WinExe", StringComparison.OrdinalIgnoreCase));
+        return WebOrWorkerSdk.IsMatch(projectText);
+    }
+
+    /// <summary>The Window projects (<see cref="IsWindowProject"/>) among Runic SDK project files; an unreadable file is none.</summary>
+    public static IReadOnlyList<string> WindowProjects(IEnumerable<string> projectFiles)
+        => projectFiles.Where(file =>
+        {
+            try { return IsWindowProject(File.ReadAllText(file)); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+        }).ToList();
 
     /// <summary>The <c>.csproj</c> files among a solution's project files that are Runic SDK projects, sorted and unique.</summary>
     public static IReadOnlyList<string> Find(IEnumerable<string> projectFiles)
