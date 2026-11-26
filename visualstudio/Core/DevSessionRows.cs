@@ -15,12 +15,21 @@ public static class DevSessionRows
 {
     public const string Welcome = "dotnet runic dev serves the frontend and runs the Window with hot reload. Start it here, or press F5 to start it with --no-window.";
 
+    /// <summary>
+    /// The section's rows for the Window projects only (<see cref="SdkProjectState.IsWindow"/>); with only libraries and
+    /// test projects, one "No Window project" row naming them (VS Code's Dev Session view).
+    /// </summary>
     public static IReadOnlyList<TreeRow> Build(IReadOnlyList<SdkProjectState> projects, Func<string, DevSnapshot> snapshotOf)
-        => SdkSections.PerProject(projects, state =>
+    {
+        var windows = projects.Where(state => state.IsWindow).ToList();
+        if (windows.Count == 0 && projects.Count > 0)
+            return new[] { new TreeRow("No Window project", RowIcon.Info) { Description = string.Join(", ", projects.Select(state => Path.GetFileName(state.Project))), Tooltip = SdkSections.NoWindowProjectTooltip } };
+        return SdkSections.PerProject(windows, state =>
         {
             var snapshot = snapshotOf(state.Project);
             return Details(state.Project, snapshot, FrontendDependencies.Read(state.Project, snapshot));
         }, state => snapshotOf(state.Project).Label);
+    }
 
     /// <summary>
     /// The rows of one project; <paramref name="dependencies"/> (<see cref="FrontendDependencies.Read"/>) adds the

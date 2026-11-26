@@ -116,8 +116,16 @@ does not override existing bindings.
 --no-window** runs only the frontend, for a Window that the debugger starts.
 **Stop dotnet runic dev** stops a `dev` that Visual Studio started; stop one
 that runs in a terminal there with Ctrl+C. The output goes to the **Runic SDK**
-Output pane. With several Runic SDK projects, the commands act on the project of
-the active document, else on the startup project.
+Output pane. The commands, F5's question and Debug the Window act only on a
+Window project: one that sets `RunicApplicationFrontendWindowProject`, or an
+executable that is neither a client library
+(`RunicApplicationFrontendClientLibrary`) nor a test project (`IsTestProject`,
+or a reference to a test framework or `Runic.Application.Testing`). `dev` stops
+on a library with RAPPDEV1005, so a library or the template's test project is
+never the target, even as the startup project; a solution with only those shows
+"No Window project" in the Dev Session section. The ViewModels and Doctor
+sections still list every Runic SDK project. With several Window projects, the
+commands act on the one of the active document, else on the startup project.
 
 The **Dev Session** section follows `obj/runic/dev-session.json`, wherever
 `dev` was started: the state, the development server, the Window's process or
@@ -180,7 +188,7 @@ seconds for it to finish, and otherwise says which process is still running.
 
 ### F5 asks to start `dotnet runic dev --no-window`
 
-When F5 or Ctrl+F5 starts a Runic SDK startup project and no `dotnet runic dev
+When F5 or Ctrl+F5 starts a Window startup project and no `dotnet runic dev
 --no-window` runs for it, Runic DevKit asks first (D070.6):
 
 - **Yes** starts `dotnet runic dev --no-window`, waits until it is ready, and
@@ -502,6 +510,7 @@ work when the settings are empty; set them before starting Visual Studio.
 | Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time; a killed `dev` gets `obj/runic/dev-stopped` | Watcher and 2 s poll; process command line or image; the same `dev-stopped` touch |
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
 | Dev Session view: state, server, Window owner or process, pages, debug endpoints, generated clients | Runic tool window, Dev Session section; toolbar buttons enabled per state; state changes in the status bar text | Dev Session view; "Runic dev" status bar item |
+| Only Window projects are `dev` targets | Dev Session section, the dev commands, F5's question, Debug the Window and Attach to the Page; "No Window project" for a solution of libraries and tests | The same since #73 |
 | Frontend dependencies (runic-sdk 0.24): one row per package with owner, state, watcher and failure | Dev Session section, from the session file's `dependencies` or the build's `frontend-graph.json`; F5 builds them through MSBuild | Dev Session view, plus Build Frontend Dependencies, the fresh-clone install offer and quick fixes for the dependency diagnostics |
 | F5 with `dev --no-window` | Pre-F5 question: start `dev --no-window` (then launch once it is ready) or continue without it | `runic` debug type starts it |
 | Debug the Window: .NET and page breakpoints in one session | Tools → Runic, tool window toolbar: starts `dev --no-window`, builds, launches the Window under the .NET debugger with the session file's Window environment and a DevTools Protocol port, then attaches the JavaScript debugger over CDP (no 30-second limit) | `runic` debug type (`coreclr`) and the template's compound with the `msedge` attach |

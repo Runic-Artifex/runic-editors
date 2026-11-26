@@ -191,6 +191,7 @@ internal sealed class SdkTreeView : ContentControl
         RowIcon.Page => KnownMonikers.HTMLFile,
         RowIcon.DebugEndpoint => KnownMonikers.RemoteDebugger,
         RowIcon.Folder => KnownMonikers.FolderClosed,
+        RowIcon.Info => KnownMonikers.StatusInformation,
         _ => default,
     };
 }

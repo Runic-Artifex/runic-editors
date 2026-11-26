@@ -76,7 +76,7 @@ internal sealed class DevLaunchGuard : IOleCommandTarget
         {
             var dte = ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
             string? project = DevGuard.Target(DevSessionService.StartupProjects(dte).ToList(),
-                RunicSdkState.Instance.Projects.Select(state => state.Project).ToList(), InDesignMode());
+                RunicSdkState.Instance.DevTargets, InDesignMode());
             if (project != null && Ask(project, debug)) return VSConstants.S_OK;
         }
         catch (Exception error) when (error is not OutOfMemoryException)

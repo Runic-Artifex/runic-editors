@@ -94,10 +94,10 @@ internal sealed class DevSessionService
         Sync();
     }
 
-    /// <summary>Follows exactly the projects <see cref="RunicSdkState"/> found.</summary>
+    /// <summary>Follows exactly the Window projects <see cref="RunicSdkState"/> found; a library is no dev target.</summary>
     private void Sync()
     {
-        var projects = RunicSdkState.Instance.Projects.Select(state => state.Project).ToList();
+        var projects = RunicSdkState.Instance.DevTargets;
         var added = new List<Entry>();
         lock (gate)
         {
@@ -193,7 +193,7 @@ internal sealed class DevSessionService
 
     // ---- Picking a project ------------------------------------------------------------------------------------------
 
-    /// <summary>The project a command acts on: <paramref name="project"/>, else <see cref="DevTargets.Pick"/>.</summary>
+    /// <summary>The project a command acts on: <paramref name="project"/>, else <see cref="DevTargets.Pick"/> of the Window projects.</summary>
     public async Task<string> PickAsync(string? project, CancellationToken cancellationToken)
     {
         await RunicSdkState.Instance.EnsureScannedAsync(cancellationToken);
@@ -205,7 +205,8 @@ internal sealed class DevSessionService
         var startup = new List<string>();
         try { active = dte?.ActiveDocument?.FullName; } catch (ArgumentException) { }
         try { startup.AddRange(StartupProjects(dte)); } catch (Exception error) when (error is ArgumentException or System.Runtime.InteropServices.COMException) { }
-        return DevTargets.Pick(RunicSdkState.Instance.Projects.Select(state => state.Project).ToList(), active, startup);
+        var state = RunicSdkState.Instance;
+        return DevTargets.Pick(state.DevTargets, active, startup, state.Libraries);
     }
 
     /// <summary>The startup projects' files.</summary>

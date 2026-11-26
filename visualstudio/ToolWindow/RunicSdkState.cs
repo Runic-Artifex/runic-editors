@@ -58,6 +58,12 @@ internal sealed class RunicSdkState
 
     public IReadOnlyList<SdkProjectState> Projects { get { lock (gate) return projects; } }
 
+    /// <summary>The Window projects among <see cref="Projects"/>: the only <c>dotnet runic dev</c> targets.</summary>
+    public IReadOnlyList<string> DevTargets => SdkSections.DevTargets(Projects);
+
+    /// <summary>The libraries and test projects among <see cref="Projects"/>, which no dev command targets.</summary>
+    public IReadOnlyList<string> Libraries => SdkSections.Libraries(Projects);
+
     /// <summary>True once the solution has been searched for Runic SDK projects.</summary>
     public bool Scanned => scanned;
 
@@ -91,10 +97,13 @@ internal sealed class RunicSdkState
         await TaskScheduler.Default;
         var sdkProjects = RunicSdkProjects.Find(found.Keys);
         if (sdkProjects.Count == 0 && found.Count == 0 && root != null) sdkProjects = RunicSdkProjects.Scan(root);
+        var windows = new HashSet<string>(RunicSdkProjects.WindowProjects(sdkProjects), StringComparer.OrdinalIgnoreCase);
         lock (gate)
         {
             var previous = projects.ToDictionary(state => state.Project, StringComparer.OrdinalIgnoreCase);
-            projects = sdkProjects.Select(project => previous.TryGetValue(project, out var state) ? state : new SdkProjectState(project)).ToList();
+            // A kept project edited into or out of a Window project changes with the scan.
+            foreach (var state in previous.Values) state.IsWindow = windows.Contains(state.Project);
+            projects = sdkProjects.Select(project => previous.TryGetValue(project, out var state) ? state : new SdkProjectState(project, windows.Contains(project))).ToList();
             hierarchies = found;
             foreach (var state in projects) state.LoadSourceMap();
             Watch(projects.Select(state => state.Project));
