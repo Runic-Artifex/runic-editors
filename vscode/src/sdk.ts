@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { execFile, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { detectToolVersion, devArguments, forceStop, onDevEnd, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, type DevStop } from "./dev-process.js";
 import { dependencyFixes, addWorkspaceMember, propertyLine, removeJsonProperty, type DependencyFix } from "./dependency-fixes.js";
@@ -11,7 +12,8 @@ import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diag
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type DoctorCheck, type DoctorReport } from "./doctor.js";
 import { locationText, newestSourceMap, parseSourceMap, sourceMapTree, type SourceLocation, type SourceTreeNode } from "./source-map.js";
 import { coverageLine, errorSummary, type StatusResult } from "./status.js";
-import { parseRunProperties, runPropertiesArguments, templateTaskLabels, templateWindowConfiguration, windowLaunchConfiguration } from "./window-debug.js";
+import { devExtraArguments, parseRunProperties, requestedProfile, runPropertiesArguments, substitutePath, templateTaskLabels, templateWindowConfiguration, windowDebugConfigurations, windowLaunchConfiguration } from "./window-debug.js";
+import { launchSettingsPath, parseEnvFile, readLaunchProfiles, selectLaunchProfile, type LaunchProfile } from "./launch-settings.js";
 import { detectWorkspace, formerCoreTool, projectCoreTool, projectRunicToolVersion, type WorkspaceKind } from "./workspace.js";
 
 /** What the Runic SDK features need from the rest of the extension. */
@@ -128,11 +130,12 @@ export class RunicSdk implements vscode.Disposable {
         },
       }),
       vscode.debug.registerDebugConfigurationProvider("runic", {
-        provideDebugConfigurations: () => [...this.projects.values()].map(state => ({ type: "runic", request: "launch", name: this.projects.size > 1 ? `Runic: Window (${basename(state.project)})` : "Runic: Window", project: this.workspaceRelative(state) })),
+        provideDebugConfigurations: folder => this.debugConfigurations(folder),
         resolveDebugConfiguration: (folder, configuration, token) => this.resolveWindowDebug(folder, configuration, token),
       }),
+      // Run and Debug's list: one entry per Window project and launch profile (design/ide-run-debug E2).
       vscode.debug.registerDebugConfigurationProvider("runic", {
-        provideDebugConfigurations: () => [...this.projects.values()].slice(0, 1).map(() => ({ type: "runic", request: "launch", name: "Runic: Window" })),
+        provideDebugConfigurations: folder => this.debugConfigurations(folder),
       }, vscode.DebugConfigurationProviderTriggerKind.Dynamic),
       vscode.tasks.onDidEndTask(event => {
         for (const state of this.projects.values()) if (state.execution === event.execution) { state.execution = undefined; void state.follower.refresh(); }
@@ -323,7 +326,7 @@ export class RunicSdk implements vscode.Disposable {
   // ---- dotnet runic dev ---------------------------------------------------------------------------------------------
 
   /** A task of the extension's `runic` type; `dev` gets the `$runic-dev` problem matcher, as the template's task does. */
-  private task(state: ProjectState, command: RunicTaskDefinition["command"], noWindow = false, definition?: RunicTaskDefinition, toolVersion = projectRunicToolVersion(state.project)): vscode.Task {
+  private task(state: ProjectState, command: RunicTaskDefinition["command"], noWindow = false, definition?: RunicTaskDefinition, extra: readonly string[] = [], toolVersion = projectRunicToolVersion(state.project)): vscode.Task {
     const dotnet = this.host.dotnetPath(state.folder);
     // `dotnet runic` (dotnet-runic) or `dotnet rax` (RunicArtifex.Tool), by what the project's tool manifest lists.
     const verb = (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb;
@@ -336,7 +339,7 @@ export class RunicSdk implements vscode.Disposable {
       // dotnet-runic 0.22: --debug-endpoint (D070.17) and the stop request on dev's input (WIN-06), through a terminal of the
       // extension's own that holds dev's standard input. An older or unknown tool runs as a process task, as before.
       const sdk022 = supportsDevSdk022(toolVersion);
-      const args = devArguments(state.project, noWindow, sdk022, verb);
+      const args = [...devArguments(state.project, noWindow, sdk022, verb), ...extra];
       const execution = sdk022
         ? new vscode.CustomExecution(async () => {
           const problems = new DevProblems(cwd, noWindow);
@@ -389,7 +392,8 @@ export class RunicSdk implements vscode.Disposable {
     });
   }
 
-  async startDev(target: unknown, noWindow: boolean): Promise<ProjectState | undefined> {
+  /** `extra` are more `dev` options (a configuration's `devArgs`); with them DevKit runs its own task, not the template's. */
+  async startDev(target: unknown, noWindow: boolean, extra: readonly string[] = []): Promise<ProjectState | undefined> {
     const state = await this.pick(target);
     if (!state) return;
     const snapshot = await state.follower.refresh();
@@ -402,8 +406,8 @@ export class RunicSdk implements vscode.Disposable {
       await this.stopDev(state.project, true);
       await this.waitFor(state, current => !isActive(current), 30000);
     }
-    const task = await this.workspaceTask(state, noWindow ? templateTaskLabels.devNoWindow : templateTaskLabels.dev)
-      ?? this.task(state, "dev", noWindow, undefined, await detectToolVersion(this.host.dotnetPath(state.folder), dirname(state.project), projectRunicToolVersion(state.project), (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb));
+    const task = (extra.length ? undefined : await this.workspaceTask(state, noWindow ? templateTaskLabels.devNoWindow : templateTaskLabels.dev))
+      ?? this.task(state, "dev", noWindow, undefined, extra, await detectToolVersion(this.host.dotnetPath(state.folder), dirname(state.project), projectRunicToolVersion(state.project), (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb));
     this.log.info(`Starting ${task.source === "Workspace" ? `the workspace task "${task.name}"` : `dotnet runic dev${noWindow ? " --no-window" : ""}`} for ${state.project}`);
     state.execution = await vscode.tasks.executeTask(task);
     return state;
@@ -494,7 +498,14 @@ export class RunicSdk implements vscode.Disposable {
     try {
       const state = await this.pick(configuration.project ?? (folder ? [...this.projects.values()].find(item => item.folder.uri.toString() === folder.uri.toString())?.project : undefined));
       if (!state) return undefined;
-      if (!vscode.extensions.getExtension("ms-dotnettools.csharp")) {
+      // The profile, envFile and devArgs are read first, so a misspelt profile stops F5 before dev starts.
+      const workspaceFolder = (folder ?? state.folder).uri.fsPath;
+      const settingsFile = typeof configuration.launchSettingsFilePath === "string" && configuration.launchSettingsFilePath.trim()
+        ? substitutePath(configuration.launchSettingsFilePath, workspaceFolder, homedir()) : launchSettingsPath(state.project);
+      const profile = selectLaunchProfile(readLaunchProfiles(state.project, settingsFile), requestedProfile(configuration), settingsFile);
+      const envFile = typeof configuration.envFile === "string" && configuration.envFile.trim() ? readEnvFile(substitutePath(configuration.envFile, workspaceFolder, homedir())) : undefined;
+      const devExtra = devExtraArguments(configuration, profile);
+      if (!hasCoreclrDebugger()) {
         const install = "Show the C# extension";
         if (await vscode.window.showErrorMessage("Debugging the Window needs the C# extension (ms-dotnettools.csharp), whose debugger runs it.", install) === install)
           void vscode.commands.executeCommand("workbench.extensions.search", "ms-dotnettools.csharp");
@@ -503,6 +514,7 @@ export class RunicSdk implements vscode.Disposable {
       return await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Runic: Window of ${basename(state.project)}`, cancellable: true }, async (progress, cancel) => {
         // 1. The frontend: dotnet runic dev --no-window, until [dev] Ready (the session file says ready, owner ide).
         let snapshot = await state.follower.refresh();
+        let startedDev = false;
         if (!(snapshot.state === "ready" && snapshot.session?.window?.owner === "ide")) {
           progress.report({ message: "starting dotnet runic dev --no-window" });
           if (isActive(snapshot) && snapshot.session?.window?.owner !== "ide") {
@@ -511,7 +523,7 @@ export class RunicSdk implements vscode.Disposable {
             await this.stopDev(state.project, true);
             await this.waitFor(state, current => !isActive(current), 30000, cancel);
           }
-          if (!isActive(state.follower.snapshot)) await this.startDev(state.project, true);
+          if (!isActive(state.follower.snapshot)) { await this.startDev(state.project, true, devExtra); startedDev = true; }
           const startedAt = Date.now();
           snapshot = await this.waitFor(state, current => current.state === "ready" && current.session?.window?.owner === "ide", 10 * 60 * 1000, cancel,
             current => current.state === "stopped" && Date.parse(current.session?.startedAt ?? "") >= startedAt - 5000 ? "dotnet runic dev stopped; see its task terminal and the Problems panel." : undefined);
@@ -525,14 +537,25 @@ export class RunicSdk implements vscode.Disposable {
         progress.report({ message: "starting the debugger" });
         const configurationName = snapshot.session?.configuration ?? "Debug";
         const properties = parseRunProperties(await execText(this.host.dotnetPath(state.folder), runPropertiesArguments(state.project, configurationName), dirname(state.project)));
-        const launch = windowLaunchConfiguration(state.project, properties, snapshot.session, configuration.env as Record<string, string> | undefined);
-        this.log.info(`Debugging ${launch.program} with ${JSON.stringify(launch.env)}`);
-        return { ...launch, name: configuration.name ?? "Runic: Window" } as vscode.DebugConfiguration;
+        if (devExtra.length && !startedDev) this.log.info(`dotnet runic dev already runs, so ${devExtra.join(" ")} (devArgs) applies the next time DevKit starts it.`);
+        const launch = windowLaunchConfiguration(state.project, properties, snapshot.session, { configuration, profile, envFile });
+        this.log.info(`Debugging ${launch.program} ${JSON.stringify(launch.args)} in ${launch.cwd}${profile ? ` with launch profile "${profile.name}"` : ""}; variables ${Object.keys(launch.env as Record<string, string>).join(", ")}`);
+        return launch as vscode.DebugConfiguration;
       });
     } catch (error) {
       if (!(error instanceof vscode.CancellationError)) { this.log.error(String(error)); void vscode.window.showErrorMessage(errorSummary(error)); }
       return undefined;
     }
+  }
+
+  /** The `runic` entries of Run and Debug (dynamic) and of a new launch.json (initial): one per Window project and profile. */
+  private debugConfigurations(folder: vscode.WorkspaceFolder | undefined): vscode.DebugConfiguration[] {
+    const states = [...this.projects.values()].filter(state => !folder || state.folder.uri.toString() === folder.uri.toString());
+    return windowDebugConfigurations(states.map(state => {
+      let profiles: LaunchProfile[] = [];
+      try { profiles = readLaunchProfiles(state.project); } catch (error) { this.log.warn(String(error)); }
+      return { project: state.project, relative: this.workspaceRelative(state), profiles };
+    })) as vscode.DebugConfiguration[];
   }
 
   // ---- dotnet runic doctor ------------------------------------------------------------------------------------------
@@ -851,6 +874,8 @@ export class RunicSdk implements vscode.Disposable {
       viewModels: (project: string) => { this.loadSourceMaps(); return this.projects.get(project)?.sourceTree; },
       runDoctor: (project: string) => this.runDoctor(project),
       libraries: () => [...this.libraries],
+      /** Run and Debug's `runic` entries for a workspace folder (the dynamic and initial providers). */
+      debugConfigurations: (folder: vscode.Uri) => this.debugConfigurations(vscode.workspace.getWorkspaceFolder(folder)),
       dependencies: (project: string) => { this.loadDependencies(); return this.projects.get(project)?.dependencies; },
       install: (project: string) => this.projects.get(project)?.install,
       dependencyStatus: () => this.dependencyOffer,
@@ -988,6 +1013,19 @@ async function runTaskToEnd(task: vscode.Task, token: vscode.CancellationToken):
     const done = vscode.tasks.onDidEndTaskProcess(event => { if (event.execution === execution) { done.dispose(); cancel.dispose(); resolveRun(event.exitCode); } });
     const cancel = token.onCancellationRequested(() => { done.dispose(); cancel.dispose(); execution.terminate(); rejectRun(new vscode.CancellationError()); });
   });
+}
+
+/**
+ * Whether an installed extension contributes the `coreclr` debugger the Window runs under: the C# extension
+ * (ms-dotnettools.csharp), or another build of it with the same debug type.
+ */
+function hasCoreclrDebugger(): boolean {
+  return vscode.extensions.all.some(extension => (extension.packageJSON as { contributes?: { debuggers?: { type?: string }[] } } | undefined)?.contributes?.debuggers?.some(debugger_ => debugger_.type === "coreclr"));
+}
+
+function readEnvFile(file: string): Record<string, string> {
+  try { return parseEnvFile(readFileSync(file, "utf8")); }
+  catch (error) { throw new Error(`The configuration's envFile ${file} could not be read: ${errorSummary(error)}`); }
 }
 
 /** Runs a command and resolves with its standard output; `allowFailure` resolves with it for a non-zero exit too (JSON envelopes). */

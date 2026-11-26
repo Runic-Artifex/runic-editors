@@ -128,6 +128,7 @@ exports.run = async function () {
   await multiRoot(api, restarted);
   if (protocol >= 2) await protocol2(api, root, fs);
   await runicSdk(api, fs);
+  await windowDebug(api, fs);
   require('node:fs').writeFileSync(process.env.RUNIC_VSCODE_RESULT_FILE, JSON.stringify({passed:true,message:`PASS VS Code extension-host assertions (Runic protocol ${protocol}).`}));
   console.log('PASS VS Code activation, native providers, all preview examples, sample reuse, unsaved refresh, source edits and restart.');
 };
@@ -397,6 +398,97 @@ async function runicSdk(api, fs) {
   assert.equal(String(help[0].command.arguments[0]), 'https://github.com/Runic-Artifex/runic-sdk/blob/main/docs/diagnostics.md#runicbridge013');
   await frontendDependencies(sdk, appFolder, project, csproj, fs, path);
   console.log('PASS Runic SDK: workspace detection, tasks, session file liveness, ViewModels tree, doctor and code actions, frontend dependencies.');
+}
+/**
+ * F5 of the `runic` type with scenario M's `/mock` (design/ide-run-debug E1, E2): a stand-in `coreclr` debugger
+ * (test/coreclr-stand-in) records the launch request that DevKit's resolver hands it, so no C# extension is needed. The
+ * stand-in `dotnet` builds nothing and answers `dotnet msbuild -getProperty` from run-properties.json; a stand-in `dev`
+ * process (RUNIC_FAKE_F5_DEV_PID) makes the session file ready with the Window owned by the IDE, so DevKit starts no dev.
+ */
+async function windowDebug(api, fs) {
+  const path = require('node:path');
+  const appFolder = vscode.workspace.workspaceFolders[1];
+  const app = appFolder.uri.fsPath;
+  const project = path.join(app, 'App.csproj');
+  const sdk = api.sdk;
+  stage = 'F5 /mock: setup';
+  const standIn = vscode.extensions.getExtension('runic-artifex-tests.coreclr-stand-in');
+  assert.ok(standIn, 'The coreclr stand-in extension is not loaded');
+  const { launches } = await standIn.activate();
+  const program = path.join(app, 'bin', 'Debug', 'net10.0', 'App');
+  const runProperties = (RunArguments = '') => fs.writeFileSync(path.join(app, 'run-properties.json'), JSON.stringify({ Properties: { RunCommand: program, RunArguments, RunWorkingDirectory: '', TargetPath: `${program}.dll` } }));
+  fs.mkdirSync(path.join(app, 'Properties'), { recursive: true });
+  const launchSettings = profiles => fs.writeFileSync(path.join(app, 'Properties', 'launchSettings.json'), JSON.stringify({ profiles }, null, 2));
+  const template = { App: { commandName: 'Project', environmentVariables: { DOTNET_ENVIRONMENT: 'Development' } } };
+  const sessionFile = path.join(app, 'obj', 'runic', 'dev-session.json');
+  const pid = Number(process.env.RUNIC_FAKE_F5_DEV_PID);
+  const session = { schema: 'runic.application.tool.dev-session/1', state: 'ready', processId: pid, startedAt: new Date().toISOString(), project, configuration: 'Debug',
+    frontend: { developmentServer: 'vite', url: 'http://127.0.0.1:5173/', port: 5173, stateUrl: null, directory: path.join(app, 'Frontend'), outputDirectory: path.join(app, 'Frontend', 'dist'), generatedDirectory: null },
+    webRoot: path.join(app, 'bin', 'Debug', 'net10.0', 'www'), pages: [], debugEndpoints: [],
+    window: { owner: 'ide', program: 'App', processId: null, starts: 0, environment: { DOTNET_ENVIRONMENT: 'Development', RUNIC_APPLICATION_DEVELOPMENT_ASSETS: path.join(app, 'Frontend', 'dist') } } };
+  fs.writeFileSync(`${sessionFile}.tmp`, JSON.stringify(session)); fs.renameSync(`${sessionFile}.tmp`, sessionFile);
+  await waitFor(() => sdk.devState(project).state === 'ready', () => `The F5 session file was not followed: ${JSON.stringify(sdk.devState(project))}`, 15000);
+  /** Starts a `runic` configuration and returns the launch request the coreclr stand-in received, after the session ended. */
+  const f5 = async (name, configuration) => {
+    stage = `F5 /mock: ${name}`;
+    const before = launches.length;
+    const ended = new Promise(resolve => { const listener = vscode.debug.onDidTerminateDebugSession(item => { if (item.type === 'coreclr') { listener.dispose(); resolve(); } }); });
+    const started = await vscode.debug.startDebugging(appFolder, { type: 'runic', request: 'launch', name, ...configuration });
+    assert.ok(started, `${name}: the debug session did not start`);
+    await waitFor(() => launches.length > before, `${name}: the coreclr stand-in received no launch request`, 60000);
+    await Promise.race([ended, new Promise(resolve => setTimeout(resolve, 10000))]);
+    return launches[launches.length - 1];
+  };
+
+  // V1, the maintainer's failure: `args` in the configuration reached nothing before E1.
+  runProperties(''); launchSettings(template);
+  let launch = await f5('V1 args', { args: ['/mock'] });
+  assert.deepEqual(launch.args, ['/mock']);
+  assert.equal(launch.program, program);
+  assert.equal(launch.cwd, app);
+  assert.equal(launch.launchSettingsProfile, null, 'The C# debugger must not apply the profile a second time');
+  assert.equal(launch.env.DOTNET_ENVIRONMENT, 'Development');
+  assert.equal(launch.env.RUNIC_APPLICATION_DEVELOPMENT_ASSETS, path.join(app, 'Frontend', 'dist'));
+  // V2: the first profile's commandLineArgs.
+  launchSettings({ App: { ...template.App, commandLineArgs: '/mock' } });
+  launch = await f5('V2 profile', {});
+  assert.deepEqual(launch.args, ['/mock']);
+  // V3: StartArguments in a Debug PropertyGroup, as MSBuild's RunArguments; an older configuration with name only.
+  runProperties('/mock'); launchSettings(template);
+  launch = await f5('V3 StartArguments', {});
+  assert.deepEqual(launch.args, ['/mock']);
+  // V4: the project's and the profile's arguments are both passed, the project's first (D084.2).
+  launchSettings({ App: { ...template.App, commandLineArgs: '/verbose' } });
+  launch = await f5('V4 both', {});
+  assert.deepEqual(launch.args, ['/mock', '/verbose']);
+  // V5: launchSettingsProfile null means no profile; launchProfile names one, with its variables and working directory.
+  runProperties('');
+  launchSettings({ App: { ...template.App, commandLineArgs: '/wrong' }, 'Mock data': { commandName: 'Project', commandLineArgs: '/mock /config:"C:\\Program Files\\Acme\\dev.json"', environmentVariables: { ACME_DATA: 'mock' }, workingDirectory: 'data' } });
+  launch = await f5('V5 no profile', { launchSettingsProfile: null });
+  assert.deepEqual(launch.args, []);
+  launch = await f5('named profile', { launchProfile: 'Mock data', env: { FROM_LAUNCH: '1' }, stopAtEntry: true, justMyCode: false, console: 'internalConsole' });
+  assert.deepEqual(launch.args, ['/mock', '/config:C:\\Program Files\\Acme\\dev.json']);
+  assert.equal(launch.cwd, path.join(app, 'data'));
+  assert.deepEqual([launch.env.ACME_DATA, launch.env.FROM_LAUNCH, launch.stopAtEntry, launch.justMyCode], ['mock', '1', true, false]);
+  assert.ok(!('launchProfile' in launch) && !('project' in launch), 'DevKit\'s own attributes must not reach the C# debugger');
+  // A cwd and an envFile of the configuration; VS Code substitutes ${workspaceFolder} in cwd after DevKit's resolver.
+  fs.writeFileSync(path.join(app, 'mock.env'), 'ACME_DATA=from-file\nFILE_ONLY=1\n');
+  launch = await f5('cwd and envFile', { launchProfile: 'Mock data', cwd: '${workspaceFolder}/elsewhere', envFile: '${workspaceFolder}/mock.env', env: { ACME_DATA: 'from-env' } });
+  assert.equal(launch.cwd, path.join(app, 'elsewhere'));
+  assert.deepEqual([launch.env.ACME_DATA, launch.env.FILE_ONLY], ['from-env', '1']);
+  // A missing profile stops F5 with an error instead of a launch without its arguments.
+  stage = 'F5 /mock: missing profile';
+  const before = launches.length;
+  assert.equal(await vscode.debug.startDebugging(appFolder, { type: 'runic', request: 'launch', name: 'missing', launchProfile: 'Mock' }), false);
+  assert.equal(launches.length, before);
+  // E2: Run and Debug offers one entry per Window project and profile.
+  stage = 'F5 /mock: Run and Debug entries';
+  assert.deepEqual(sdk.debugConfigurations(appFolder.uri).map(item => [item.name, item.launchProfile]), [['Runic: App (App)', 'App'], ['Runic: App (Mock data)', 'Mock data']]);
+  assert.deepEqual(sdk.debugConfigurations(vscode.workspace.workspaceFolders[0].uri), []);
+  fs.rmSync(path.join(app, 'Properties'), { recursive: true });
+  assert.deepEqual(sdk.debugConfigurations(appFolder.uri), [{ type: 'runic', request: 'launch', name: 'Runic: App', project: 'App.csproj' }]);
+  fs.writeFileSync(`${sessionFile}.tmp`, JSON.stringify({ ...session, state: 'stopped' })); fs.renameSync(`${sessionFile}.tmp`, sessionFile);
+  console.log('PASS Runic F5: /mock from args, the profile, StartArguments and both; launchProfile, cwd, envFile, pass-through; one entry per profile.');
 }
 /** S8: the dependency tree from the graph file, the fresh-clone offers and the quick fixes of the dependency diagnostics. */
 async function frontendDependencies(sdk, appFolder, project, csproj, fs, path) {

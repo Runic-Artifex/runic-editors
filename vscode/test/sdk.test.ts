@@ -441,9 +441,11 @@ test("former runicTranslations settings apply while the new settings are not set
 test("the Window launch configuration runs what dotnet run starts, with the session's environment", () => {
   const properties = parseRunProperties(JSON.stringify({ Properties: { RunCommand: "/app/bin/Debug/net10.0/App", RunArguments: "", RunWorkingDirectory: "", TargetPath: "/app/bin/Debug/net10.0/App.dll" } }));
   const ide = session({ window: { owner: "ide", program: "App", processId: null, starts: 0, environment: { DOTNET_ENVIRONMENT: "Development", RUNIC_APPLICATION_DEVELOPMENT_ASSETS: "/app/Frontend/dist" } } });
-  expect(windowLaunchConfiguration("/app/App.csproj", properties, ide, { EXTRA: "1" })).toEqual({
+  // A configuration from before the new attributes (type, request, name, env) launches as it did, and the C# debugger
+  // no longer applies a launch profile of its own (DevKit applies it).
+  expect(windowLaunchConfiguration("/app/App.csproj", properties, ide, { configuration: { type: "runic", request: "launch", name: "Runic: Window", env: { EXTRA: "1" } } })).toEqual({
     type: "coreclr", request: "launch", name: "Runic: Window", program: "/app/bin/Debug/net10.0/App", args: [], cwd: "/app",
-    env: { DOTNET_ENVIRONMENT: "Development", RUNIC_APPLICATION_DEVELOPMENT_ASSETS: "/app/Frontend/dist", EXTRA: "1" }, console: "internalConsole" });
+    env: { DOTNET_ENVIRONMENT: "Development", RUNIC_APPLICATION_DEVELOPMENT_ASSETS: "/app/Frontend/dist", EXTRA: "1" }, console: "internalConsole", launchSettingsProfile: null });
   // Without an application host, dotnet runs the DLL: the C# debugger takes the DLL as the program.
   const viaDotnet = windowLaunchConfiguration("/app/App.csproj", { RunCommand: "dotnet", RunArguments: "exec \"/app/bin/Debug/net10.0/App.dll\" --flag", TargetPath: "/app/bin/Debug/net10.0/App.dll" }, undefined);
   expect([viaDotnet.program, viaDotnet.args, (viaDotnet.env as Record<string, string>).DOTNET_ENVIRONMENT]).toEqual(["/app/bin/Debug/net10.0/App.dll", ["--flag"], "Development"]);
