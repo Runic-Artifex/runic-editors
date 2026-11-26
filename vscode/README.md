@@ -117,6 +117,16 @@ Translations packages is not a Runic SDK project. The **Translations** view show
 in any workspace with a `runic.json`. Adding or removing a project file updates
 the views.
 
+Only Window projects are targets of `dev`, F5, the `runic` tasks and doctor: a
+project that sets `RunicApplicationFrontendWindowProject`, or an executable
+(`OutputType` `Exe` or `WinExe`, or the Web or Worker SDK) that is neither a
+client library (`RunicApplicationFrontendClientLibrary`) nor a test project
+(`IsTestProject`, a test framework or `Runic.Application.Testing`). `dev` stops
+on a library with `RAPPDEV1005`, so a library is not offered; its frontend
+package shows under the Window project that uses it
+([Frontend dependencies](#frontend-dependencies)). A folder with only libraries
+shows "No Window project" in the **Dev Session** view.
+
 ### Dev Session: `dotnet runic dev`
 
 **Start dotnet runic dev** runs the development server and the Window, restarted
@@ -207,6 +217,47 @@ session file names for it (`DOTNET_ENVIRONMENT=Development`, and
 `RUNIC_APPLICATION_DEVELOPMENT_ASSETS` without a development server). It needs the
 [C# extension](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp).
 
+### Frontend dependencies
+
+A Window project's page can import the frontend packages of other projects: a
+client library's package or a JavaScript workspace package
+([Library packages](https://github.com/Runic-Artifex/runic-sdk/blob/main/packages/dotnet/Runic.Application.Views/README.md#library-packages),
+runic-sdk 0.24). The **Dev Session** view lists them under **Frontend
+dependencies**, dependencies first, one row per package with its owning project,
+its state and how `dev` keeps it current: `built`, `building`, `failed` (with
+`dev`'s message below it), `not built` (an exported file is missing), `source`
+(no build step), `build off`, and "rebuilt on change", "watched by its watch
+script" or "watched by Vite". Selecting a row opens its `package.json`.
+
+- **While `dev` runs**, the rows come from the session file's `dependencies`
+  (`dotnet-runic` 0.24, see "Library packages under dev" in the
+  [dotnet-runic README](https://github.com/Runic-Artifex/runic-sdk/blob/main/tools/dotnet-runic/README.md#library-packages-under-dev)).
+- **Otherwise**, and with a `dev` before 0.24, whose session file has no
+  `dependencies`, they come from the graph the last build wrote
+  (`obj/runic/frontend-graph.json`, `rax.frontend-graph/1`): a compiled package
+  is built when every file it exports exists. The view also says when the
+  frontend is not a member of its workspace (`RUNICBRIDGE087`) or the workspace
+  has no lock file (`RUNICBRIDGE026`). Without the graph (a fresh clone, or Views
+  targets before 0.24) the view shows the last session's list, or none.
+
+**Build Frontend Dependencies (dotnet build)** builds the Window project (the
+template's `build` task when the folder has one). The Views targets install the
+workspace and build every package the page depends on, so DevKit has no build
+logic of its own.
+
+On a fresh clone, when the frontend declares dependencies and its workspace root
+has no `node_modules`, the status bar shows **Install frontend dependencies**,
+and the **Dev Session** view a "not installed" row. Clicking either asks to run
+the install the Views targets run, at the workspace root
+(`bun install --frozen-lockfile --ignore-scripts`,
+`pnpm install --frozen-lockfile --ignore-scripts` or `npm ci --ignore-scripts`)
+in a task terminal. After a build whose graph lists packages that are not built,
+the status bar offers **Build frontend dependencies** instead. DevKit never
+installs or builds by itself: both run package-manager code, so they wait for
+your click, and `dotnet build`, `dev` and F5 install and build through MSBuild
+anyway. Workspace trust applies, since the extension does not run in Restricted
+Mode.
+
 ### Doctor and Runic diagnostics
 
 **Run dotnet runic doctor** runs `dotnet runic doctor --format json --fail-on never`
@@ -218,6 +269,18 @@ checks again. Diagnostics with Runic codes (`RUNICBRIDGE`, `RAPPDEV`, `RAPPCLI`,
 fix **Show <code> in the Runic diagnostics catalog**, which opens the code's entry
 at the release tag of the project's `dotnet-runic` tool; `RAPPDEV1007`,
 `RAPPDEV1008` and `RAPPCLI1009` also offer to run doctor.
+
+The frontend workspace and dependency diagnostics of runic-sdk 0.24 point at the
+file to change and offer the change:
+
+| Code | Quick fixes |
+| --- | --- |
+| `RUNICBRIDGE026` (no lock file) | Create the lock: run `<manager> install --ignore-scripts` in the workspace root (or the frontend) in a terminal; open its `package.json` |
+| `RUNICBRIDGE087` (not a workspace member) | Add the frontend to the root `package.json`'s `workspaces`; open it (`pnpm-workspace.yaml` for pnpm) |
+| `RUNICBRIDGE088` (exports missing) | **Build frontend dependencies**, or add a `build` script when the package has none; open the package's `exports` |
+| `RUNICBRIDGE089` (package manager mismatch) | Remove the member's `packageManager`; open the workspace's `package.json` |
+| `RUNICBRIDGE090` (Node.js, Bun or the package manager does not run) | Open the install page of Node.js, Bun or pnpm |
+| `RAPPDEV1018` (a dependency failed under `dev`) | Show the frontend dependencies, and the `package.json` of the package the line names (`[shared-ui]`) |
 
 ### ViewModels
 
@@ -251,6 +314,11 @@ status bar coverage does.
 | Runic: Open the dev Session File | `obj/runic/dev-session.json` |
 | Runic: dotnet runic dev Actions… | The status bar item's choices |
 | Runic: Run dotnet runic doctor | The Doctor view and Problems |
+| Runic: Build Frontend Dependencies (dotnet build) | Builds the Window project, and with it its frontend packages |
+| Runic: Install Frontend Dependencies | The workspace's locked install, after you confirm |
+| Runic: Show Frontend Dependencies | The **Dev Session** view's dependency tree |
+| Runic: Open package.json | From a dependency row |
+| Runic: Run Package Manager | From the `RUNICBRIDGE026` quick fix |
 | Runic: Refresh ViewModels | Rereads the development source map |
 | Runic: Open C# Member | From the ViewModels view |
 | Runic: Refresh Translation Status | The Translations view |

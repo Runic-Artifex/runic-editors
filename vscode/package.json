@@ -250,6 +250,39 @@
         "enablement": "runic.sdkProject"
       },
       {
+        "command": "runic.dependencies.build",
+        "title": "Build Frontend Dependencies (dotnet build)",
+        "category": "Runic",
+        "icon": "$(tools)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dependencies.install",
+        "title": "Install Frontend Dependencies",
+        "category": "Runic",
+        "icon": "$(package)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dependencies.openPackage",
+        "title": "Open package.json",
+        "category": "Runic",
+        "icon": "$(go-to-file)",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dependencies.show",
+        "title": "Show Frontend Dependencies",
+        "category": "Runic",
+        "enablement": "runic.sdkProject"
+      },
+      {
+        "command": "runic.dependencies.run",
+        "title": "Run Package Manager",
+        "category": "Runic",
+        "enablement": "runic.sdkProject"
+      },
+      {
         "command": "runic.viewModels.refresh",
         "title": "Refresh ViewModels",
         "category": "Runic",
@@ -353,6 +386,11 @@
           "group": "more@2"
         },
         {
+          "command": "runic.dependencies.build",
+          "when": "view == runic.devSession",
+          "group": "more@3"
+        },
+        {
           "command": "runic.viewModels.refresh",
           "when": "view == runic.viewModels",
           "group": "navigation"
@@ -383,6 +421,16 @@
           "command": "runic.dev.debugWindow",
           "when": "view == runic.devSession && viewItem =~ /^runic(Project|Dev)\\./",
           "group": "inline@2"
+        },
+        {
+          "command": "runic.dependencies.build",
+          "when": "view == runic.devSession && viewItem == runicDependencies",
+          "group": "inline@1"
+        },
+        {
+          "command": "runic.dependencies.openPackage",
+          "when": "view == runic.devSession && viewItem =~ /^runicDependency\\./",
+          "group": "inline@1"
         }
       ],
       "commandPalette": [
@@ -392,6 +440,14 @@
         },
         {
           "command": "runic.translations.refreshStatusView",
+          "when": "false"
+        },
+        {
+          "command": "runic.dependencies.openPackage",
+          "when": "false"
+        },
+        {
+          "command": "runic.dependencies.run",
           "when": "false"
         }
       ]
@@ -600,7 +656,7 @@
   "scripts": {
     "build": "bun build src/extension.ts --target=node --format=cjs --external=vscode --outfile=dist/extension.cjs && node package-assets.mjs",
     "check": "tsc --noEmit",
-    "test": "bun test test/unit.test.ts test/sdk.test.ts test/protocol.test.ts",
+    "test": "bun test test/unit.test.ts test/sdk.test.ts test/protocol.test.ts test/dependencies.test.ts",
     "test:host": "node test/run-host.mjs",
     "test:host:protocol2": "RUNIC_TRANSLATIONS_PROTOCOL=2 node test/run-host.mjs",
     "package": "bun run build && node package.mjs"

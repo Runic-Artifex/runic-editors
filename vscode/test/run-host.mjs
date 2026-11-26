@@ -50,6 +50,8 @@ try {
   await translations(second);
   const app = join(temporary, 'app');
   await cp(join(repository, 'fixtures/sdk-app'), app, { recursive: true });
+  // A client library beside the Window project (devtools-library-dx S8): no dev target, a frontend dependency.
+  await cp(join(repository, 'fixtures/sdk-library'), app, { recursive: true, filter: source => !source.endsWith('README.md') });
   const doctorEnvelope = { protocol: 'runic.commandline/1', command: 'doctor', success: true, exitCode: 0, payloadType: 'runic.application.tool.doctor/1', fault: null, diagnostics: [], payload: {
     project: join(app, 'App.csproj'), host: 'desktop', target: null, healthy: false, summary: { passed: 1, warnings: 1, failed: 1 }, hosts: ['desktop'], checks: [
       { id: 'dotnet-sdk', status: 'pass', message: '.NET SDK 10.0.403.', remediation: null },

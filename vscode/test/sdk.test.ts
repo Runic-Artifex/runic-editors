@@ -44,7 +44,7 @@ test("workspace detection tells an SDK workspace from a Translations-only one an
     mkdirSync(join(root, "translations-only", "src"), { recursive: true });
     writeFileSync(join(root, "translations-only", "runic.json"), "{}");
     writeFileSync(join(root, "translations-only", "src", "Library.csproj"), `<Project><ItemGroup><PackageReference Include="Runic.Translations" Version="0.11.0" /></ItemGroup></Project>`);
-    expect(detectWorkspace(join(root, "translations-only"))).toEqual({ sdkProjects: [], translationsProjects: [join(root, "translations-only", "runic.json")] });
+    expect(detectWorkspace(join(root, "translations-only"))).toEqual({ sdkProjects: [], windowProjects: [], translationsProjects: [join(root, "translations-only", "runic.json")] });
     // SDK: a template app (Window project with translations/runic.json); copies in bin/obj/node_modules are ignored.
     const app = join(root, "app");
     for (const directory of ["translations", "obj/Debug/net10.0", "bin/Debug", "Frontend/node_modules/pkg"]) mkdirSync(join(app, directory), { recursive: true });
@@ -54,7 +54,7 @@ test("workspace detection tells an SDK workspace from a Translations-only one an
     writeFileSync(join(app, "bin", "Debug", "Copy.csproj"), window);
     writeFileSync(join(app, "Frontend", "node_modules", "pkg", "runic.json"), "{}");
     writeFileSync(join(app, "translations", "runic.json"), "{}");
-    expect(detectWorkspace(app)).toEqual({ sdkProjects: [join(app, "App.csproj")], translationsProjects: [join(app, "translations", "runic.json")] });
+    expect(detectWorkspace(app)).toEqual({ sdkProjects: [join(app, "App.csproj")], windowProjects: [join(app, "App.csproj")], translationsProjects: [join(app, "translations", "runic.json")] });
     // A workspace of both finds both; a project below the search depth is not found.
     expect(detectWorkspace(root).sdkProjects).toEqual([join(app, "App.csproj")]);
     mkdirSync(join(root, "a", "b", "c", "d", "e"), { recursive: true });

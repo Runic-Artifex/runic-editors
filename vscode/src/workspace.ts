@@ -6,7 +6,12 @@ import { basename, dirname, join } from "node:path";
  * SDK package) and Translations projects (`runic.json`). The Runic SDK views show only for the first; a Translations-only
  * workspace gets the same extension without them.
  */
-export interface WorkspaceKind { sdkProjects: string[]; translationsProjects: string[] }
+export interface WorkspaceKind {
+  sdkProjects: string[];
+  /** The Runic SDK projects that `dotnet runic dev` runs ({@link isWindowProject}); the others are libraries or tests. */
+  windowProjects: string[];
+  translationsProjects: string[];
+}
 
 /** Directories never searched: build output, package installs and version control. */
 const skipped = new Set(["bin", "obj", "node_modules", "artifacts", "dist", "www"]);
@@ -21,6 +26,24 @@ export const searchDepth = 4;
 export function isRunicSdkProject(projectText: string): boolean {
   if (/<RunicApplicationFrontendWindowProject>\s*true\s*</i.test(projectText)) return true;
   return /<(?:PackageReference|ProjectReference)\b[^>]*\bInclude\s*=\s*"[^"]*\bRunic\.(?:Application|Desktop|Platform)\b[^"]*"/i.test(projectText);
+}
+
+/**
+ * True for a Runic SDK project that `dotnet runic dev` can run, a Window project: one that sets
+ * `RunicApplicationFrontendWindowProject`, or an executable (`OutputType` `Exe` or `WinExe`, or the Web and Worker SDKs
+ * without an `OutputType`) that is neither a client library (`RunicApplicationFrontendClientLibrary`) nor a test
+ * project (`IsTestProject`, or a reference to a test framework or `Runic.Application.Testing`). A library is not one:
+ * `dev` stops on it with RAPPDEV1005, so DevKit lists it as a dependency of the Window project instead
+ * (devtools-library-dx §4.1).
+ */
+export function isWindowProject(projectText: string): boolean {
+  if (!isRunicSdkProject(projectText)) return false;
+  if (/<RunicApplicationFrontendWindowProject>\s*true\s*</i.test(projectText)) return true;
+  if (/<RunicApplicationFrontendClientLibrary>\s*true\s*</i.test(projectText) || /<IsTestProject>\s*true\s*</i.test(projectText)) return false;
+  if (/<(?:PackageReference|ProjectReference)\b[^>]*\bInclude\s*=\s*"[^"]*\b(?:Microsoft\.NET\.Test\.Sdk|TUnit|xunit(?:\.v3)?|NUnit|MSTest(?:\.Sdk)?|Runic\.Application\.Testing)\b[^"]*"/i.test(projectText)) return false;
+  const outputs = [...projectText.matchAll(/<OutputType(?:\s[^>]*)?>\s*([A-Za-z]+)\s*</gi)].map(match => match[1].toLowerCase());
+  if (outputs.length) return outputs.some(output => output === "exe" || output === "winexe");
+  return /<Project\b[^>]*\bSdk\s*=\s*"Microsoft\.NET\.Sdk\.(?:Web|Worker)\b/i.test(projectText);
 }
 
 /**
@@ -130,6 +153,7 @@ export function projectCoreTool(project: string): ManifestTool | undefined {
 /** Finds the Runic SDK and Translations projects below `root` (at most `searchDepth` levels), sorted. */
 export function detectWorkspace(root: string, depth = searchDepth): WorkspaceKind {
   const sdkProjects: string[] = [];
+  const windowProjects: string[] = [];
   const translationsProjects: string[] = [];
   const visit = (directory: string, level: number) => {
     let entries;
@@ -141,6 +165,7 @@ export function detectWorkspace(root: string, depth = searchDepth): WorkspaceKin
           let text = "";
           try { text = readFileSync(path, "utf8"); } catch { /* An unreadable project is not one. */ }
           if (isRunicSdkProject(text)) sdkProjects.push(path);
+          if (isWindowProject(text)) windowProjects.push(path);
         } else if (entry.name === "runic.json") translationsProjects.push(path);
       } else if (entry.isDirectory() && level < depth && !entry.name.startsWith(".") && !skipped.has(entry.name)) {
         visit(path, level + 1);
@@ -148,7 +173,7 @@ export function detectWorkspace(root: string, depth = searchDepth): WorkspaceKin
     }
   };
   visit(root, 0);
-  return { sdkProjects: sdkProjects.sort(), translationsProjects: translationsProjects.sort() };
+  return { sdkProjects: sdkProjects.sort(), windowProjects: windowProjects.sort(), translationsProjects: translationsProjects.sort() };
 }
 
 /** The core tool version of the nearest tool manifest at or above the project's directory, if any. */
