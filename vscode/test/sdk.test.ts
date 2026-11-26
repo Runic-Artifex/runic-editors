@@ -322,7 +322,8 @@ test("the follower reads a session file that dev replaces atomically, and a real
     const stamp = statSync(follower.stoppedStampPath);
     expect(stamp.size).toBe(0);
     expect(stamp.mtimeMs).toBeGreaterThanOrEqual(before);
-    expect(stamp.mtimeMs).toBeGreaterThanOrEqual(statSync(follower.path).mtimeMs);
+    // The touch sets whole milliseconds (utimes with a Date), and the session file's time may have a fraction of the same one.
+    expect(stamp.mtimeMs).toBeGreaterThanOrEqual(Math.floor(statSync(follower.path).mtimeMs));
     expect(logs.at(-1)).toContain("touched");
     // A missing obj/runic is logged, not thrown.
     const other = join(root, "Other", "Other.csproj");
