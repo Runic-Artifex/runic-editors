@@ -116,6 +116,11 @@ public sealed class DevSessionFile
     public IReadOnlyList<DevDebugEndpoint> DebugEndpoints { get; private set; } = Array.Empty<DevDebugEndpoint>();
     /// <summary>Endpoints the environment asks for that the engine does not open, with the reason; since 0.20.</summary>
     public IReadOnlyList<DevDebugEndpoint> UnavailableDebugEndpoints { get; private set; } = Array.Empty<DevDebugEndpoint>();
+    /// <summary>
+    /// The frontend packages the page depends on, dependencies first; since runic-sdk 0.24. Null for a file of an older
+    /// <c>dev</c>, which has no <c>dependencies</c> (then the build's graph file is read instead).
+    /// </summary>
+    public IReadOnlyList<DevDependency>? Dependencies { get; private set; }
 
     /// <summary>The development server's address, else the first page's: what Open the Development Server opens.</summary>
     public string? ServerUrl => Frontend?.Url ?? Pages.FirstOrDefault(page => page.Url != null)?.Url;
@@ -155,6 +160,8 @@ public sealed class DevSessionFile
             UnavailableDebugEndpoints = (Json.Array(Json.Get(value, "unavailableDebugEndpoints")) ?? new List<object?>()).Select(Json.Object)
                 .Where(endpoint => Json.String(endpoint, "engine") != null)
                 .Select(endpoint => new DevDebugEndpoint(Json.String(endpoint, "engine")!, Json.String(endpoint, "protocol") ?? "", Json.String(endpoint, "url") ?? "", Json.String(endpoint, "reason"))).ToList(),
+            Dependencies = Json.Array(Json.Get(value, "dependencies")) is { } dependencies
+                ? dependencies.Select(entry => DevDependency.Parse(Json.Object(entry))).OfType<DevDependency>().ToList() : null,
         };
     }
 

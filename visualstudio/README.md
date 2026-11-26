@@ -133,6 +133,22 @@ catalog. A build error leaves the Error List once `dev` reports `[dev] Ready`
 again after the fix, and all entries go at the next build cycle (`[dev]
 Evaluating`, with the Window also `Window exited` and `Reloading`).
 
+**Frontend dependencies.** A page can import the frontend packages of other
+projects: a client library's package or a JavaScript workspace package
+([Library packages](https://github.com/Runic-Artifex/runic-sdk/blob/main/packages/dotnet/Runic.Application.Views/README.md#library-packages),
+runic-sdk 0.24). The **Dev Session** section lists them under **Frontend
+dependencies**, dependencies first. Each row shows the owning project, the
+state (`built`, `building`, `failed` with `dev`'s message below it, `not built`
+when an exported file is missing, `source`, `build off`) and how `dev` keeps it
+current. Double-clicking a row opens its `package.json`. While `dev` runs the
+rows come from the session file's `dependencies` (`dotnet-runic` 0.24).
+Otherwise, and with an older `dev` whose session file has none, they come from
+the graph the last build wrote (`obj/runic/frontend-graph.json`); a build
+refreshes them. Visual Studio needs no step of its own: building the startup
+project (F5) builds its references through MSBuild, and the Views targets
+install the workspace and build each package first. The section only shows the
+result.
+
 Frontend errors are in the Error List from `dotnet-runic` 0.23 on. `dev` prints
 each Vite error as one line in MSBuild's form after its `[vite] ` label, with
 code `RUNICP008` (`[vite] /…/Frontend/src/App.tsx(29,50): error RUNICP008:
@@ -486,6 +502,7 @@ work when the settings are empty; set them before starting Visual Studio.
 | Dev session follow | Session file watcher and 2 s poll; liveness by process ID and start time; a killed `dev` gets `obj/runic/dev-stopped` | Watcher and 2 s poll; process command line or image; the same `dev-stopped` touch |
 | Open the Development Server, Open the dev Session File | Tools → Runic, tool window toolbar | Commands |
 | Dev Session view: state, server, Window owner or process, pages, debug endpoints, generated clients | Runic tool window, Dev Session section; toolbar buttons enabled per state; state changes in the status bar text | Dev Session view; "Runic dev" status bar item |
+| Frontend dependencies (runic-sdk 0.24): one row per package with owner, state, watcher and failure | Dev Session section, from the session file's `dependencies` or the build's `frontend-graph.json`; F5 builds them through MSBuild | Dev Session view, plus Build Frontend Dependencies, the fresh-clone install offer and quick fixes for the dependency diagnostics |
 | F5 with `dev --no-window` | Pre-F5 question: start `dev --no-window` (then launch once it is ready) or continue without it | `runic` debug type starts it |
 | Debug the Window: .NET and page breakpoints in one session | Tools → Runic, tool window toolbar: starts `dev --no-window`, builds, launches the Window under the .NET debugger with the session file's Window environment and a DevTools Protocol port, then attaches the JavaScript debugger over CDP (no 30-second limit) | `runic` debug type (`coreclr`) and the template's compound with the `msedge` attach |
 | Attach to the Page (JavaScript) | Tools → Runic, tool window toolbar: the session file's WebView2 and CS-WebUI (0.22) `debugEndpoints` and the Windows Debug the Window started; a picker when there are several | Attach configuration |
