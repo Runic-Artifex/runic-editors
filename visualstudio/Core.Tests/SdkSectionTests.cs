@@ -232,7 +232,9 @@ public class SdkSectionTests
     {
         string app = Path.Combine(Repository, "fixtures", "sdk-app", "App.csproj");
         Check.Same(new[] { app }, RunicSdkProjects.Find(new[] { app, app, Path.Combine(Repository, "fixtures", "rmf2", "runic.json"), "Miscellaneous Files" }));
-        Check.Same(new[] { app }, RunicSdkProjects.Scan(Path.Combine(Repository, "fixtures")));
+        // fixtures/sdk-library's client library (the VS Code host test's dependency) is a Runic SDK project too.
+        string library = Path.Combine(Repository, "fixtures", "sdk-library", "SharedUi", "SharedUi.csproj");
+        Check.Same(new[] { app, library }, RunicSdkProjects.Scan(Path.Combine(Repository, "fixtures")));
         Check.True(RunicSdkProjects.IsSdkProject("<Project><ItemGroup><ProjectReference Include=\"../Runic.Desktop.Host/Runic.Desktop.Host.csproj\" /></ItemGroup></Project>"), "Runic.Desktop reference");
         Check.True(!RunicSdkProjects.IsSdkProject("<Project><ItemGroup><PackageReference Include=\"Runic.Translations.Runtime\" Version=\"0.13.0\" /></ItemGroup></Project>"), "Translations only");
     }

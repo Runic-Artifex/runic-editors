@@ -7,3 +7,4 @@ not a `dev` target. The test writes the files the build and `dotnet runic dev` w
 `obj/runic/frontend-graph.json`, a session file with `dependencies`, `shared-ui/dist/`) and the workspace files of a
 fresh clone; nothing is built or installed. `shared-ui/package.json` declares another package manager than the
 workspace the test writes, for the `RUNICBRIDGE089` quick fix.
+The Visual Studio Core tests' scan of `fixtures/` (`SdkSectionTests`) finds the library as a Runic SDK project too.
