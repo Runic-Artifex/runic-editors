@@ -205,17 +205,73 @@ without a `launch.json`, it uses the extension's `runic` configuration:
 
 ```jsonc
 // .vscode/launch.json
-{ "type": "runic", "request": "launch", "name": "Runic: Window" }  // optional "project", "env"
+{ "type": "runic", "request": "launch", "name": "Runic: Window" }
 ```
 
 It starts `dotnet runic dev --no-window` (or reuses one that runs; a `dev` that
 runs the Window itself is restarted after you confirm), waits until the session
 file says ready, builds the project, and starts the program that `dotnet run`
 would start (MSBuild's `RunCommand`; on macOS the development bundle's
-executable) under the C# extension's `coreclr` debugger, with the environment the
-session file names for it (`DOTNET_ENVIRONMENT=Development`, and
-`RUNIC_APPLICATION_DEVELOPMENT_ASSETS` without a development server). It needs the
+executable) under the C# extension's `coreclr` debugger. It needs the
 [C# extension](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp).
+
+**Run and Debug** lists one `runic` entry per Window project and `Project`
+launch profile ("Runic: Acme.App (Mock data)"; "Runic: Acme.App" when the
+project has one profile or none), and a new `launch.json` gets the same entries.
+
+**Arguments, variables and working directory.** DevKit builds the Window's
+command line the same way for every launch:
+
+1. **Arguments:** the project's (MSBuild's `RunArguments`, which the SDK makes
+   from `StartArguments`), then the launch profile's `commandLineArgs`, then the
+   configuration's `args`. All three are passed; `dotnet run` alone drops the
+   profile's arguments when the project sets some. Each command line is split as
+   .NET splits one, so `/config:"C:\Program Files\Acme\dev.json"` stays one
+   argument with its backslashes, and slash options such as `/mock` pass
+   unchanged.
+2. **Variables**, lowest first: `DOTNET_ENVIRONMENT=Development`, the profile's
+   `environmentVariables`, `envFile`, `env`, and last the variables the session
+   file names for the Window (`RUNIC_APPLICATION_DEVELOPMENT_ASSETS` without a
+   development server).
+3. **Working directory:** `cwd`, else the profile's `workingDirectory` (relative
+   to the project folder), else MSBuild's `RunWorkingDirectory`, else the
+   project folder.
+
+The profile is the first `Project` profile of the project's
+`Properties/launchSettings.json`, or the one `launchProfile` names (`null` for
+none). DevKit applies it itself, so the C# debugger does not apply it again.
+
+| Attribute | |
+| --- | --- |
+| `project` | The Window's project, relative to the workspace folder; optional with one Window project |
+| `launchProfile` | A `Project` profile's name, or `null` for none; the C# debugger's `launchSettingsProfile` is read the same way. A name that isn't a `Project` profile stops F5 with an error |
+| `launchSettingsFilePath` | Another `launchSettings.json` |
+| `args` | More arguments, after the project's and the profile's: an array as it is, or a command line |
+| `cwd`, `env`, `envFile` | As in a `coreclr` configuration, in the order above |
+| `devArgs` | More options for the `dotnet runic dev --no-window` that F5 starts (not for one that already runs); they replace the profile's `rax.devArguments` |
+
+Every other attribute (`console`, `stopAtEntry`, `justMyCode`, `logging`,
+`symbolOptions`, …) is passed to the C# debugger unchanged, including options of
+a newer C# extension that DevKit doesn't list.
+
+**Arguments for Debug builds only**, such as a `/mock` mode, go in MSBuild's
+`StartArguments`, in a `PropertyGroup` for the Debug configuration.
+`launchSettings.json` has no configuration conditions, so a profile's
+`commandLineArgs` reach Release runs too:
+
+```xml
+<PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+  <StartArguments>/mock</StartArguments>
+</PropertyGroup>
+```
+
+`dotnet run`, `dotnet runic dev`, Visual Studio's F5 and DevKit's F5 all pass
+it, with or without an application host, and Release builds don't get it.
+Don't set `RunArguments` itself: without an application host it holds
+`exec "<dll>"`. Keep profiles, variables, the working directory and per-run
+arguments in `launchSettings.json`. A plain `coreclr` configuration (the
+template's "Window") reads the first profile but not `StartArguments`; give it
+`args` instead.
 
 ### Frontend dependencies
 

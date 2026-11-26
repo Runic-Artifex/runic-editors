@@ -14,6 +14,8 @@ import { execFileSync, spawn } from 'node:child_process';
 // The workspace has a second folder, a copy of fixtures/sdk-app (a Runic SDK project), for the Runic SDK features: a
 // stand-in for `dotnet runic dev` (a process whose command line names dotnet-runic.dll with dev) gives the session file
 // a live process ID, and a stand-in `dotnet` (runic.dotnetPath of that folder) answers `dotnet runic doctor`.
+// F5 of the `runic` type runs against test/coreclr-stand-in, a second development extension that stands in for the C#
+// extension's coreclr debugger and records the launch request.
 // A third folder, another copy of fixtures/rmf2, gives the test a second language server (multi-root).
 const extension = fileURLToPath(new URL('../', import.meta.url));
 const repository = resolve(extension, '..');
@@ -23,6 +25,10 @@ const environment = { ...process.env, ELECTRON_ENABLE_LOGGING: '1', RUNIC_VSCODE
 const fakeDev = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', '/tools/dotnet-runic.dll', 'dev'], { stdio: 'ignore' });
 await new Promise((accept, reject) => { fakeDev.once('spawn', accept); fakeDev.once('error', reject); });
 environment.RUNIC_FAKE_DEV_PID = String(fakeDev.pid);
+// A second stand-in dev for the F5 test, which the session test above does not kill.
+const fakeF5Dev = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', '/tools/dotnet-runic.dll', 'dev', '--no-window'], { stdio: 'ignore' });
+await new Promise((accept, reject) => { fakeF5Dev.once('spawn', accept); fakeF5Dev.once('error', reject); });
+environment.RUNIC_FAKE_F5_DEV_PID = String(fakeF5Dev.pid);
 if (process.env.WAYLAND_DISPLAY && !process.env.WAYLAND_DISPLAY.startsWith('/') && process.env.XDG_RUNTIME_DIR) environment.WAYLAND_DISPLAY = join(process.env.XDG_RUNTIME_DIR, process.env.WAYLAND_DISPLAY);
 await mkdir(environment.XDG_RUNTIME_DIR, { mode: 0o700 });
 for (const name of ['VSCODE_IPC_HOOK_CLI', 'VSCODE_CLI', 'ELECTRON_RUN_AS_NODE']) delete environment[name];
@@ -58,7 +64,8 @@ try {
       { id: 'lock-file', status: 'warn', message: 'The frontend has no lock file.', remediation: 'Run npm install in Frontend.' },
       { id: 'desktop-runtime', status: 'fail', message: 'WebKitGTK 4.1 is missing.', remediation: 'Install webkitgtk_4_1.' }] } };
   await writeFile(join(app, 'doctor.json'), JSON.stringify(doctorEnvelope));
-  await writeFile(join(app, 'fake-dotnet.sh'), `#!/bin/sh\nif [ "$1" = runic ] && [ "$2" = doctor ]; then cat '${join(app, 'doctor.json')}'; exit 0; fi\necho "fake dotnet: $*" >&2; exit 1\n`);
+  // It also builds nothing for F5 and answers dotnet msbuild -getProperty (the Window's run properties) from run-properties.json.
+  await writeFile(join(app, 'fake-dotnet.sh'), `#!/bin/sh\nif [ "$1" = runic ] && [ "$2" = doctor ]; then cat '${join(app, 'doctor.json')}'; exit 0; fi\nif [ "$1" = build ]; then exit 0; fi\nif [ "$1" = msbuild ]; then cat '${join(app, 'run-properties.json')}'; exit 0; fi\necho "fake dotnet: $*" >&2; exit 1\n`);
   await chmod(join(app, 'fake-dotnet.sh'), 0o755);
   await mkdir(join(app, '.vscode'));
   await writeFile(join(app, '.vscode/settings.json'), JSON.stringify({ 'runic.dotnetPath': join(app, 'fake-dotnet.sh') }));
@@ -69,7 +76,7 @@ try {
   await writeFile(join(temporary, 'profile', 'User', 'settings.json'), JSON.stringify({ 'files.enableTrash': false, 'runic.translations.trace.server': 'messages' }));
   const workspaceFile = join(temporary, 'runic.code-workspace');
   await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: workspace }, { path: app }, { path: second }] }));
-  const child = spawn(process.env.VSCODE_EXECUTABLE_PATH || 'code', ['--new-window', '--wait', '--no-sandbox', '--disable-gpu', '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--log', 'runic-artifex.runic-devkit:trace', '--user-data-dir', join(temporary, 'profile'), '--extensions-dir', join(temporary, 'extensions'), `--extensionDevelopmentPath=${extension}`, `--extensionTestsPath=${join(extension, 'test/host.cjs')}`, workspaceFile], { stdio: 'inherit', env: environment });
+  const child = spawn(process.env.VSCODE_EXECUTABLE_PATH || 'code', ['--new-window', '--wait', '--no-sandbox', '--disable-gpu', '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--log', 'runic-artifex.runic-devkit:trace', '--user-data-dir', join(temporary, 'profile'), '--extensions-dir', join(temporary, 'extensions'), `--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${join(extension, 'test/coreclr-stand-in')}`, `--extensionTestsPath=${join(extension, 'test/host.cjs')}`, workspaceFile], { stdio: 'inherit', env: environment });
   const timeout = setTimeout(() => child.kill('SIGTERM'), 120000);
   const result = await new Promise((accept, reject) => { child.once('error', reject); child.once('exit', accept); });
   clearTimeout(timeout);
@@ -80,7 +87,7 @@ try {
   if (result !== 0) throw new Error(`VS Code host tests exited with ${result}`);
   passed = true;
 } finally {
-  fakeDev.kill('SIGKILL');
+  fakeDev.kill('SIGKILL'); fakeF5Dev.kill('SIGKILL');
   if (!passed) { await mkdir(join(extension, 'artifacts'), { recursive: true }); await cp(join(temporary, 'profile'), join(extension, 'artifacts/host-failure'), { recursive: true }).catch(() => {}); }
   // RUNIC_HOST_KEEP=1 keeps the temporary workspace and profile (with the logs) of a passing run too.
   if (process.env.RUNIC_HOST_KEEP) console.log(`Kept ${temporary}`);

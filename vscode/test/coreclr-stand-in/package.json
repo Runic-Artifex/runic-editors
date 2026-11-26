@@ -1,0 +1,14 @@
+{
+  "name": "coreclr-stand-in",
+  "displayName": "coreclr stand-in (Runic DevKit host test)",
+  "description": "A stand-in for the C# extension's coreclr debugger in the VS Code host test: it records each launch request and runs nothing.",
+  "publisher": "runic-artifex-tests",
+  "version": "0.0.0",
+  "private": true,
+  "engines": { "vscode": "^1.100.0" },
+  "activationEvents": ["onDebug"],
+  "main": "./extension.js",
+  "contributes": {
+    "debuggers": [{ "type": "coreclr", "label": "coreclr stand-in", "languages": ["csharp"] }]
+  }
+}

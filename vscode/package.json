@@ -570,12 +570,128 @@
                 "type": "string",
                 "description": "The Window's project file, relative to the workspace folder; optional with one Runic SDK project."
               },
+              "launchProfile": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The \"Project\" profile of the project's Properties/launchSettings.json whose commandLineArgs, environmentVariables and workingDirectory the Window gets. No value: the first \"Project\" profile, as dotnet run chooses; null: none. DevKit applies it, so the C# debugger does not apply it again."
+              },
+              "launchSettingsProfile": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The C# debugger's name for launchProfile, read the same way; launchProfile wins when both are set."
+              },
+              "launchSettingsFilePath": {
+                "type": "string",
+                "description": "A launchSettings.json other than the project's Properties/launchSettings.json; relative to the workspace folder."
+              },
+              "args": {
+                "anyOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "description": "More arguments for the Window, after the project's (StartArguments, as RunArguments) and the launch profile's commandLineArgs. An array is passed as it is; a string is split as .NET splits a command line. Arguments for Debug builds only belong in StartArguments in a Debug PropertyGroup."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The Window's working directory. Default: the launch profile's workingDirectory (relative to the project folder), else MSBuild's RunWorkingDirectory, else the project folder."
+              },
               "env": {
                 "type": "object",
                 "additionalProperties": {
                   "type": "string"
                 },
-                "description": "More environment variables for the Window, besides the ones the dev session file names."
+                "description": "More environment variables for the Window, over the launch profile's and envFile's. The dev session's Runic variables are set last."
+              },
+              "envFile": {
+                "type": "string",
+                "description": "A .env file (NAME=value lines) of environment variables for the Window, over the launch profile's and under env. Relative to the workspace folder."
+              },
+              "devArgs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "More options for the dotnet runic dev --no-window that DevKit starts before the Window (not for a dev that already runs). Replaces the launch profile's rax.devArguments."
+              },
+              "console": {
+                "enum": [
+                  "internalConsole",
+                  "integratedTerminal",
+                  "externalTerminal"
+                ],
+                "default": "internalConsole",
+                "description": "Where the Window's console output goes. Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "stopAtEntry": {
+                "type": "boolean",
+                "description": "Stop at the Window's entry point. Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "justMyCode": {
+                "type": "boolean",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "requireExactSource": {
+                "type": "boolean",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "enableStepFiltering": {
+                "type": "boolean",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "suppressJITOptimizations": {
+                "type": "boolean",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "symbolOptions": {
+                "type": "object",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "sourceFileMap": {
+                "type": "object",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "sourceLinkOptions": {
+                "type": "object",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "expressionEvaluationOptions": {
+                "type": "object",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "logging": {
+                "type": "object",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "pipeTransport": {
+                "type": "object",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "targetArchitecture": {
+                "type": "string",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "targetOutputLogPath": {
+                "type": "string",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "terminateChildProcesses": {
+                "type": "boolean",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
+              },
+              "checkForDevCert": {
+                "type": "boolean",
+                "description": "Passed to the C# debugger unchanged (see the C# extension's coreclr launch options)."
               }
             }
           }
@@ -656,7 +772,7 @@
   "scripts": {
     "build": "bun build src/extension.ts --target=node --format=cjs --external=vscode --outfile=dist/extension.cjs && node package-assets.mjs",
     "check": "tsc --noEmit",
-    "test": "bun test test/unit.test.ts test/sdk.test.ts test/protocol.test.ts test/dependencies.test.ts",
+    "test": "bun test test/unit.test.ts test/sdk.test.ts test/launch.test.ts test/protocol.test.ts test/dependencies.test.ts",
     "test:host": "node test/run-host.mjs",
     "test:host:protocol2": "RUNIC_TRANSLATIONS_PROTOCOL=2 node test/run-host.mjs",
     "package": "bun run build && node package.mjs"
