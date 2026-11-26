@@ -42,7 +42,7 @@ internal sealed class RunicSdkState
         return RunicSettings.Dotnet(options.DotnetPath, Environment.GetEnvironmentVariable(RunicSettings.DotnetVariable));
     }
 
-    private readonly Dictionary<string, FileSystemWatcher> watchers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FileSystemWatcher[]> watchers = new(StringComparer.OrdinalIgnoreCase);
     private readonly object gate = new();
     private IReadOnlyList<SdkProjectState> projects = Array.Empty<SdkProjectState>();
     private IReadOnlyDictionary<string, IVsHierarchy> hierarchies = new Dictionary<string, IVsHierarchy>();
@@ -184,31 +184,44 @@ internal sealed class RunicSdkState
         catch (Exception error) { SdkOutput.WriteLine("Could not find the Runic SDK projects: " + error.Message); }
     });
 
-    /// <summary>As VS Code's <c>**/obj/**/runic-bridge/sources.json</c> watcher: a build or <c>dev</c> reloads the tree, debounced.</summary>
+    /// <summary>
+    /// As VS Code's <c>**/obj/**/runic-bridge/sources.json</c> and <c>**/obj/{runic,rax}/frontend-graph.json</c>
+    /// watchers: a build or <c>dev</c> reloads the ViewModels tree and the Dev Session section's frontend dependencies,
+    /// debounced.
+    /// </summary>
     private void Watch(IEnumerable<string> projectFiles)
     {
         var wanted = new HashSet<string>(projectFiles.Select(project => Path.GetDirectoryName(project)!).Where(directory => !string.IsNullOrEmpty(directory)), StringComparer.OrdinalIgnoreCase);
         foreach (string directory in watchers.Keys.Where(directory => !wanted.Contains(directory)).ToList())
         {
-            watchers[directory].Dispose();
+            foreach (var watcher in watchers[directory]) watcher.Dispose();
             watchers.Remove(directory);
         }
         foreach (string directory in wanted.Where(directory => !watchers.ContainsKey(directory)))
         {
             try
             {
-                var watcher = new FileSystemWatcher(directory, "sources.json") { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime };
-                FileSystemEventHandler changed = (_, args) => { if (args.FullPath.IndexOf("runic-bridge", StringComparison.OrdinalIgnoreCase) >= 0) ScheduleReload(); };
-                watcher.Created += changed; watcher.Changed += changed; watcher.Deleted += changed;
-                watcher.Renamed += (_, args) => changed(watcher, args);
-                watcher.EnableRaisingEvents = true;
-                watchers[directory] = watcher;
+                watchers[directory] = new[]
+                {
+                    Watcher(directory, "sources.json", path => path.IndexOf("runic-bridge", StringComparison.OrdinalIgnoreCase) >= 0),
+                    Watcher(directory, "frontend-graph.json", path => path.IndexOf("obj", StringComparison.OrdinalIgnoreCase) >= 0),
+                };
             }
             catch (Exception error) when (error is ArgumentException or IOException)
             {
                 Trace.WriteLine("Runic: cannot watch " + directory + ": " + error.Message);
             }
         }
+    }
+
+    private FileSystemWatcher Watcher(string directory, string name, Func<string, bool> wanted)
+    {
+        var watcher = new FileSystemWatcher(directory, name) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime };
+        FileSystemEventHandler changed = (_, args) => { if (wanted(args.FullPath)) ScheduleReload(); };
+        watcher.Created += changed; watcher.Changed += changed; watcher.Deleted += changed;
+        watcher.Renamed += (_, args) => changed(watcher, args);
+        watcher.EnableRaisingEvents = true;
+        return watcher;
     }
 
     private void ScheduleReload()

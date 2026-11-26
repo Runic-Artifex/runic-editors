@@ -16,9 +16,76 @@ public static class DevSessionRows
     public const string Welcome = "dotnet runic dev serves the frontend and runs the Window with hot reload. Start it here, or press F5 to start it with --no-window.";
 
     public static IReadOnlyList<TreeRow> Build(IReadOnlyList<SdkProjectState> projects, Func<string, DevSnapshot> snapshotOf)
-        => SdkSections.PerProject(projects, state => Details(state.Project, snapshotOf(state.Project)), state => snapshotOf(state.Project).Label);
+        => SdkSections.PerProject(projects, state =>
+        {
+            var snapshot = snapshotOf(state.Project);
+            return Details(state.Project, snapshot, FrontendDependencies.Read(state.Project, snapshot));
+        }, state => snapshotOf(state.Project).Label);
 
-    public static IReadOnlyList<TreeRow> Details(string project, DevSnapshot snapshot)
+    /// <summary>
+    /// The rows of one project; <paramref name="dependencies"/> (<see cref="FrontendDependencies.Read"/>) adds the
+    /// Frontend dependencies row, while <c>dev</c> runs and also when it does not.
+    /// </summary>
+    public static IReadOnlyList<TreeRow> Details(string project, DevSnapshot snapshot, DependencyList? dependencies = null)
+    {
+        var rows = SessionRows(project, snapshot);
+        if (DependencyRow(project, dependencies) is { } row) rows.Add(row);
+        return rows;
+    }
+
+    /// <summary>
+    /// "Frontend dependencies" with one row per package (VS Code: <c>dependencyRows</c>): its owner, state and watcher,
+    /// and a failure's message below it. A row opens the package's package.json. Visual Studio's build (F5) builds them
+    /// through MSBuild, so the section offers no build or install of its own.
+    /// </summary>
+    public static TreeRow? DependencyRow(string project, DependencyList? list)
+    {
+        if (list == null || list.Dependencies.Count == 0) return null;
+        int count = list.Dependencies.Count, unbuilt = list.Dependencies.Count(item => item.NeedsBuild);
+        string source = list.Source switch { DependencySource.Session => "from dotnet runic dev", DependencySource.Graph => "from the last build", _ => "from the last dev session" };
+        var row = new TreeRow("Frontend dependencies", RowIcon.Folder, project)
+        {
+            Description = $"{count} package{(count == 1 ? "" : "s")}{(unbuilt > 0 ? $", {unbuilt} not built" : "")}",
+            Tooltip = $"The frontend packages {Path.GetFileName(project)}'s page imports, dependencies first, {source}. Building the project (F5) builds them.",
+            Expanded = true,
+        };
+        foreach (var dependency in list.Dependencies)
+        {
+            var child = new TreeRow(dependency.Label, dependency.State switch
+            {
+                "built" => RowIcon.Pass, "building" => RowIcon.Running, "failed" => RowIcon.Error, "missing-output" => RowIcon.Warning,
+                "source" => RowIcon.Page, "not-built" => RowIcon.NotRun, _ => RowIcon.None,
+            }, project)
+            {
+                Description = string.Join(" · ", new[] { dependency.OwnerName, dependency.StateLabel, dependency.WatchLabel }.Where(part => !string.IsNullOrEmpty(part))),
+                Tooltip = DependencyTooltip(dependency),
+                Action = RowAction.OpenFile,
+                Target = Path.Combine(dependency.Directory, "package.json"),
+                Expanded = dependency.Message != null,
+            };
+            if (dependency.Message != null) child.Children.Add(new TreeRow(dependency.Message, RowIcon.Error, project) { Tooltip = dependency.Message });
+            row.Children.Add(child);
+        }
+        return row;
+    }
+
+    private static string DependencyTooltip(DevDependency dependency)
+    {
+        var lines = new List<string>
+        {
+            $"{dependency.Label} ({dependency.Kind})",
+            dependency.Owner != null ? $"The frontend package of {dependency.OwnerName ?? Path.GetFileNameWithoutExtension(dependency.Owner)} ({dependency.Owner})." : "A workspace package that no .NET project owns.",
+            dependency.Directory,
+        };
+        if (dependency.Specifier != null) lines.Add("Imported as " + dependency.Specifier);
+        if (dependency.BuildCommand != null) lines.Add("Build: " + dependency.BuildCommand);
+        if (dependency.WatchCommand != null) lines.Add("Watch: " + dependency.WatchCommand);
+        if (dependency.State == "missing-output") lines.Add("Missing: an exported file. Build the project to build it.");
+        if (dependency.Message != null) lines.Add("\n" + dependency.Message);
+        return string.Join("\n", lines);
+    }
+
+    private static List<TreeRow> SessionRows(string project, DevSnapshot snapshot)
     {
         var session = snapshot.Session;
         var rows = new List<TreeRow>
