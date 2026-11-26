@@ -110,9 +110,18 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         var arguments = WindowDebug.RunPropertiesArguments(project, configuration);
         var result = await ToolProcess.RunAsync(dotnet, arguments, Path.GetDirectoryName(project) ?? Environment.CurrentDirectory, TimeSpan.FromMinutes(2), cancellationToken);
         if (result.ExitCode != 0) throw new InvalidOperationException($"dotnet msbuild could not read the run properties of {name}: {result.Detail}");
-        var program = WindowDebug.Program(project, WindowDebug.ParseRunProperties(result.Output));
-        var plan = WindowDebug.Plan(CurrentEnvironment(), session.Window?.Environment, WindowDebug.FreePort);
-        SdkOutput.WriteLine($"Debugging {program.Program} {program.CommandLineArguments} in {program.WorkingDirectory} with {string.Join(" ", plan.Added.Select(pair => pair.Key + "=" + pair.Value))}");
+        var visualStudio = CurrentEnvironment();
+        // The toolbar's launch profile, as F5 applies it (design/ide-run-debug B4): its arguments after the project's,
+        // its variables and its working directory.
+        string? activeName = await ActiveProfileNameAsync(project, cancellationToken);
+        await TaskScheduler.Default;
+        var active = LaunchProfiles.Read(project, activeName ?? LaunchProfiles.ActiveNameFromUserFile(project));
+        if (active.Note != null) SdkOutput.WriteLine("Debug the Window: " + active.Note + ".");
+        var profile = active.Profile?.Expand(visualStudio);
+        var program = WindowDebug.Program(project, WindowDebug.ParseRunProperties(result.Output), profile);
+        var plan = WindowDebug.Plan(visualStudio, session.Window?.Environment, WindowDebug.FreePort, profile?.EnvironmentVariables);
+        string from = program.Profile != null ? $" (launch profile {program.Profile})" : "";
+        SdkOutput.WriteLine($"Debugging {program.Program} {program.CommandLineArguments} in {program.WorkingDirectory}{from} with {string.Join(" ", plan.Added.Select(pair => pair.Key + "=" + pair.Value))}");
         if (plan.Host == PageHost.WebView2 && PageAttach.IsElevated())
             SdkOutput.WriteLine("Visual Studio runs as administrator: WebView2 ignores WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in an elevated Window, so the page's debugger cannot attach.");
         // A page breakpoint with "Break all processes" on would also stop the Window, and WebView2 with it (checklist row 10).
@@ -141,6 +150,26 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             VsClosing.ShowMessage(ServiceProvider.GlobalProvider, error.Message, OLEMSGICON.OLEMSGICON_WARNING);
         }
+    }
+
+    /// <summary>
+    /// The project's <c>ActiveDebugProfile</c> (the launch profile on the toolbar) from the project's user-file storage;
+    /// null when it names none or does not answer (then <c>&lt;project&gt;.user</c> is read, else the first profile is active).
+    /// </summary>
+    private static async Task<string?> ActiveProfileNameAsync(string project, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        if (RunicSdkState.Instance.Hierarchy(project) is IVsBuildPropertyStorage storage)
+        {
+            try
+            {
+                if (ErrorHandler.Succeeded(storage.GetPropertyValue(LaunchProfiles.ActiveDebugProfileProperty, null, (uint)_PersistStorageType.PST_USER_FILE, out string? value))
+                    && value?.Trim() is { Length: > 0 } name)
+                    return name;
+            }
+            catch (Exception error) when (error is COMException or NotImplementedException) { }
+        }
+        return null;
     }
 
     private static IReadOnlyDictionary<string, string> CurrentEnvironment()

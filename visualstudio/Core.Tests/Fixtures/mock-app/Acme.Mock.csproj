@@ -1,0 +1,11 @@
+<!-- Scenario M of design/ide-run-debug (REPRODUCTION.md): a Debug build starts only with /mock. Core.Tests read this
+     fixture's launch profiles; the run properties dotnet msbuild -getProperty gives for it are in LaunchProfilesTests. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <StartArguments>/mock</StartArguments>
+  </PropertyGroup>
+</Project>
