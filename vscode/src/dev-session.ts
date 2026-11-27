@@ -24,6 +24,47 @@ export interface DevSession {
   pages?: { document: string; file?: string; url?: string | null }[];
   window?: { owner?: "dev" | "ide"; program?: string; processId?: number | null; starts?: number; environment?: Record<string, string> };
   debugEndpoints?: { engine: string; protocol: string; url: string }[];
+  /** Why `dev` stopped, when a failure stopped it (runic-sdk 0.24, D087); read it with {@link sessionFailure}. */
+  failure?: unknown;
+}
+
+/** One diagnostic of a {@link DevSessionFailure}: the absolute file, 1-based line and column (1 when the file names none). */
+export interface DevFailureDiagnostic { file: string; line: number; column: number; severity: "error" | "warning"; code: string; message: string }
+
+/**
+ * The session file's `failure` (runic-sdk 0.24, D087, tools/dotnet-runic/README.md, "Session file"): `dev`'s code and
+ * message, the .NET project and the frontend package that failed, and the diagnostics of the step that failed, with
+ * `dev`'s own line last. `dev` writes it with `"state": "stopped"`, so it outlives the task that ran `dev`: VS Code
+ * removes a background task's problems when its process ends.
+ */
+export interface DevSessionFailure { code: string; message: string; project: string | null; package: string | null; diagnostics: DevFailureDiagnostic[] }
+
+/** The diagnostics a failure lists at most, as `dev` bounds them (runic-sdk `DevFailure.MaxDiagnostics`). */
+export const maxFailureDiagnostics = 100;
+
+const isRootedPath = (file: string) => file.startsWith("/") || file.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(file);
+const position = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : 1;
+
+/**
+ * The failure of a stopped session, or undefined: while `dev` runs, after a stop without a failure, and for a `dev`
+ * before 0.24, whose file has no `failure` (DevKit then shows what it showed before). Entries without an absolute file,
+ * a known severity, a code or a message are left out; at most {@link maxFailureDiagnostics}.
+ */
+export function sessionFailure(session: DevSession | undefined): DevSessionFailure | undefined {
+  if (session?.state !== "stopped") return undefined;
+  const value = session.failure;
+  if (!value || typeof value !== "object") return undefined;
+  const failure = value as Record<string, unknown>;
+  if (typeof failure.code !== "string" || typeof failure.message !== "string") return undefined;
+  const text = (item: unknown) => typeof item === "string" && item.length > 0 ? item : null;
+  const diagnostics = (Array.isArray(failure.diagnostics) ? failure.diagnostics : []).flatMap((item): DevFailureDiagnostic[] => {
+    if (!item || typeof item !== "object") return [];
+    const entry = item as Record<string, unknown>;
+    const file = text(entry.file), code = text(entry.code);
+    if (!file || !isRootedPath(file) || !code || typeof entry.message !== "string" || (entry.severity !== "error" && entry.severity !== "warning")) return [];
+    return [{ file, line: position(entry.line), column: position(entry.column), severity: entry.severity, code, message: entry.message }];
+  }).slice(0, maxFailureDiagnostics);
+  return { code: failure.code, message: failure.message, project: text(failure.project), package: text(failure.package), diagnostics };
 }
 
 /**
@@ -227,4 +268,10 @@ export function devStateLabel(snapshot: DevSnapshot): string {
 /** Whether a dev session runs (the liveness rule applied): starting or ready. */
 export function isActive(snapshot: DevSnapshot): boolean {
   return snapshot.state === "starting" || snapshot.state === "ready";
+}
+
+/** A session file's time (`startedAt`) in milliseconds; .NET writes seven fractional digits, which Date.parse need not take. */
+export function sessionTime(value: string | undefined): number {
+  if (!value) return Number.NaN;
+  return Date.parse(value.replace(/(\.\d{3})\d+/, "$1"));
 }

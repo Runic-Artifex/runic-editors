@@ -161,20 +161,28 @@ export function withOwners(list: DependencyList | undefined, libraries: readonly
 export interface DevFailure { file: string; line: number; column: number; severity: string; code: string; message: string }
 
 /**
+ * What the session file's `failure` names (runic-sdk 0.24, D087): the frontend package that failed, the .NET project
+ * that failed, and `dev`'s message.
+ */
+export interface NamedFailure { package: string | null; project: string | null; message: string }
+
+/**
  * The list with the errors of the last `dotnet runic dev` (its Problems) on the packages they concern, for a list from
  * the graph file or a stopped session: a package whose build failed keeps an earlier build's exports on disk, so the
  * graph alone says "built" (the 0.24 VM run). A package fails by an error in a file below its folder (the build's
- * located line, `…/shared-ui/src/index.ts(12,14): error TS2322`), or by a RAPPDEV1018 that names it: `[shared-ui]`,
- * its folder, or its package name first. A running session's list has the states `dev` gives and is kept as it is.
+ * located line, `…/shared-ui/src/index.ts(12,14): error TS2322`), by a RAPPDEV1018 that names it: `[shared-ui]`, its
+ * folder, or its package name first, or by the session file's `failure` (`named`), whose package is its folder or whose
+ * project owns it. A running session's list has the states `dev` gives and is kept as it is.
  */
-export function withDevFailures(list: DependencyList | undefined, problems: readonly DevFailure[]): DependencyList | undefined {
+export function withDevFailures(list: DependencyList | undefined, problems: readonly DevFailure[], named?: NamedFailure): DependencyList | undefined {
   const errors = problems.filter(problem => problem.severity === "error");
-  if (!list || list.source === "session" || !errors.length) return list;
+  if (!list || list.source === "session" || (!errors.length && !named)) return list;
   return { ...list, dependencies: list.dependencies.map(dependency => {
     const located = errors.find(problem => isBelow(problem.file, dependency.directory));
     const failure = located ?? errors.find(problem => problem.code.toUpperCase() === "RAPPDEV1018" && namesDependency(problem.message, dependency));
-    if (!failure) return dependency;
-    const message = located ? `${relative(dependency.directory, located.file).replaceAll("\\", "/")}(${located.line},${located.column}): error ${located.code}: ${located.message}` : failure.message;
+    const isNamed = !!named && ((!!named.package && samePath(named.package, dependency.directory)) || (!!named.project && !!dependency.owner && samePath(named.project, dependency.owner)));
+    if (!failure && !isNamed) return dependency;
+    const message = located ? `${relative(dependency.directory, located.file).replaceAll("\\", "/")}(${located.line},${located.column}): error ${located.code}: ${located.message}` : failure ? failure.message : named!.message;
     return { ...dependency, state: "failed", message };
   }) };
 }

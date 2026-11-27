@@ -175,4 +175,4 @@ export function templateWindowConfiguration(configurations: unknown): string | u
 }
 
 /** The template's task labels (runic-sdk `.vscode/tasks.json`); the extension runs a workspace task of that label when there is one. */
-export const templateTaskLabels = { dev: "runic: dev", devNoWindow: "runic: dev --no-window", doctor: "runic: doctor", build: "build" } as const;
+export const templateTaskLabels = { dev: "runic: dev", devNoWindow: "runic: dev --no-window", devBrowser: "runic: dev --browser", doctor: "runic: doctor", build: "build" } as const;

@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { detectToolVersion, devArguments, devExitMessage, forceStop, probeToolsMissing, toolRestoreArguments, toolsMissing, onDevEnd, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
-import { DevSessionFollower, devSessionPath, devSessionSchema, raxDevSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
-import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, readyPattern } from "../src/dev-problems.js";
+import { DevSessionFollower, devSessionPath, devSessionSchema, raxDevSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, maxFailureDiagnostics, parseDevSession, sessionFailure, sessionTime, type DevSession, type DevSnapshot } from "../src/dev-session.js";
+import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, readyPattern, uniqueProblems } from "../src/dev-problems.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
 import { coreTool, detectWorkspace, formerCoreTool, formerToolIds, isRunicSdkProject, manifestTool, projectCoreTool, projectRunicToolVersion, runicToolVersion } from "../src/workspace.js";
 import { migrateArguments, migrationOffer, migrationProbeDirectory, migrationSummary, raxVersionArguments } from "../src/migration.js";
@@ -856,4 +856,46 @@ test("the tool probe reports missing tools only from dotnet's restore message", 
     expect(await probeToolsMissing(script("other.sh", "echo 'something else' >&2; exit 1"), directory)).toBe(false);
     expect(await probeToolsMissing(script("restored.sh", "echo 0.24.0"), directory)).toBe(false);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+// D087: a dev that stops on a failure writes it into the session file (runic-sdk 0.24), so DevKit shows it after the task
+// that ran dev has ended; VS Code removes a background task's problems then.
+test("a stopped session's failure is read with its diagnostics; a running or older session has none", () => {
+  const source = "/repo/shared-ui/src/index.ts";
+  const stopped = parseDevSession(JSON.stringify({ schema: devSessionSchema, state: "stopped", processId: 41250, startedAt: "2026-11-27T10:00:00.2642872+00:00", project: "/repo/App/App.csproj",
+    failure: { code: "RAPPDEV1018", message: "A frontend package that the page depends on failed to build, so dev did not start: …", project: "/repo/SharedUi/SharedUi.csproj", package: "/repo/shared-ui",
+      diagnostics: [
+        { file: source, line: 12, column: 14, severity: "error", code: "TS2322", message: "Type 'string' is not assignable to type 'number'." },
+        { file: "/repo/App/App.csproj", line: null, column: null, severity: "error", code: "RAPPDEV1018", message: "A frontend package …" },
+        // Left out: a relative file, an unknown severity, no code.
+        { file: "src/index.ts", line: 1, column: 1, severity: "error", code: "TS1005", message: "x" },
+        { file: source, line: 1, column: 1, severity: "info", code: "TS1", message: "x" },
+        { file: source, line: 1, column: 1, severity: "error", message: "x" },
+      ] } }));
+  expect(sessionFailure(stopped)).toEqual({
+    code: "RAPPDEV1018", message: "A frontend package that the page depends on failed to build, so dev did not start: …", project: "/repo/SharedUi/SharedUi.csproj", package: "/repo/shared-ui",
+    diagnostics: [
+      { file: source, line: 12, column: 14, severity: "error", code: "TS2322", message: "Type 'string' is not assignable to type 'number'." },
+      { file: "/repo/App/App.csproj", line: 1, column: 1, severity: "error", code: "RAPPDEV1018", message: "A frontend package …" },
+    ] });
+  // Only a stopped session's; a file before 0.24 has none, and a null failure is none.
+  expect(sessionFailure({ ...stopped!, state: "ready" })).toBeUndefined();
+  expect(sessionFailure({ ...stopped!, failure: undefined })).toBeUndefined();
+  expect(sessionFailure({ ...stopped!, failure: null })).toBeUndefined();
+  expect(sessionFailure({ ...stopped!, failure: { message: "no code" } })).toBeUndefined();
+  expect(sessionFailure(undefined)).toBeUndefined();
+  // Bounded as dev bounds it.
+  const many = Array.from({ length: 150 }, (_, index) => ({ file: source, line: index + 1, column: 1, severity: "warning", code: "TS6133", message: "unused" }));
+  expect(sessionFailure({ ...stopped!, failure: { code: "RAPPDEV1006", message: "The initial build failed.", diagnostics: many } })?.diagnostics.length).toBe(maxFailureDiagnostics);
+  // .NET's seven fractional digits.
+  expect(sessionTime("2026-11-27T10:00:00.2642872+00:00")).toBe(Date.parse("2026-11-27T10:00:00.264Z"));
+  expect(sessionTime(undefined)).toBeNaN();
+});
+
+test("a problem that DevKit's terminal and the session file's failure both name shows once", () => {
+  const terminal = { file: "/repo/shared-ui/src/index.ts", line: 12, column: 14, severity: "error" as const, code: "TS2322", message: "Type 'string' is not assignable to type 'number'." };
+  const own = { file: "/repo/App/App.csproj", line: 1, column: 1, severity: "error" as const, code: "RAPPDEV1018", message: "A frontend package …" };
+  // The session's message may be cut at 2,000 characters; the file, position, severity and code decide.
+  expect(uniqueProblems([terminal, own, { ...terminal, message: "Type 'string' is not…" }, { ...own }])).toEqual([terminal, own]);
+  expect(uniqueProblems([terminal, { ...terminal, severity: "warning" as const }, { ...terminal, line: 13 }]).length).toBe(3);
 });
