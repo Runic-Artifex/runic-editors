@@ -30,7 +30,8 @@ dependency diagnostics. Nothing is installed or built without a click
   and the dependency tree shows a failed package build as "failed"
   (runic-editors#83). With runic-sdk 0.24, both also work when `dev` was
   started as the template's `runic: dev` task, from the session file's failure
-  (runic-editors#85).
+  (runic-editors#85), also on a project that has never been built
+  (runic-editors#87).
 - A launch profile value that isn't a string (`"PORT": 8080`) is refused with a
   message instead of being dropped.
 - The Restore tools and package-manager tasks no longer log "no registered task
