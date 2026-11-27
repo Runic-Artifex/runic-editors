@@ -5,14 +5,14 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { detectToolVersion, devArguments, devExitMessage, forceStop, onDevEnd, probeToolsMissing, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, toolRestoreArguments, toolsMissing, type DevStop } from "./dev-process.js";
 import { dependencyFixes, addWorkspaceMember, propertyLine, removeJsonProperty, type DependencyFix } from "./dependency-fixes.js";
-import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, installCommand, needsBuild, projectFrontendDirectory, readFrontendGraph, unbuiltDependencies, withOwners, type DependencyList, type DevDependency, type FrontendInstall } from "./dependencies.js";
+import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, installCommand, needsBuild, projectFrontendDirectory, readFrontendGraph, unbuiltDependencies, withDevFailures, withOwners, type DependencyList, type DevDependency, type FrontendInstall } from "./dependencies.js";
 import { DevProblems, LineSplitter } from "./dev-problems.js";
 import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type DoctorCheck, type DoctorReport } from "./doctor.js";
 import { locationText, newestSourceMap, parseSourceMap, sourceMapTree, type SourceLocation, type SourceTreeNode } from "./source-map.js";
 import { coverageLine, errorSummary, type StatusResult } from "./status.js";
-import { devExtraArguments, parseRunProperties, requestedProfile, runPropertiesArguments, substitutePath, templateTaskLabels, templateWindowConfiguration, windowDebugConfigurations, windowLaunchConfiguration } from "./window-debug.js";
+import { buildTasks, devExtraArguments, hasTask, parseRunProperties, requestedProfile, runPropertiesArguments, substitutePath, taskReference, templateTaskLabels, templateWindowConfiguration, windowDebugConfigurations, windowLaunchConfiguration } from "./window-debug.js";
 import { launchSettingsPath, parseEnvFile, readLaunchProfiles, selectLaunchProfile, type LaunchProfile } from "./launch-settings.js";
 import { detectWorkspace, formerCoreTool, projectCoreTool, projectRunicToolVersion, type WorkspaceKind } from "./workspace.js";
 
@@ -250,7 +250,9 @@ export class RunicSdk implements vscode.Disposable {
     for (const state of this.projects.values()) {
       const snapshot = state.follower.snapshot;
       const tool = projectCoreTool(state.project)?.tool;
-      state.dependencies = withOwners(dependencyList(snapshot.session, isActive(snapshot), () => readFrontendGraph(frontendGraphPaths(state.project, tool))), owners);
+      // A package whose build failed in the last dev still has an earlier build's exports on disk, so its own state may read
+      // "built"; the errors of that dev, which the Problems panel shows, say it failed.
+      state.dependencies = withDevFailures(withOwners(dependencyList(snapshot.session, isActive(snapshot), () => readFrontendGraph(frontendGraphPaths(state.project, tool))), owners), state.devProblems?.problems ?? []);
       state.install = undefined;
       if (isActive(snapshot)) continue;
       let projectText = "";
@@ -261,6 +263,11 @@ export class RunicSdk implements vscode.Disposable {
     }
     this.devView.refresh();
     this.updateDependencyStatus();
+  }
+
+  /** The folder of the frontend package that `dev` labels a line with (`[shared-ui]`, the package's folder name). */
+  private packageDirectory(state: ProjectState, label: string): string | undefined {
+    return state.dependencies?.dependencies.find(item => basename(item.directory) === label)?.directory;
   }
 
   /** The status bar's offer: install the frontend packages of a fresh clone, else build its unbuilt dependency packages. */
@@ -359,7 +366,7 @@ export class RunicSdk implements vscode.Disposable {
       const args = [...devArguments(state.project, noWindow, sdk022, verb), ...extra];
       const execution = sdk022
         ? new vscode.CustomExecution(async () => {
-          const problems = new DevProblems(cwd, noWindow);
+          const problems = new DevProblems(cwd, noWindow, label => this.packageDirectory(state, label));
           state.devProblems = problems;
           this.publishDevProblems();
           state.devExit = undefined;
@@ -616,18 +623,24 @@ export class RunicSdk implements vscode.Disposable {
               current => current.state === "stopped" && Date.parse(current.session?.startedAt ?? "") >= startedAt - 5000 ? "dotnet runic dev stopped; see its task terminal and the Problems panel." : undefined, ended?.failure);
           } finally { ended?.dispose(); state.f5Waiting = false; }
         }
-        // 2. The build, which keeps dev's development pages in www/ while dev serves the frontend.
-        progress.report({ message: "building" });
+        // 2. The build, which keeps dev's development pages in www/ while dev serves the frontend. VS Code runs it as the
+        // resolved configuration's preLaunchTask: Restart (Ctrl+Shift+F5) reuses the resolved configuration without
+        // calling this resolver again and runs only its tasks, so the build must be one of them to rebuild on Restart.
         const build = await this.workspaceTask(state, templateTaskLabels.build) ?? this.task(state, "build");
-        const exitCode = await runTaskToEnd(build, cancel);
-        if (exitCode !== 0) throw new Error(`The build failed (exit code ${exitCode}); see the Problems panel.`);
+        const ownPreLaunchTask = hasTask(configuration.preLaunchTask);
+        if (ownPreLaunchTask) {
+          // The configuration's own preLaunchTask stays VS Code's to run after this build; Restart builds first.
+          progress.report({ message: "building" });
+          const exitCode = await runTaskToEnd(build, cancel);
+          if (exitCode !== 0) throw new Error(`The build failed (exit code ${exitCode}); see the Problems panel.`);
+        }
         // 3. The program dotnet run would start, with the environment the session file names.
         progress.report({ message: "starting the debugger" });
         const configurationName = snapshot.session?.configuration ?? "Debug";
         const properties = parseRunProperties(await execText(this.host.dotnetPath(state.folder), runPropertiesArguments(state.project, configurationName), dirname(state.project)));
         if (devExtra.length && !startedDev) this.log.info(`dotnet runic dev already runs, so ${devExtra.join(" ")} (devArgs) applies the next time DevKit starts it.`);
-        const launch = windowLaunchConfiguration(state.project, properties, snapshot.session, { configuration, profile, envFile });
-        this.log.info(`Debugging ${launch.program} ${JSON.stringify(launch.args)} in ${launch.cwd}${profile ? ` with launch profile "${profile.name}"` : ""}; variables ${Object.keys(launch.env as Record<string, string>).join(", ")}`);
+        const launch: Record<string, unknown> = { ...windowLaunchConfiguration(state.project, properties, snapshot.session, { configuration, profile, envFile }), ...buildTasks(taskReference(build), configuration) };
+        this.log.info(`Debugging ${launch.program} ${JSON.stringify(launch.args)} in ${launch.cwd}${profile ? ` with launch profile "${profile.name}"` : ""}; variables ${Object.keys(launch.env as Record<string, string>).join(", ")}; the task "${build.name}" builds it, also on Restart`);
         return launch as vscode.DebugConfiguration;
       });
     } catch (error) {
@@ -966,9 +979,10 @@ export class RunicSdk implements vscode.Disposable {
       devOutput: (project: string, lines: string[], noWindow = false) => {
         const state = this.projects.get(project);
         if (!state) return;
-        state.devProblems = new DevProblems(dirname(project), noWindow);
+        state.devProblems = new DevProblems(dirname(project), noWindow, label => this.packageDirectory(state, label));
         for (const line of lines) state.devProblems.add(line);
         this.publishDevProblems();
+        this.loadDependencies();
       },
       viewModels: (project: string) => { this.loadSourceMaps(); return this.projects.get(project)?.sourceTree; },
       runDoctor: (project: string) => this.runDoctor(project),

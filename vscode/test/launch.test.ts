@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchSettingsPath, parseEnvFile, parseLaunchProfiles, profileWorkingDirectory, readLaunchProfiles, selectLaunchProfile, splitCommandLine, stripJsonComments, type LaunchProfile } from "../src/launch-settings.js";
-import { devExtraArguments, requestedProfile, substitutePath, windowDebugConfigurations, windowEnvironment, windowLaunchConfiguration, type RunProperties } from "../src/window-debug.js";
+import { buildTasks, devExtraArguments, hasTask, requestedProfile, taskReference, substitutePath, windowDebugConfigurations, windowEnvironment, windowLaunchConfiguration, type RunProperties } from "../src/window-debug.js";
 import { devSessionSchema, type DevSession } from "../src/dev-session.js";
 
 // design/ide-run-debug §3.3 and scenario M: an app whose Debug build starts only with /mock.
@@ -212,4 +212,20 @@ test("Run and Debug offers one entry per Window project and launch profile (E2)"
     { type: "runic", request: "launch", name: "Runic: Other", project: "Other/Other.csproj" },
   ]);
   expect(windowDebugConfigurations([])).toEqual([]);
+});
+
+test("Restart rebuilds: the build is the resolved configuration's preLaunchTask, or its preRestartTask beside one of its own", () => {
+  // VS Code's Restart reuses the resolved configuration and runs only its tasks (the 0.24 VM run, part 3, finding 1).
+  expect(buildTasks("build", {})).toEqual({ preLaunchTask: "build" });
+  expect(buildTasks("build (Shop.csproj)", { preLaunchTask: "" })).toEqual({ preLaunchTask: "build (Shop.csproj)" });
+  expect(buildTasks("build", { preLaunchTask: "seed the database" })).toEqual({ preRestartTask: "build" });
+  expect(buildTasks("build", { preLaunchTask: { type: "shell", task: "seed" }, preRestartTask: "mine" })).toEqual({});
+  expect([hasTask("x"), hasTask(" "), hasTask(undefined), hasTask({ type: "npm" })]).toEqual([true, false, false, true]);
+  // The template's build by its label; DevKit's own by its definition, as VS Code finds a contributed task.
+  expect(taskReference({ name: "build", source: "Workspace", definition: { type: "process" } })).toBe("build");
+  expect(taskReference({ name: "build (Shop.csproj)", source: "runic", definition: { type: "runic", command: "build", project: "Shop/Shop.csproj" } }))
+    .toEqual({ type: "runic", command: "build", project: "Shop/Shop.csproj", name: "build (Shop.csproj)" });
+  // The configuration's own tasks pass through to the coreclr configuration, and DevKit's are added beside them.
+  const resolved = { ...windowLaunchConfiguration(project, appHost, ideSession(), { configuration: { preLaunchTask: "seed the database" } }), ...buildTasks("build", { preLaunchTask: "seed the database" }) };
+  expect([resolved.preLaunchTask, resolved.preRestartTask]).toEqual(["seed the database", "build"]);
 });

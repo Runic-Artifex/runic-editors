@@ -10,9 +10,12 @@ import { resolve } from "node:path";
 /**
  * An MSBuild-form line (runic-sdk `tools/dotnet-runic/README.md`, "Diagnostics"): file, line, column, severity, code,
  * message. `dev` writes a label before each line of a process it runs (`[host] `, `[app] `; runic-sdk `RunningProcess`),
- * which the pattern skips, so that the file is `C:\…\App.cs` and not `[host] C:\…\App.cs`.
+ * which the pattern skips, so that the file is `C:\…\App.cs` and not `[host] C:\…\App.cs`. The file holds no ": " and
+ * the optional subcategory before the severity no colon, so a sentence that quotes a located error (`dev`'s RAPPDEV1018
+ * text "…, so dev did not start: C:\…\index.ts(12,14): error TS2322: …") is not read as an error in a file named by
+ * the sentence; the MSBuild-form line of that failure (`<project> : error RAPPDEV1018: …`) still is one.
  */
-export const diagnosticPattern = /^\s*(?:\[[A-Za-z][\w-]*\]\s+)?(?:\d+>)?(\S.*?)(?:\((\d+)(?:,(\d+))?(?:,\d+,\d+)?\))?\s*:\s+(?:\S+\s+)?(error|warning)\s+([A-Za-z]+\d+)\s*:\s*(.*?)(?:\s+\[[^\]]+\])?$/;
+export const diagnosticPattern = /^\s*(?:\[[A-Za-z][\w-]*\]\s+)?(?:\d+>)?(\S(?:(?!:\s).)*?)(?:\((\d+)(?:,(\d+))?(?:,\d+,\d+)?\))?\s*:\s+(?:[^\s:]+\s+)?(error|warning)\s+([A-Za-z]+\d+)\s*:\s*(.*?)(?:\s+\[[^\]]+\])?$/;
 
 /** The lines that begin a build cycle: with the Window, and with `--no-window` (the template's tasks.json). */
 export const beginsPattern = /^\[dev\] (Evaluating|Window exited|Reloading)/;
@@ -53,13 +56,34 @@ function isRooted(file: string): boolean {
   return file.startsWith("/") || file.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(file);
 }
 
-/** The problem of one output line, or undefined. */
-export function parseDevProblem(line: string, directory: string): DevProblem | undefined {
-  const match = diagnosticPattern.exec(plainLine(line));
+/** The label `dev` writes before a line of a process it runs: `host`, `app`, `vite`, or a package's folder (`shared-ui`). */
+const labelPattern = /^\s*\[([A-Za-z][\w-]*)\]\s+/;
+
+/** The source files of a frontend package's build tool (tsc, Vite), as runic-sdk's `FrontendDependencies` lists them. */
+const frontendSource = /\.(?:[cm]?[jt]sx?|svelte|vue|s?css)$/i;
+
+/**
+ * The problem of one output line, or undefined. A relative file resolves against `directory`, the project's (MSBuild's
+ * relative C# paths), except a frontend source: a package's build tool writes it relative to the package, so it resolves
+ * against the package that `packageDirectory` finds for the line's label (`[shared-ui] src/x.ts(3,1): error TS1005`, a
+ * watcher's output), and without one the line is left out. That is tsc's own echo in the build's output, which the
+ * Views targets report again with the full path (runic-sdk `FrontendDependencies.FindPackageFailure`), so the one
+ * error is not listed a second time in a file of the Window project that does not exist.
+ */
+export function parseDevProblem(line: string, directory: string, packageDirectory?: (label: string) => string | undefined): DevProblem | undefined {
+  const plain = plainLine(line);
+  const match = diagnosticPattern.exec(plain);
   if (!match) return undefined;
   const file = match[1].trim();
+  let base = directory;
+  if (!isRooted(file) && frontendSource.test(file)) {
+    const label = labelPattern.exec(plain)?.[1];
+    const packageBase = label ? packageDirectory?.(label) : undefined;
+    if (!packageBase) return undefined;
+    base = packageBase;
+  }
   return {
-    file: isRooted(file) ? file : resolve(directory, file),
+    file: isRooted(file) ? file : resolve(base, file),
     line: match[2] ? Number(match[2]) : 1,
     column: match[3] ? Number(match[3]) : 1,
     severity: match[4] as "error" | "warning",
@@ -81,7 +105,8 @@ export class DevProblems {
   private items: DevProblem[] = [];
   private readonly seen = new Set<string>();
 
-  constructor(private readonly directory: string, private readonly noWindow: boolean) {}
+  /** `packageDirectory` finds the folder of the frontend package whose label a line has (`[shared-ui]`), see {@link parseDevProblem}. */
+  constructor(private readonly directory: string, private readonly noWindow: boolean, private readonly packageDirectory?: (label: string) => string | undefined) {}
 
   get problems(): readonly DevProblem[] { return this.items; }
 
@@ -95,7 +120,7 @@ export class DevProblems {
     // A .NET build that succeeded fixes the build errors, not the frontend's.
     if (readyPattern.test(line.trimEnd())) return this.keep(item => item.severity !== "error" || isFrontendError(item));
     if (frontendClearedPattern.test(line.trimEnd())) return this.keep(item => !isFrontendError(item));
-    const problem = parseDevProblem(line, this.directory);
+    const problem = parseDevProblem(line, this.directory, this.packageDirectory);
     // MSBuild repeats a build's diagnostics in its summary; one problem each.
     if (!problem || this.seen.has(key(problem))) return false;
     this.seen.add(key(problem));

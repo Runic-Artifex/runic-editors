@@ -21,9 +21,11 @@ class StandInAdapter {
         this.respond(message);
         const mock = Array.isArray(args.args) && args.args.includes('/mock');
         this.event('output', { category: 'stdout', output: mock ? `Acme.Mock: mock mode, arguments: [${args.args.join(', ')}]\n` : `Acme.Mock: a Debug build starts only with /mock; arguments: [${(args.args ?? []).join(', ')}]\n` });
-        setTimeout(() => { this.event('exited', { exitCode: mock ? 0 : 2 }); this.event('terminated'); }, 50);
+        // standInKeepRunning (the Restart test): the program keeps running until the session is stopped or restarted.
+        if (!args.standInKeepRunning) setTimeout(() => { this.event('exited', { exitCode: mock ? 0 : 2 }); this.event('terminated'); }, 50);
         break;
       }
+      case 'disconnect': case 'terminate': this.respond(message); this.event('terminated'); break;
       default: this.respond(message);
     }
   }

@@ -95,6 +95,36 @@ function stringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null && item !== undefined && typeof item !== "object").map(([name, item]) => [name, String(item)]));
 }
 
+/** Whether a configuration names a task (`preLaunchTask`, `preRestartTask`): a label, or a task identifier object. */
+export function hasTask(value: unknown): boolean {
+  return typeof value === "string" ? value.trim().length > 0 : !!value && typeof value === "object";
+}
+
+/**
+ * The tasks of the Window's resolved `coreclr` configuration that run the build (`task`: the template's `build` task or
+ * DevKit's own, see {@link taskReference}). Restart (Ctrl+Shift+F5) reuses the resolved configuration without calling
+ * DevKit's resolver again and runs only its `preRestartTask` and `preLaunchTask`, so the build must be one of them, or
+ * Restart starts the old build. Without a `preLaunchTask` of the configuration's own, the build is the `preLaunchTask`: VS Code runs it before
+ * the launch and on each Restart, and a failed build stops the launch as `debug.onTaskErrors` says. With one, that task
+ * stays; DevKit builds before it on F5, and the build is the `preRestartTask` unless the configuration names its own.
+ */
+export function buildTasks(task: TaskReference, configuration: Record<string, unknown>): { preLaunchTask?: TaskReference; preRestartTask?: TaskReference } {
+  if (!hasTask(configuration.preLaunchTask)) return { preLaunchTask: task };
+  return hasTask(configuration.preRestartTask) ? {} : { preRestartTask: task };
+}
+
+/**
+ * How a configuration names a task: a workspace task (tasks.json) by its label; an extension's task by its definition,
+ * which VS Code matches by the definition's declared properties (a contributed task's label is not its name). `name`
+ * is not one of them; VS Code shows it in "Errors exist after running preLaunchTask …".
+ */
+export type TaskReference = string | { type: string; name?: string; [property: string]: unknown };
+
+/** The reference of a task: the label of a workspace task, else its definition with its name. */
+export function taskReference(task: { name: string; source: string; definition: { type: string; [property: string]: unknown } }): TaskReference {
+  return task.source === "Workspace" ? task.name : { ...task.definition, name: task.name };
+}
+
 /** The launch profile a `runic` configuration asks for: `launchProfile` (also `null`), else the C# debugger's `launchSettingsProfile`. */
 export function requestedProfile(configuration: Record<string, unknown>): string | null | undefined {
   const value = "launchProfile" in configuration ? configuration.launchProfile : configuration.launchSettingsProfile;

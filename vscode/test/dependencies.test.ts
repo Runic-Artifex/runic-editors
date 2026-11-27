@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, graphDependencies, installCommand, parseFrontendGraph, projectFrontendDirectory, readFrontendGraph, sessionDependencies, unbuiltDependencies, withOwners, workspaceRoot, type DevDependency } from "../src/dependencies.js";
+import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, graphDependencies, installCommand, parseFrontendGraph, projectFrontendDirectory, readFrontendGraph, sessionDependencies, unbuiltDependencies, withDevFailures, withOwners, workspaceRoot, type DevDependency } from "../src/dependencies.js";
 import { addWorkspaceMember, dependencyFixes, dependencyPrefix, propertyLine, removeJsonProperty, type TextChange } from "../src/dependency-fixes.js";
 import { devSessionSchema, parseDevSession, type DevSession } from "../src/dev-session.js";
 import { coreTool, detectWorkspace, formerCoreTool, isWindowProject } from "../src/workspace.js";
@@ -240,4 +240,26 @@ test("package.json edits keep the file's formatting", () => {
   expect(addWorkspaceMember(`{"name": "x"}`, "ui")).toBeUndefined();
   expect(propertyLine(root, "workspaces")).toBe(2);
   expect(propertyLine(root, "missing")).toBe(0);
+});
+
+test("the last dev's errors mark the packages they concern as failed, which the graph alone reads as built", () => {
+  // The 0.24 VM run (part 3, finding 5): after RAPPDEV1018 the tree said "shop-core · built" from an earlier build's dist.
+  const built = { ...sharedUi, state: "built", watch: "none", message: null };
+  const other = { ...sharedUi, package: "@acme/charts", directory: "/repo/charts", state: "built", watch: "none", message: null };
+  const list = { source: "graph" as const, dependencies: [built, other] };
+  const located = { file: "/repo/shared-ui/src/index.ts", line: 12, column: 14, severity: "error", code: "TS2322", message: "Type 'string' is not assignable to type 'number'." };
+  const failure = { file: "/repo/App/App.csproj", line: 1, column: 1, severity: "error", code: "RAPPDEV1018", message: "A frontend package that the page depends on failed to build, so dev did not start: /repo/shared-ui/src/index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'." };
+  expect(withDevFailures(list, [located, failure])?.dependencies.map(item => [item.package, item.state, item.message])).toEqual([
+    ["@acme/shared-ui", "failed", "src/index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'."],
+    ["@acme/charts", "built", null],
+  ]);
+  // A RAPPDEV1018 alone names the package by its directory, its [folder] label or its package name.
+  expect(withDevFailures(list, [failure])?.dependencies[0].state).toBe("failed");
+  expect(withDevFailures(list, [{ ...failure, message: "[charts] bun run --bun build exited with code 1: src/x.ts(3,1): error TS1005: ';' expected." }])?.dependencies.map(item => item.state)).toEqual(["built", "failed"]);
+  expect(withDevFailures(list, [{ ...failure, message: "@acme/charts is the frontend package of Charts, and the page imports it, but it has not been built: charts/dist/index.js is missing; its build 'bun run build' did not write it." }])?.dependencies.map(item => item.state)).toEqual(["built", "failed"]);
+  // Warnings, other projects' errors and a running session's own states change nothing.
+  expect(withDevFailures(list, [{ ...located, severity: "warning" }])).toBe(list);
+  expect(withDevFailures(list, [{ ...located, file: "/repo/App/Frontend/src/index.ts" }])?.dependencies.map(item => item.state)).toEqual(["built", "built"]);
+  const session = { source: "session" as const, dependencies: [built] };
+  expect(withDevFailures(session, [located])).toBe(session);
 });
