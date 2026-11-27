@@ -6,8 +6,8 @@ import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { detectToolVersion, devArguments, devExitMessage, forceStop, onDevEnd, probeToolsMissing, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, toolRestoreArguments, toolsMissing, type DevStop } from "./dev-process.js";
 import { dependencyFixes, addWorkspaceMember, propertyLine, removeJsonProperty, type DependencyFix } from "./dependency-fixes.js";
 import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, installCommand, needsBuild, projectFrontendDirectory, readFrontendGraph, unbuiltDependencies, withDevFailures, withOwners, type DependencyList, type DevDependency, type FrontendInstall } from "./dependencies.js";
-import { DevProblems, LineSplitter } from "./dev-problems.js";
-import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, type DevSnapshot } from "./dev-session.js";
+import { DevProblems, LineSplitter, uniqueProblems } from "./dev-problems.js";
+import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, sessionFailure, sessionTime, type DevSessionFailure, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type DoctorCheck, type DoctorReport } from "./doctor.js";
 import { locationText, newestSourceMap, parseSourceMap, sourceMapTree, type SourceLocation, type SourceTreeNode } from "./source-map.js";
@@ -32,6 +32,11 @@ interface ProjectState {
   devTerminal?: DevTerminal;
   /** The Problems of that terminal's `dev`, kept after it ends until the next `dev` of the project starts. */
   devProblems?: DevProblems;
+  /**
+   * When the last `dev` task of the project started (milliseconds since the epoch): a stopped session's `failure` from
+   * before it no longer applies, also when the new `dev` fails before it writes its own session file.
+   */
+  devTaskStartedAt?: number;
   /** The frontend packages the page depends on: from the running session, else the build's graph file (S8). */
   dependencies?: DependencyList;
   /** The frontend's install, when its packages are not installed (a fresh clone); DevKit only offers it. */
@@ -153,6 +158,17 @@ export class RunicSdk implements vscode.Disposable {
       vscode.debug.registerDebugConfigurationProvider("runic", {
         provideDebugConfigurations: folder => this.dynamicDebugConfigurations(folder),
       }, vscode.DebugConfigurationProviderTriggerKind.Dynamic),
+      // A new dev, whoever starts it (F5's preLaunchTask, Terminal > Run Task, DevKit): the last one's failure goes.
+      vscode.tasks.onDidStartTask(event => {
+        for (const state of this.projects.values()) {
+          if (!this.isDevTask(state, event.execution.task)) continue;
+          state.devTaskStartedAt = Date.now();
+          // DevKit's own terminal starts a new reader itself; a task VS Code runs has none, and the last one's are stale.
+          if (!(event.execution.task.execution instanceof vscode.CustomExecution)) state.devProblems = undefined;
+          this.publishDevProblems();
+          this.loadDependencies();
+        }
+      }),
       vscode.tasks.onDidEndTask(event => {
         for (const state of this.projects.values()) if (state.execution === event.execution) { state.execution = undefined; void state.follower.refresh(); }
         // A build or an install may have built or installed the frontend packages.
@@ -232,6 +248,8 @@ export class RunicSdk implements vscode.Disposable {
     this.log.info(`${basename(state.project)}: dotnet runic dev ${devStateLabel(snapshot)}${snapshot.session ? ` (process ${snapshot.session.processId})` : ""}`);
     void vscode.commands.executeCommand("setContext", "runic.devActive", [...this.projects.values()].some(item => isActive(item.follower.snapshot)));
     this.loadDependencies();
+    // A stopped session's failure, or a new session without one.
+    this.publishDevProblems();
     this.updateStatus();
   }
 
@@ -252,7 +270,10 @@ export class RunicSdk implements vscode.Disposable {
       const tool = projectCoreTool(state.project)?.tool;
       // A package whose build failed in the last dev still has an earlier build's exports on disk, so its own state may read
       // "built"; the errors of that dev, which the Problems panel shows, say it failed.
-      state.dependencies = withDevFailures(withOwners(dependencyList(snapshot.session, isActive(snapshot), () => readFrontendGraph(frontendGraphPaths(state.project, tool))), owners), state.devProblems?.problems ?? []);
+      // The session file's failure (runic-sdk 0.24) also names the package, however dev was started.
+      const failure = this.sessionFailure(state);
+      state.dependencies = withDevFailures(withOwners(dependencyList(snapshot.session, isActive(snapshot), () => readFrontendGraph(frontendGraphPaths(state.project, tool))), owners),
+        [...state.devProblems?.problems ?? [], ...failure?.diagnostics ?? []], failure);
       state.install = undefined;
       if (isActive(snapshot)) continue;
       let projectText = "";
@@ -412,14 +433,27 @@ export class RunicSdk implements vscode.Disposable {
 
   private runningExecution(state: ProjectState): vscode.TaskExecution | undefined {
     if (state.execution && vscode.tasks.taskExecutions.includes(state.execution)) return state.execution;
-    const labels: string[] = [templateTaskLabels.dev, templateTaskLabels.devNoWindow];
-    return vscode.tasks.taskExecutions.find(execution => {
-      const task = execution.task;
-      const sameFolder = typeof task.scope === "object" && (task.scope as vscode.WorkspaceFolder).uri?.toString() === state.folder.uri.toString();
-      if (!sameFolder) return false;
-      if (task.definition.type === "runic" && task.definition.command === "dev") return this.resolveTaskProject(task.definition as RunicTaskDefinition, state.folder) === state.project;
-      return task.source === "Workspace" && labels.includes(task.name);
-    });
+    return vscode.tasks.taskExecutions.find(execution => this.isDevTask(state, execution.task, [templateTaskLabels.dev, templateTaskLabels.devNoWindow]));
+  }
+
+  /** Whether a task runs the project's `dev`: DevKit's `runic` dev task, or one of the template's `dev` tasks of its folder. */
+  private isDevTask(state: ProjectState, task: vscode.Task, labels: readonly string[] = [templateTaskLabels.dev, templateTaskLabels.devNoWindow, templateTaskLabels.devBrowser]): boolean {
+    const sameFolder = typeof task.scope === "object" && (task.scope as vscode.WorkspaceFolder).uri?.toString() === state.folder.uri.toString();
+    if (!sameFolder) return false;
+    if (task.definition.type === "runic" && task.definition.command === "dev") return this.resolveTaskProject(task.definition as RunicTaskDefinition, state.folder) === state.project;
+    return task.source === "Workspace" && labels.includes(task.name);
+  }
+
+  /**
+   * The failure that stopped the project's last `dev`, from its session file (runic-sdk 0.24, D087), or undefined: while
+   * `dev` runs, after a stop without one, for an older tool (no `failure`), and once another `dev` task has started.
+   */
+  private sessionFailure(state: ProjectState): DevSessionFailure | undefined {
+    const session = state.follower.snapshot.session;
+    const failure = sessionFailure(session);
+    if (!failure || state.devTaskStartedAt === undefined) return failure;
+    // dev writes its startedAt after the task started; a second for the clocks' rounding.
+    return sessionTime(session?.startedAt) >= state.devTaskStartedAt - 1000 ? failure : undefined;
   }
 
   /** `extra` are more `dev` options (a configuration's `devArgs`); with them DevKit runs its own task, not the template's. */
@@ -797,13 +831,18 @@ export class RunicSdk implements vscode.Disposable {
     }));
   }
 
-  /** The Problems of every project's `dev` terminal (dotnet-runic 0.22 and later), as MSBuild's own lines name them. */
+  /**
+   * The Problems of every project's `dev` terminal (dotnet-runic 0.22 and later), as MSBuild's own lines name them, and
+   * of a stopped session's `failure` (runic-sdk 0.24, D087), which VS Code's problem matcher drops when the task that ran
+   * `dev` ends. When DevKit's terminal read the same `dev`, a problem both name shows once.
+   */
   private publishDevProblems() {
     const byFile = new Map<string, vscode.Diagnostic[]>();
     for (const state of this.projects.values()) {
-      if (!state.devProblems) continue;
+      const problems = uniqueProblems([...state.devProblems?.problems ?? [], ...this.sessionFailure(state)?.diagnostics ?? []]);
+      if (!problems.length) continue;
       const version = projectRunicToolVersion(state.project);
-      for (const problem of state.devProblems.problems) {
+      for (const problem of problems) {
         const position = new vscode.Position(Math.max(0, problem.line - 1), Math.max(0, problem.column - 1));
         const diagnostic = new vscode.Diagnostic(new vscode.Range(position, position), problem.message,
           problem.severity === "error" ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning);

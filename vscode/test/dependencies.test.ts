@@ -263,3 +263,20 @@ test("the last dev's errors mark the packages they concern as failed, which the 
   const session = { source: "session" as const, dependencies: [built] };
   expect(withDevFailures(session, [located])).toBe(session);
 });
+
+// D087: the session file's failure (runic-sdk 0.24) names the package that failed, also when no located error does.
+test("the session file's failure marks its package, or the package its project owns, as failed", () => {
+  const built = { ...sharedUi, state: "built", watch: "none", message: null };
+  const other = { ...sharedUi, package: "@acme/charts", directory: "/repo/charts", owner: "/repo/Charts/Charts.csproj", ownerName: "Charts", state: "built", watch: "none", message: null };
+  const list = { source: "graph" as const, dependencies: [built, other] };
+  const message = "@acme/charts is the frontend package of Charts, and the page imports it, but it has not been built: charts/dist/index.js is missing.";
+  expect(withDevFailures(list, [], { package: "/repo/charts/", project: null, message })?.dependencies.map(item => [item.state, item.message])).toEqual([["built", null], ["failed", message]]);
+  expect(withDevFailures(list, [], { package: null, project: "/repo/Charts/Charts.csproj", message })?.dependencies.map(item => item.state)).toEqual(["built", "failed"]);
+  // The served project names no package; a located error still wins for the message.
+  expect(withDevFailures(list, [], { package: null, project: "/repo/App/App.csproj", message })?.dependencies.map(item => item.state)).toEqual(["built", "built"]);
+  const located = { file: "/repo/charts/src/index.ts", line: 3, column: 1, severity: "error", code: "TS1005", message: "';' expected." };
+  expect(withDevFailures(list, [located], { package: "/repo/charts", project: null, message })?.dependencies[1].message).toBe("src/index.ts(3,1): error TS1005: ';' expected.");
+  // A running session's own states stay.
+  const running = { source: "session" as const, dependencies: [built] };
+  expect(withDevFailures(running, [], { package: built.directory, project: null, message })).toBe(running);
+});

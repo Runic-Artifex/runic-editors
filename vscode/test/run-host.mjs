@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, cp, writeFile, readFile, rm, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, cp, writeFile, readFile, rm, chmod, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,10 +64,54 @@ try {
       { id: 'lock-file', status: 'warn', message: 'The frontend has no lock file.', remediation: 'Run npm install in Frontend.' },
       { id: 'desktop-runtime', status: 'fail', message: 'WebKitGTK 4.1 is missing.', remediation: 'Install webkitgtk_4_1.' }] } };
   await writeFile(join(app, 'doctor.json'), JSON.stringify(doctorEnvelope));
+  // D087: while dev-session-failure exists, `dotnet runic dev` stops at its start because a frontend package's build failed
+  // (RAPPDEV1018, as on the 0.24 VM run, part 4, rows 8 and 9), and writes that failure into the session file before it
+  // exits, as runic-sdk 0.24 does; dev-args.log gets its directory and arguments.
+  const source = join(app, 'shared-ui', 'src', 'index.ts');
+  const typeError = `${source}(12,14): error TS2322: Type 'string' is not assignable to type 'number'.`;
+  const failureMessage = `A frontend package that the page depends on failed to build, so dev did not start: ${typeError}`;
+  const project = join(app, 'App.csproj');
+  await writeFile(join(app, 'failed-session.json'), JSON.stringify({ schema: 'runic.application.tool.dev-session/1', state: 'stopped', processId: '@PID@', startedAt: '@STARTED@',
+    processStartedAt: '@STARTED@', project, configuration: 'Debug',
+    frontend: { developmentServer: 'vite', url: null, port: null, stateUrl: null, directory: join(app, 'Frontend'), outputDirectory: join(app, 'Frontend', 'dist'), generatedDirectory: null },
+    webRoot: join(app, 'bin', 'Debug', 'net10.0', 'www'), sourceMap: null, pages: [], window: { owner: 'dev', program: 'App', processId: null, starts: 0, environment: { DOTNET_ENVIRONMENT: 'Development' } },
+    browser: null, debugEndpoints: [], unavailableDebugEndpoints: [], devtoolsExtension: null, devtoolsExtensionId: null, dependencies: [],
+    failure: { code: 'RAPPDEV1018', message: failureMessage, project: join(app, 'SharedUi', 'SharedUi.csproj'), package: join(app, 'shared-ui'), diagnostics: [
+      { file: source, line: 12, column: 14, severity: 'error', code: 'TS2322', message: "Type 'string' is not assignable to type 'number'." },
+      { file: project, line: null, column: null, severity: 'error', code: 'RAPPDEV1018', message: failureMessage }] } }, null, 2).replace('"@PID@"', '@PID@'));
+  await writeFile(join(app, 'failing-dev.sh'), `#!/bin/sh
+printf '%s\n' "$PWD" "$*" >> '${join(app, 'dev-args.log')}'
+echo '[dev] Evaluating Views Window project...'
+echo "${typeError} [${join(app, 'SharedUi', 'SharedUi.csproj')}]"
+echo "${failureMessage}"
+mkdir -p '${join(app, 'obj', 'runic')}'
+started=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+sed -e "s/@PID@/$$/" -e "s/@STARTED@/$started/g" '${join(app, 'failed-session.json')}' > '${join(app, 'obj', 'runic', 'dev-session.json.tmp')}'
+mv '${join(app, 'obj', 'runic', 'dev-session.json.tmp')}' '${join(app, 'obj', 'runic', 'dev-session.json')}'
+echo "${project} : error RAPPDEV1018: ${failureMessage}" >&2
+exit 1
+`);
+  await chmod(join(app, 'failing-dev.sh'), 0o755);
+  // The template's tasks.json runs `dotnet` from PATH, not runic.dotnetPath: a stand-in before the real one answers its
+  // tool restore and dev in the app's folder while dev-session-failure exists, and passes everything else on.
+  const realDotnet = execFileSync('sh', ['-c', 'command -v dotnet'], { env: environment, encoding: 'utf8' }).trim();
+  const bin = join(temporary, 'bin');
+  await mkdir(bin);
+  await writeFile(join(bin, 'dotnet'), `#!/bin/sh
+if [ "$(pwd -P)" = '${await realpath(app)}' ] && [ -e '${join(app, 'dev-session-failure')}' ]; then
+  if [ "$1" = tool ] && [ "$2" = restore ]; then echo 'Restore was successful.'; exit 0; fi
+  if [ "$1" = runic ] && [ "$2" = dev ]; then exec '${join(app, 'failing-dev.sh')}' "$@"; fi
+fi
+exec '${realDotnet}' "$@"
+`);
+  await chmod(join(bin, 'dotnet'), 0o755);
+  environment.PATH = `${bin}:${environment.PATH}`;
   // It also builds nothing for F5 (each build adds a line to builds.log), stands in for a dev that exits at once and for a fresh clone's unrestored tools (tools-missing), and answers dotnet msbuild -getProperty (the Window's run properties) from run-properties.json.
-  await writeFile(join(app, 'fake-dotnet.sh'), `#!/bin/sh\nif [ "$1" = runic ] && [ "$2" = doctor ]; then cat '${join(app, 'doctor.json')}'; exit 0; fi\nif [ "$1" = build ]; then echo "$2" >> '${join(app, 'builds.log')}'; exit 0; fi\nif [ "$1" = msbuild ]; then cat '${join(app, 'run-properties.json')}'; exit 0; fi\nif [ "$1" = tool ] && [ "$2" = restore ]; then rm -f '${join(app, 'tools-missing')}'; echo 'Restore was successful.'; exit 0; fi\nif [ "$1" = runic ] && [ -e '${join(app, 'tools-missing')}' ]; then echo "Cannot find a tool in the manifest file that has a command named 'runic'." >&2; echo 'Run "dotnet tool restore" to make the "dotnet-runic" command available.' >&2; exit 1; fi\nif [ "$1" = runic ] && [ "$2" = --version ] && [ -e '${join(app, 'tool-version')}' ]; then cat '${join(app, 'tool-version')}'; exit 0; fi\nif [ "$1" = runic ] && [ "$2" = dev ]; then echo 'Restoring App.csproj'; echo 'error RAPPCLI1001: dev failed early' >&2; exit 3; fi\necho "fake dotnet: $*" >&2; exit 1\n`);
+  await writeFile(join(app, 'fake-dotnet.sh'), `#!/bin/sh\nif [ "$1" = runic ] && [ "$2" = doctor ]; then cat '${join(app, 'doctor.json')}'; exit 0; fi\nif [ "$1" = build ]; then echo "$2" >> '${join(app, 'builds.log')}'; exit 0; fi\nif [ "$1" = msbuild ]; then cat '${join(app, 'run-properties.json')}'; exit 0; fi\nif [ "$1" = tool ] && [ "$2" = restore ]; then rm -f '${join(app, 'tools-missing')}'; echo 'Restore was successful.'; exit 0; fi\nif [ "$1" = runic ] && [ -e '${join(app, 'tools-missing')}' ]; then echo "Cannot find a tool in the manifest file that has a command named 'runic'." >&2; echo 'Run "dotnet tool restore" to make the "dotnet-runic" command available.' >&2; exit 1; fi\nif [ "$1" = runic ] && [ "$2" = --version ] && [ -e '${join(app, 'tool-version')}' ]; then cat '${join(app, 'tool-version')}'; exit 0; fi\nif [ "$1" = runic ] && [ "$2" = dev ] && [ -e '${join(app, 'dev-session-failure')}' ]; then exec '${join(app, 'failing-dev.sh')}' "$@"; fi\nif [ "$1" = runic ] && [ "$2" = dev ]; then echo 'Restoring App.csproj'; echo 'error RAPPCLI1001: dev failed early' >&2; exit 3; fi\necho "fake dotnet: $*" >&2; exit 1\n`);
   await chmod(join(app, 'fake-dotnet.sh'), 0o755);
   await mkdir(join(app, '.vscode'));
+  // The runic-app template's tasks.json, which sessionFailure (host.cjs) puts into .vscode for its own case only.
+  await cp(join(repository, 'fixtures/template-vscode/tasks.json'), join(app, 'template-tasks.json'));
   await writeFile(join(app, '.vscode/settings.json'), JSON.stringify({ 'runic.dotnetPath': join(app, 'fake-dotnet.sh') }));
   // Inline Resource deletes a file; the test profile has no trash to move it to.
   await mkdir(join(temporary, 'profile', 'User'), { recursive: true });

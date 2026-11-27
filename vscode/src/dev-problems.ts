@@ -159,3 +159,15 @@ export class LineSplitter {
     return rest ? [rest] : [];
   }
 }
+
+/** One problem per file, position, severity and code: DevKit's terminal and the session file's failure name the same ones. */
+export function uniqueProblems<T extends { file: string; line: number; column: number; severity: string; code: string }>(problems: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return problems.filter(problem => {
+    const file = resolve(problem.file);
+    const key = [problem.severity, process.platform === "win32" || process.platform === "darwin" ? file.toLowerCase() : file, problem.line, problem.column, problem.code.toUpperCase()].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
