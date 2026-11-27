@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { detectToolVersion, devArguments, devExitMessage, forceStop, onDevEnd, probeToolsMissing, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, toolRestoreArguments, toolsMissing, type DevStop } from "./dev-process.js";
 import { dependencyFixes, addWorkspaceMember, propertyLine, removeJsonProperty, type DependencyFix } from "./dependency-fixes.js";
-import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, installCommand, needsBuild, projectFrontendDirectory, readFrontendGraph, unbuiltDependencies, withDevFailures, withOwners, type DependencyList, type DevDependency, type FrontendInstall } from "./dependencies.js";
+import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, installCommand, needsBuild, projectFrontendDirectory, readFrontendGraph, unbuiltDependencies, withDevFailures, withFailedPackage, withOwners, type DependencyList, type DevDependency, type FrontendInstall } from "./dependencies.js";
 import { DevProblems, LineSplitter, uniqueProblems } from "./dev-problems.js";
 import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, sessionFailure, sessionTime, type DevSessionFailure, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
@@ -272,7 +272,9 @@ export class RunicSdk implements vscode.Disposable {
       // "built"; the errors of that dev, which the Problems panel shows, say it failed.
       // The session file's failure (runic-sdk 0.24) also names the package, however dev was started.
       const failure = this.sessionFailure(state);
-      state.dependencies = withDevFailures(withOwners(dependencyList(snapshot.session, isActive(snapshot), () => readFrontendGraph(frontendGraphPaths(state.project, tool))), owners),
+      // A project whose first dev failed before any build has no graph yet: the failure's package gets a row of its own.
+      const list = withFailedPackage(dependencyList(snapshot.session, isActive(snapshot), () => readFrontendGraph(frontendGraphPaths(state.project, tool))), failure, state.project);
+      state.dependencies = withDevFailures(withOwners(list, owners),
         [...state.devProblems?.problems ?? [], ...failure?.diagnostics ?? []], failure);
       state.install = undefined;
       if (isActive(snapshot)) continue;
