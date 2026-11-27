@@ -415,6 +415,7 @@ async function sessionFailure(sdk, appFolder, project, sessionFile, write, sessi
   const marker = path.join(app, 'dev-session-failure');
   const argsLog = path.join(app, 'dev-args.log');
   const source = path.join(app, 'shared-ui', 'src', 'index.ts');
+  const graphFile = path.join(app, 'obj', 'runic', 'frontend-graph.json');
   const runicProblems = () => vscode.languages.getDiagnostics().flatMap(([uri, items]) => items.filter(item => item.source === 'runic')
     .map(item => [uri.fsPath, String(item.code?.value ?? item.code), item.severity, item.range.start.line + 1, item.range.start.character + 1]))
     .filter(([file]) => file.startsWith(app)).sort();
@@ -471,8 +472,30 @@ async function sessionFailure(sdk, appFolder, project, sessionFile, write, sessi
     await new Promise(resolve => setTimeout(resolve, 1500));
     await waitFor(() => JSON.stringify(runicProblems()) === expected, () => `Each problem once: ${JSON.stringify(runicProblems())}`, 15000);
     await failedTree();
-    console.log('PASS Runic session failure: the template\'s task and DevKit\'s terminal leave TS2322 in the package, RAPPDEV1018 on the project and a failed package after dev ended; each once.');
+
+    // The 0.24 VM run, release checklist rows D087 b and d: a never-built project has no graph file, and the session's
+    // dependencies are [], so the tree had no package to mark. The failure's package gets a row of its own.
+    stage = 'session failure: a never-built project, without a graph file';
+    sdk.devOutput(project, []);
+    await cleared('The next session must clear the failure that DevKit\'s terminal also read');
+    fs.renameSync(graphFile, `${graphFile}.built`);
+    await waitFor(() => sdk.dependencies(project) === undefined, () => `Without a graph or a failure there is no package: ${JSON.stringify(sdk.dependencies(project))}`);
+    assert.equal((await sdk.devTree()).some(row => row.label === 'Frontend dependencies'), false);
+    const unbuiltEnded = ends('dev');
+    await vscode.commands.executeCommand('runic.dev.start', project);
+    assert.equal(await Promise.race([unbuiltEnded, new Promise(resolve => setTimeout(() => resolve('timeout'), 30000))]), 'ended', 'DevKit\'s dev task did not end');
+    await waitFor(() => sdk.dependencies(project)?.dependencies[0]?.state === 'failed', () => `The failure's package must get a failed row: ${JSON.stringify(sdk.dependencies(project))}`, 15000);
+    assert.equal(sdk.dependencies(project).source, 'last-session');
+    const unbuiltRow = (await sdk.devTree()).find(row => row.label === 'Frontend dependencies').children;
+    assert.deepEqual(unbuiltRow.map(row => [row.label, row.description]), [['@acme/shared-ui', 'SharedUi · failed']]);
+    assert.deepEqual(unbuiltRow[0].children.map(row => row.label), ["src/index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'."]);
+    // A later build's graph takes the row over.
+    fs.renameSync(`${graphFile}.built`, graphFile);
+    await waitFor(() => sdk.dependencies(project)?.source === 'graph', () => `The graph must take over: ${JSON.stringify(sdk.dependencies(project))}`);
+    await failedTree();
+    console.log('PASS Runic session failure: the template\'s task and DevKit\'s terminal leave TS2322 in the package, RAPPDEV1018 on the project and a failed package after dev ended, each once; a never-built project shows the failed package too.');
   } finally {
+    if (fs.existsSync(`${graphFile}.built`)) fs.renameSync(`${graphFile}.built`, graphFile);
     for (const file of [tasksFile, marker, argsLog, path.join(app, 'tool-version')]) fs.rmSync(file, { force: true });
     sdk.devOutput(project, []);
     write({ ...session, state: 'stopped' });

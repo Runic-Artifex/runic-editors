@@ -166,6 +166,34 @@ export interface DevFailure { file: string; line: number; column: number; severi
  */
 export interface NamedFailure { package: string | null; project: string | null; message: string }
 
+/** The `name` of a folder's package.json, or undefined. */
+export function packageName(directory: string): string | undefined {
+  try {
+    const value = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as unknown;
+    const name = value && typeof value === "object" ? (value as { name?: unknown }).name : undefined;
+    return typeof name === "string" && name.length > 0 ? name : undefined;
+  } catch { return undefined; }
+}
+
+/**
+ * The list with a row for the package that the session file's `failure` names (`named.package`) when the list has none:
+ * a project whose first `dev` fails before any build has no graph file yet, and its session's `dependencies` is empty
+ * (the 0.24 VM run, release checklist rows D087 b and d), so without this the tree showed no package at all. The row is
+ * `failed`, labelled by the folder's package.json name (`readName`), else the folder, and owned by `named.project`
+ * unless that is the served project (`served`; then {@link withOwners} may still find the library that owns it). A list
+ * that has the package, as the graph file of a later build does, keeps its own row; a running session's list is kept.
+ */
+export function withFailedPackage(list: DependencyList | undefined, named: NamedFailure | undefined, served?: string, readName: (directory: string) => string | undefined = packageName): DependencyList | undefined {
+  const directory = named?.package?.replace(/(?<=.)[\\/]+$/, "");
+  if (!named || !directory || list?.source === "session" || list?.dependencies.some(dependency => samePath(dependency.directory, directory))) return list;
+  const owner = named.project && !(served && samePath(named.project, served)) ? named.project : null;
+  const failed: DevDependency = {
+    package: readName(directory) ?? null, directory, kind: "compiled", owner, ownerName: owner ? owner.replace(/\.csproj$/i, "").split(/[\\/]/).at(-1) ?? null : null,
+    specifier: null, buildCommand: null, watchCommand: null, exports: [], state: "failed", watch: "none", message: named.message,
+  };
+  return list ? { ...list, dependencies: [...list.dependencies, failed] } : { source: "last-session", dependencies: [failed] };
+}
+
 /**
  * The list with the errors of the last `dotnet runic dev` (its Problems) on the packages they concern, for a list from
  * the graph file or a stopped session: a package whose build failed keeps an earlier build's exports on disk, so the
