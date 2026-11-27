@@ -91,5 +91,6 @@ try {
   if (!passed) { await mkdir(join(extension, 'artifacts'), { recursive: true }); await cp(join(temporary, 'profile'), join(extension, 'artifacts/host-failure'), { recursive: true }).catch(() => {}); }
   // RUNIC_HOST_KEEP=1 keeps the temporary workspace and profile (with the logs) of a passing run too.
   if (process.env.RUNIC_HOST_KEEP) console.log(`Kept ${temporary}`);
-  else await rm(temporary, { recursive: true, force: true });
+  // VS Code's helper processes can still write to the profile for a moment after `--wait` returns (ENOTEMPTY).
+  else await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
