@@ -21,7 +21,9 @@ export function launchSettingsPath(project: string): string { return join(dirnam
 
 /**
  * The `Project` profiles of a launchSettings.json text, in file order. Like `dotnet run`, it accepts comments and
- * trailing commas, and it skips profiles of another `commandName` (IIS Express, Executable, a custom kind).
+ * trailing commas, and it skips profiles of another `commandName` (IIS Express, Executable, a custom kind). Like Visual
+ * Studio, it refuses the file when a profile's variable, `commandLineArgs` or `workingDirectory` is not a string
+ * (`"PORT": 8080`; Visual Studio's F5 says "Expected string"), rather than dropping the value.
  */
 export function parseLaunchProfiles(text: string): LaunchProfile[] {
   const settings = JSON.parse(stripJsonComments(text)) as { profiles?: Record<string, unknown> } | null;
@@ -30,8 +32,11 @@ export function parseLaunchProfiles(text: string): LaunchProfile[] {
   for (const [name, value] of Object.entries(profiles)) {
     if (!value || typeof value !== "object") continue;
     const profile = value as Record<string, unknown>;
-    if (profile.commandName !== "Project") continue;
     const variables = profile.environmentVariables && typeof profile.environmentVariables === "object" ? profile.environmentVariables as Record<string, unknown> : {};
+    for (const [key, item] of Object.entries(variables)) checkString(name, key, item, true);
+    checkString(name, "commandLineArgs", profile.commandLineArgs, false);
+    checkString(name, "workingDirectory", profile.workingDirectory, false);
+    if (profile.commandName !== "Project") continue;
     result.push({
       name,
       commandLineArgs: typeof profile.commandLineArgs === "string" ? profile.commandLineArgs : undefined,
@@ -41,6 +46,19 @@ export function parseLaunchProfiles(text: string): LaunchProfile[] {
     });
   }
   return result;
+}
+
+/**
+ * Throws for a value Visual Studio refuses in a profile (not a string, null or missing), with the fix. The text matches
+ * the Visual Studio extension's (`LaunchProfiles.Text`).
+ */
+function checkString(profile: string, key: string, value: unknown, variable: boolean): void {
+  if (value === undefined || value === null || typeof value === "string") return;
+  const written = typeof value === "number" || typeof value === "boolean" ? String(value) : "";
+  const kind = typeof value === "number" ? "a number" : typeof value === "boolean" ? "a Boolean" : Array.isArray(value) ? "an array" : "an object";
+  const what = variable ? `sets the variable ${key} to ${written ? `${written}, ` : ""}${kind}` : `has ${kind} as ${key}`;
+  const fix = written ? ` Write it as a string: "${key}": "${written}".` : "";
+  throw new Error(`the launch profile ${profile} ${what}, and Visual Studio reads only strings there (its F5 refuses the file: "Expected string"), so Runic DevKit does not use the file either.${fix}`);
 }
 
 function raxSettings(value: unknown): RaxProfileSettings | undefined {

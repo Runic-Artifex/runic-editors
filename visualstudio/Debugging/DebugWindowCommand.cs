@@ -90,12 +90,10 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         if (!snapshot.IsReadyForIde)
         {
             await PageAttach.SetStatusAsync($"Runic: starting dotnet runic dev --no-window for {name}…");
-            await service.StartAsync(project, noWindow: true, StartDevCommand.ConfirmAsync, cancellationToken);
+            var run = await service.StartAsync(project, noWindow: true, StartDevCommand.ConfirmAsync, cancellationToken);
             var started = service.Refresh(project);
             if (started.IsActive && started.Session?.Window?.OwnedByIde != true) return; // the restart was declined
-            snapshot = await service.WaitForAsync(project, current => current.IsReadyForIde, ReadyTimeout,
-                current => service.StartedHere(project) || current.IsActive ? null : "dotnet runic dev stopped; see the Runic SDK Output pane and the Error List.",
-                cancellationToken);
+            snapshot = await service.WaitForReadyAsync(project, run, ReadyTimeout, cancellationToken);
         }
         var session = snapshot.Session!;
 
@@ -122,6 +120,12 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         var plan = WindowDebug.Plan(visualStudio, session.Window?.Environment, WindowDebug.FreePort, profile?.EnvironmentVariables);
         string from = program.Profile != null ? $" (launch profile {program.Profile})" : "";
         SdkOutput.WriteLine($"Debugging {program.Program} {program.CommandLineArguments} in {program.WorkingDirectory}{from} with {string.Join(" ", plan.Added.Select(pair => pair.Key + "=" + pair.Value))}");
+        // Outside Development the host opens no page endpoint (runic-sdk specs/desktop/development-host-profile.md): say so
+        // now, and wait only briefly instead of until the Window closes (the 0.24 VM run, profile "Mock data" in Staging).
+        var host = plan.HostEnvironment;
+        bool fromProfile = profile?.EnvironmentVariables.Any(pair => string.Equals(pair.Key, host.Variable, StringComparison.OrdinalIgnoreCase)) == true;
+        string? notDevelopment = host.IsDevelopment ? null : host.NotDevelopmentMessage(name, plan.EndpointUrl, fromProfile ? profile!.Name : null);
+        if (notDevelopment != null) SdkOutput.WriteLine("Debug the Window: " + notDevelopment);
         if (plan.Host == PageHost.WebView2 && PageAttach.IsElevated())
             SdkOutput.WriteLine("Visual Studio runs as administrator: WebView2 ignores WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in an elevated Window, so the page's debugger cannot attach.");
         // A page breakpoint with "Break all processes" on would also stop the Window, and WebView2 with it (checklist row 10).
@@ -137,7 +141,7 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         await PageAttach.SetStatusAsync($"Runic: waiting for the page's DevTools endpoint {plan.EndpointUrl}…");
         try
         {
-            var pages = await PageAttach.WaitForPageAsync(plan.EndpointUrl, processId, () => PageAttach.IsRunning(processId), PageAttach.SetStatusAsync, cancellationToken, attachHung);
+            var pages = await PageAttach.WaitForPageAsync(plan.EndpointUrl, processId, () => PageAttach.IsRunning(processId), PageAttach.SetStatusAsync, cancellationToken, attachHung, notDevelopment);
             SdkOutput.WriteLine($"Attached the JavaScript debugger to {string.Join(", ", pages)} ({plan.EndpointUrl}).");
             if (session.Frontend?.DevelopmentServer != null)
                 SdkOutput.WriteLine("TSX and TS breakpoints bind through the development server's source maps with absolute sources, which runic-sdk 0.22's vite-plugin-runic writes.");

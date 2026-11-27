@@ -248,7 +248,10 @@ command line the same way for every launch:
 
 The profile is the first `Project` profile of the project's
 `Properties/launchSettings.json`, or the one `launchProfile` names (`null` for
-none). DevKit applies it itself, so the C# debugger does not apply it again.
+none). DevKit applies it itself, so the C# debugger does not apply it again. As
+Visual Studio does, it refuses a `launchSettings.json` whose variable,
+`commandLineArgs` or `workingDirectory` is not a string (`"PORT": 8080`), and
+says how to write it (`"PORT": "8080"`).
 
 | Attribute | |
 | --- | --- |

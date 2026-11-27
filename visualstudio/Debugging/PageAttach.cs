@@ -27,6 +27,11 @@ internal static class PageAttach
     /// <summary>How long a Window may take to open its endpoint and page. A paused .NET breakpoint extends it (see <see cref="WaitForPageAsync"/>).</summary>
     public static readonly TimeSpan PageTimeout = TimeSpan.FromMinutes(3);
     /// <summary>
+    /// How long a Window outside Development may take: its host does not open the endpoint (runic-sdk
+    /// specs/desktop/development-host-profile.md), so the wait only covers an application that sets its environment itself.
+    /// </summary>
+    public static readonly TimeSpan NotDevelopmentTimeout = TimeSpan.FromSeconds(20);
+    /// <summary>
     /// How long one page attach may take. A broken JavaScript adapter (a stale <c>.vs</c> folder) can keep it from ever
     /// completing (runic-editors#23); DevKit then ends the adapter and says so in the Runic SDK Output pane (#44).
     /// </summary>
@@ -108,12 +113,16 @@ internal static class PageAttach
 
     /// <summary>
     /// Waits until the endpoint answers and the transport lists a page, then attaches the JavaScript engine to each page.
-    /// Gives up after <see cref="PageTimeout"/> of the Window running, not counting time the debugger spends in break mode,
-    /// or when <paramref name="stillRunning"/> turns false; <paramref name="status"/> reports progress.
+    /// Gives up after <see cref="PageTimeout"/> of the Window running, not counting time the debugger spends in break mode
+    /// or Visual Studio shows a modal dialog (such as its Release "Just My Code" warning, which holds the Window before it
+    /// creates its page), or when <paramref name="stillRunning"/> turns false; <paramref name="status"/> reports progress.
+    /// With <paramref name="notDevelopment"/> (why the Window, outside Development, opens no endpoint) it gives up after
+    /// <see cref="NotDevelopmentTimeout"/> and says that instead.
     /// Returns the attached pages' names.
     /// </summary>
-    public static async Task<IReadOnlyList<string>> WaitForPageAsync(string url, int? debuggedProcess, Func<bool>? stillRunning, Func<string, Task> status, CancellationToken cancellationToken, Action? attachHung = null)
+    public static async Task<IReadOnlyList<string>> WaitForPageAsync(string url, int? debuggedProcess, Func<bool>? stillRunning, Func<string, Task> status, CancellationToken cancellationToken, Action? attachHung = null, string? notDevelopment = null)
     {
+        var limit = notDevelopment != null ? NotDevelopmentTimeout : PageTimeout;
         var settled = System.Diagnostics.Stopwatch.StartNew();
         // Wall-clock time of the Window running; an iteration that ends in break mode does not count.
         var waited = TimeSpan.Zero;
@@ -124,7 +133,7 @@ internal static class PageAttach
         {
             var iteration = System.Diagnostics.Stopwatch.StartNew();
             cancellationToken.ThrowIfCancellationRequested();
-            if (stillRunning != null && !stillRunning()) throw new InvalidOperationException($"The Window exited before its page's DevTools endpoint {url} answered.");
+            if (stillRunning != null && !stillRunning()) throw new InvalidOperationException($"The Window exited before its page's DevTools endpoint {url} answered.{(notDevelopment != null ? " " + notDevelopment : "")}");
             if (!answered && await AnswersAsync(url, cancellationToken))
             {
                 answered = true;
@@ -143,8 +152,9 @@ internal static class PageAttach
                 if (attached.Count > 0) return attached;
             }
             await Task.Delay(step, cancellationToken);
-            if (!await InBreakModeAsync()) waited += iteration.Elapsed;
-            if (waited >= PageTimeout)
+            if (!await PausedAsync()) waited += iteration.Elapsed;
+            if (waited >= limit && notDevelopment != null && !answered) throw new TimeoutException(notDevelopment);
+            if (waited >= limit)
                 throw new TimeoutException(answered
                     ? $"The DevTools endpoint {url} answered, but showed no page within {Math.Round(PageTimeout.TotalMinutes)} minutes. Use Attach to the Page once the Window shows its page."
                     : $"The page's DevTools endpoint {url} did not answer within {Math.Round(PageTimeout.TotalMinutes)} minutes of the Window running.{(IsElevated() ? " Visual Studio runs as administrator, so WebView2 ignores the port; run it without elevation." : "")} The .NET debugger stays attached; use Attach to the Page once the Window shows its page.");
@@ -167,10 +177,19 @@ internal static class PageAttach
         catch (COMException) { return false; }
     }
 
-    private static async Task<bool> InBreakModeAsync()
+    /// <summary>
+    /// Whether the Window is held: the debugger is in break mode, or Visual Studio shows a modal dialog. The Release run of
+    /// the 0.24 VM checks timed out while Visual Studio's "Just My Code" warning waited for Continue; the Window created its
+    /// WebView2, and the port, only after it.
+    /// </summary>
+    private static async Task<bool> PausedAsync()
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-        try { return ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte && dte.Debugger.CurrentMode == EnvDTE.dbgDebugMode.dbgBreakMode; }
+        try
+        {
+            if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte && dte.Debugger.CurrentMode == EnvDTE.dbgDebugMode.dbgBreakMode) return true;
+            return MessageBoxes.VisualStudioIsModal();
+        }
         catch (COMException) { return false; }
     }
 

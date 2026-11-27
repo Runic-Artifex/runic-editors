@@ -145,16 +145,21 @@ internal sealed class DevLaunchGuard : IOleCommandTarget
         {
             await SetStatusAsync($"Runic: starting dotnet runic dev --no-window for {Path.GetFileName(project)}…");
             // The user already chose to restart: no second question.
-            await service.StartAsync(project, noWindow: true, _ => Task.FromResult(true), cancellationToken);
-            await service.WaitForAsync(project, snapshot => snapshot.IsReadyForIde, ReadyTimeout,
-                snapshot => service.StartedHere(project) || snapshot.IsActive ? null : "dotnet runic dev stopped; see the Runic SDK Output pane and the Error List.",
-                cancellationToken);
+            var started = await service.StartAsync(project, noWindow: true, _ => Task.FromResult(true), cancellationToken);
+            // Ends at once when that dev exits early, with its exit code and last lines (a fresh clone: Restore tools).
+            await service.WaitForReadyAsync(project, started, ReadyTimeout, cancellationToken);
             await SetStatusAsync($"Runic: dotnet runic dev --no-window is ready; starting {Path.GetFileName(project)}.");
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is not EnvDTE.DTE dte) throw new InvalidOperationException("Visual Studio automation (DTE) is unavailable; start the launch again.");
             dte.ExecuteCommand(debug ? "Debug.Start" : "Debug.StartWithoutDebugging");
         }
         catch (OperationCanceledException) { }
+        catch (DevExitException error)
+        {
+            SdkOutput.WriteLine("F5: " + error.Message);
+            await SetStatusAsync("");
+            await ToolRestore.ReportAsync(package, error.Project, error.Exit, package.DisposalToken);
+        }
         catch (Exception error)
         {
             SdkOutput.WriteLine("F5: " + error.Message);

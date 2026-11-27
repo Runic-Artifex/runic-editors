@@ -203,6 +203,15 @@ If a `dev` that Visual Studio started runs its own Window, Yes restarts it with
 there first, or continue and get two Windows. The question comes every time;
 there is no setting to remember the answer.
 
+When the `dev` that Yes started exits before it is ready, F5 stops at once with
+`dev`'s exit code and last output lines (all of them in the Runic SDK Output
+pane; the message points to the Error List only when `dev`'s output put rows
+there). On a fresh clone whose local tools aren't restored (`Run "dotnet tool
+restore" …`), the message asks whether to restore them: **Yes** runs `dotnet
+tool restore` in the project's folder, with its output in the Runic SDK pane;
+press F5 again afterwards. DevKit doesn't restore by itself (D081.4). Debug the
+Window and Start dotnet runic dev make the same offer.
+
 F5 starts the launch profile under the .NET debugger only. For breakpoints in
 the page, use [Debug the Window](#debugging-the-window-and-its-page).
 
@@ -242,7 +251,10 @@ the .NET code and the page in one session:
    The active profile is the one on the toolbar (the project's
    `ActiveDebugProfile`), else the first in `Properties/launchSettings.json`.
    Only `"commandName": "Project"` profiles apply; with another kind, or without
-   a `launchSettings.json`, the Window gets the project's arguments only. An
+   a `launchSettings.json`, the Window gets the project's arguments only. As
+   Visual Studio's F5, it refuses a `launchSettings.json` whose variable,
+   `commandLineArgs` or `workingDirectory` is not a string (`"PORT": 5000`), and
+   says how to write it (`"PORT": "5000"`). An
    argument for Debug builds only, such as `/mock`, belongs in `StartArguments`
    in a `PropertyGroup` with `Condition="'$(Configuration)' == 'Debug'"`, because
    a launch profile has no configuration conditions.
@@ -277,9 +289,19 @@ Attach to the Page does the same for a WebView2 page. **Debug → Break All**
 stops only the .NET Window in a Debug the Window session (see Known limits). If Visual Studio ends while
 the option is off, DevKit turns it on again the next time it loads. If you have
 turned the option off yourself, it stays off. Debug the Window waits for the page up to three
-minutes of the Window running (time stopped at a .NET breakpoint does not
-count). If the page does not appear, it says so in the **Runic SDK** Output pane
-and the .NET debugger stays attached.
+minutes of the Window running (time stopped at a .NET breakpoint, or while a
+Visual Studio dialog such as the Release "Just My Code" warning is open, does
+not count). If the page does not appear, it says so and the .NET debugger stays
+attached.
+
+The page's endpoint opens only when the Window runs in **Development**
+(`DOTNET_ENVIRONMENT`, else `ASPNETCORE_ENVIRONMENT`, is `Development`; runic-sdk's
+`specs/desktop/development-host-profile.md`). Outside it the host drops
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` and `dev`'s development server, so the
+page stays blank under `dev`. When the launch profile sets another environment
+(`"DOTNET_ENVIRONMENT": "Staging"`), Debug the Window says so in the Runic SDK
+pane at once, waits 20 seconds instead of three minutes, then names the
+variable and its value; the .NET debugger stays attached.
 
 **Tools → Runic → Attach to the Page (JavaScript)** attaches the JavaScript
 debugger alone to a page that already runs with an endpoint: the session file's

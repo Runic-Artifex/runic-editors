@@ -140,6 +140,49 @@ public sealed class WindowDebugPlan
     public IReadOnlyDictionary<string, string> Added { get; }
     /// <summary>The endpoint the JavaScript engine attaches to.</summary>
     public string EndpointUrl => CdpEndpoints.Url(Port);
+    /// <summary>The Window's environment name (<see cref="HostEnvironment"/>) and whether it is Development.</summary>
+    public HostEnvironment HostEnvironment => HostEnvironment.Of(Environment);
+}
+
+/// <summary>
+/// Whether a Window runs in Development, by runic-sdk's rule (specs/desktop/development-host-profile.md, "The Development
+/// environment"): <c>DOTNET_ENVIRONMENT</c>, or else (unset or empty) <c>ASPNETCORE_ENVIRONMENT</c>, equals
+/// <c>Development</c> without case. Outside Development the host removes <c>WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS</c> and
+/// ignores <c>RUNIC_WEBUI_REMOTE_DEBUGGING_PORT</c> and the development server, so its page's endpoint never opens.
+/// </summary>
+public sealed class HostEnvironment
+{
+    public const string AspNetCoreVariable = "ASPNETCORE_ENVIRONMENT";
+    public const string Development = "Development";
+
+    private HostEnvironment(string variable, string? value) { Variable = variable; Value = value; }
+
+    /// <summary>The variable that decides: <c>DOTNET_ENVIRONMENT</c>, or <c>ASPNETCORE_ENVIRONMENT</c> when the first is unset or empty.</summary>
+    public string Variable { get; }
+    /// <summary>Its value; null when neither is set (the host then runs in Production).</summary>
+    public string? Value { get; }
+    public bool IsDevelopment => string.Equals(Value, Development, StringComparison.OrdinalIgnoreCase);
+
+    public static HostEnvironment Of(IReadOnlyDictionary<string, string> environment)
+    {
+        string? Read(string name) => environment.FirstOrDefault(pair => string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase)).Value;
+        string? dotnet = Read(WindowDebug.EnvironmentVariable);
+        if (!string.IsNullOrEmpty(dotnet)) return new HostEnvironment(WindowDebug.EnvironmentVariable, dotnet);
+        string? aspNetCore = Read(AspNetCoreVariable);
+        return !string.IsNullOrEmpty(aspNetCore) ? new HostEnvironment(AspNetCoreVariable, aspNetCore) : new HostEnvironment(WindowDebug.EnvironmentVariable, null);
+    }
+
+    /// <summary>
+    /// Why the page's endpoint does not open outside Development: the variable and its value, where it comes from
+    /// (<paramref name="profile"/>, when the launch profile sets it), and the fix.
+    /// </summary>
+    public string NotDevelopmentMessage(string windowName, string url, string? profile)
+    {
+        string value = Value == null ? $"{Variable} unset (Production)" : $"{Variable}={Value}";
+        string from = profile != null ? $" from the launch profile {profile}" : "";
+        string fix = profile != null ? $"Set {Variable} to Development in the launch profile {profile}" : $"Set {Variable} to Development";
+        return $"{windowName} runs with {value}{from}, not in Development, so its page's debugging endpoint {url} does not open: a Runic Window opens it, and uses dotnet runic dev's development server, only in Development (runic-sdk: specs/desktop/development-host-profile.md). {fix} to debug the page, or press F5 to debug the .NET code alone.";
+    }
 }
 
 /// <summary>Debug the Window's decisions that need no Visual Studio (VS Code: <c>window-debug.ts</c>).</summary>
