@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { detectToolVersion, devArguments, forceStop, onDevEnd, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
+import { detectToolVersion, devArguments, devExitMessage, forceStop, probeToolsMissing, toolRestoreArguments, toolsMissing, onDevEnd, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
 import { DevSessionFollower, devSessionPath, devSessionSchema, raxDevSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, parseDevSession, type DevSession, type DevSnapshot } from "../src/dev-session.js";
 import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, readyPattern } from "../src/dev-problems.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
@@ -786,3 +786,25 @@ test("editors#53: a dev that ignores SIGINT too is killed with its process group
   expect(await stopDevProcess(child, { stopOnInput: true, inputTimeout: 300, forceTimeout: 1000, force: (target, attempt) => forceStop(target, attempt, process.platform, undefined, 1500) })).toBe("forced");
   expect(await gone(dev, 4000)).toBe(true);
 }, 30000);
+
+test("an early dev exit names its exit code and last output lines, and offers the restore when the tools are missing", () => {
+  const restore = ['Cannot find a tool in the manifest file that has a command named \'runic\'.', 'Run "dotnet tool restore" to make the "dotnet-runic" command available.'];
+  expect(toolsMissing(restore)).toBe(true);
+  expect(toolsMissing(["error MSB1009: Project file does not exist."])).toBe(false);
+  expect(toolRestoreArguments()).toEqual(["tool", "restore"]);
+  expect(devExitMessage(1, ["one", "two", ...restore], true)).toBe(
+    "dotnet runic dev exited with code 1 before its session was ready: two | Cannot find a tool in the manifest file that has a command named 'runic'. | Run \"dotnet tool restore\" to make the \"dotnet-runic\" command available. The project's local tools are not restored: choose Restore tools (dotnet tool restore), then press F5 again.");
+  expect(devExitMessage(2, ["  error RAPPCLI1001: no project  "], false)).toBe("dotnet runic dev exited with code 2 before its session was ready: error RAPPCLI1001: no project.");
+  expect(devExitMessage(undefined, [], false)).toBe("dotnet runic dev exited before its session was ready; see its task terminal.");
+});
+
+test("the tool probe reports missing tools only from dotnet's restore message", async () => {
+  if (process.platform === "win32") return;
+  const directory = mkdtempSync(join(tmpdir(), "runic-probe-"));
+  try {
+    const script = (name: string, body: string) => { const file = join(directory, name); writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 }); return file; };
+    expect(await probeToolsMissing(script("missing.sh", 'echo \'Run "dotnet tool restore" to make the "dotnet-runic" command available.\' >&2; exit 1'), directory)).toBe(true);
+    expect(await probeToolsMissing(script("other.sh", "echo 'something else' >&2; exit 1"), directory)).toBe(false);
+    expect(await probeToolsMissing(script("restored.sh", "echo 0.24.0"), directory)).toBe(false);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});

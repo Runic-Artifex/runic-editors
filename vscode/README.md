@@ -215,9 +215,18 @@ would start (MSBuild's `RunCommand`; on macOS the development bundle's
 executable) under the C# extension's `coreclr` debugger. It needs the
 [C# extension](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp).
 
+When the `dev` that F5 started exits before its session is ready, F5 stops at
+once with `dev`'s exit code and last output lines (all of them in the Runic
+output and the task terminal). On a fresh clone whose local tools aren't
+restored (`Run "dotnet tool restore" …`), the error offers **Restore tools**,
+which runs `dotnet tool restore` in the project's folder as a task; press F5
+again afterwards. DevKit doesn't restore by itself. The template's `Window`
+configuration restores the tools in its `preLaunchTask`.
+
 **Run and Debug** lists one `runic` entry per Window project and `Project`
 launch profile ("Runic: Acme.App (Mock data)"; "Runic: Acme.App" when the
-project has one profile or none), and a new `launch.json` gets the same entries.
+project has one profile or none), under the project's folder, and a new
+`launch.json` gets the same entries.
 
 **Arguments, variables and working directory.** DevKit builds the Window's
 command line the same way for every launch:

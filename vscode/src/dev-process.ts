@@ -165,3 +165,41 @@ export function onDevEnd(child: Pick<ChildProcess, "once">, onEnd: (code: number
 export function terminalText(text: string): string {
   return text.replace(/\r?\n/g, "\r\n");
 }
+
+/** `dotnet`'s message for a local tool of the manifest that is not restored: `Run "dotnet tool restore" to make the … command available.` */
+const toolRestorePattern = /dotnet tool restore/i;
+
+/** Whether `dev`'s output says that the project's local tools are not restored (a fresh clone). */
+export function toolsMissing(lines: readonly string[]): boolean {
+  return lines.some(line => toolRestorePattern.test(line));
+}
+
+/** The arguments of the restore DevKit offers behind a click (D081.4). */
+export function toolRestoreArguments(): string[] {
+  return ["tool", "restore"];
+}
+
+/**
+ * Whether `<dotnet> <verb> --version` in `cwd` says that the local tools are not restored, within 15 seconds: for a
+ * `dev` whose output DevKit did not read (a process task).
+ */
+export function probeToolsMissing(dotnet: string, cwd: string, verb = "runic"): Promise<boolean> {
+  return new Promise(resolveProbe => execFile(dotnet, [verb, "--version"], { cwd, timeout: 15_000, windowsHide: true, env: { ...process.env, DOTNET_NOLOGO: "1" } },
+    (error, stdout, stderr) => resolveProbe(!!error && toolRestorePattern.test(`${stdout}\n${stderr}`))));
+}
+
+/** How many output lines the message of an early exit shows. */
+export const exitMessageLines = 3;
+
+/**
+ * The message of a `dev` that exited before its session was ready: its exit code, its last output lines (the full
+ * output is in its task terminal), and with `missingTools` the restore it needs.
+ */
+export function devExitMessage(code: number | undefined, lines: readonly string[], missingTools: boolean): string {
+  const exit = code === undefined ? "exited" : `exited with code ${code}`;
+  const last = lines.filter(line => !/^dotnet (runic|rax) dev exited with /.test(line.trim())).slice(-exitMessageLines).map(line => line.trim());
+  const output = last.length ? `: ${last.join(" | ")}` : "; see its task terminal";
+  const fix = missingTools ? " The project's local tools are not restored: choose Restore tools (dotnet tool restore), then press F5 again." : "";
+  const sentence = `dotnet runic dev ${exit} before its session was ready${output}`;
+  return `${/[.!?]$/.test(sentence) ? sentence : `${sentence}.`}${fix}`;
+}
