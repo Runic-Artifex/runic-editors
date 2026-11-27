@@ -16,7 +16,7 @@
       "environmentVariables": {
         "DOTNET_ENVIRONMENT": "Staging",
         "ACME_DATA": "%ACME_ROOT%\\mock",
-        "ACME_PORT": 5000,
+        "ACME_PORT": "5000",
       },
     },
     "Installed": {

@@ -71,7 +71,9 @@ public static class LaunchProfiles
 
     /// <summary>
     /// The profiles of a <c>launchSettings.json</c> in the file's order. Comments and trailing commas are allowed, as
-    /// Visual Studio allows them. Throws <see cref="FormatException"/> for a file that is not a JSON object.
+    /// Visual Studio allows them. Throws <see cref="FormatException"/> for a file that is not a JSON object, and
+    /// <see cref="LaunchSettingsValueException"/> for a value Visual Studio refuses: a variable, <c>commandLineArgs</c> or
+    /// <c>workingDirectory</c> that is not a string (Visual Studio's F5 then refuses the whole file, "Expected string").
     /// </summary>
     public static IReadOnlyList<LaunchProfile> Parse(string text)
     {
@@ -86,8 +88,8 @@ public static class LaunchProfiles
             var variables = new List<KeyValuePair<string, string>>();
             if (Json.Object(Json.Get(profile, "environmentVariables")) is { } environment)
                 foreach (var variable in environment)
-                    if (variable.Key.Length > 0 && Scalar(variable.Value) is { } value) variables.Add(new KeyValuePair<string, string>(variable.Key, value));
-            result.Add(new LaunchProfile(pair.Key, Json.String(profile, "commandName"), Scalar(Json.Get(profile, "commandLineArgs")), variables, Scalar(Json.Get(profile, "workingDirectory"))));
+                    if (variable.Key.Length > 0 && Text(pair.Key, variable.Key, variable.Value, isVariable: true) is { } value) variables.Add(new KeyValuePair<string, string>(variable.Key, value));
+            result.Add(new LaunchProfile(pair.Key, Json.String(profile, "commandName"), Text(pair.Key, "commandLineArgs", Json.Get(profile, "commandLineArgs")), variables, Text(pair.Key, "workingDirectory", Json.Get(profile, "workingDirectory"))));
         }
         return result;
     }
@@ -105,7 +107,7 @@ public static class LaunchProfiles
               ?? profiles.FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
         profile ??= profiles[0];
         return profile.IsProject ? new ActiveLaunchProfile(profile, null)
-            : new ActiveLaunchProfile(null, $"the active launch profile {profile.Name} is a {profile.CommandName ?? "(no commandName)"} profile, so Debug the Window applies no profile; only Project profiles apply");
+            : new ActiveLaunchProfile(null, $"the active launch profile {profile.Name} is {KindPhrase(profile.CommandName)} profile, so Debug the Window applies no profile; only Project profiles apply");
     }
 
     /// <summary>
@@ -120,6 +122,7 @@ public static class LaunchProfiles
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return new ActiveLaunchProfile(null, null); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { throw new InvalidOperationException($"Could not read {path}: {error.Message}", error); }
         try { return Choose(Parse(text), activeName); }
+        catch (LaunchSettingsValueException error) { throw new InvalidOperationException($"{path}: {error.Message}", error); }
         catch (FormatException error) { throw new InvalidOperationException($"{path} is not valid JSON: {error.Message}", error); }
     }
 
@@ -152,14 +155,29 @@ public static class LaunchProfiles
         return Variable.Replace(text, match => lookup.TryGetValue(match.Groups[1].Value, out string? value) ? value : match.Value);
     }
 
-    /// <summary>A string, number or Boolean as text (Visual Studio accepts <c>"PORT": 5000</c>); null for the rest.</summary>
-    private static string? Scalar(object? value) => value switch
+    /// <summary>"an Executable", "a Project", "a profile without commandName": the kind with its article.</summary>
+    internal static string KindPhrase(string? commandName)
+        => string.IsNullOrWhiteSpace(commandName) ? "a (no commandName)"
+            : ("AEIOUaeiou".IndexOf(commandName![0]) >= 0 ? "an " : "a ") + commandName;
+
+    /// <summary>
+    /// A string value as text; null for a missing or <c>null</c> value. A number, Boolean, object or array throws
+    /// <see cref="LaunchSettingsValueException"/>: Visual Studio reads only strings there and refuses the file.
+    /// </summary>
+    private static string? Text(string profile, string key, object? value, bool isVariable = false)
     {
-        string text => text,
-        double number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        bool flag => flag ? "true" : "false",
-        _ => null,
-    };
+        if (value is null or string) return (string?)value;
+        string written = value switch
+        {
+            double number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            bool flag => flag ? "true" : "false",
+            _ => "",
+        };
+        string kind = value switch { double => "a number", bool => "a Boolean", IDictionary<string, object?> => "an object", _ => "an array" };
+        string what = isVariable ? $"sets the variable {key} to {(written.Length > 0 ? written + ", " : "")}{kind}" : $"has {kind} as {key}";
+        string fix = written.Length > 0 ? $" Write it as a string: \"{key}\": \"{written}\"." : "";
+        throw new LaunchSettingsValueException($"the launch profile {profile} {what}, and Visual Studio reads only strings there (its F5 refuses the file: \"Expected string\"), so Debug the Window does not use the file either.{fix}");
+    }
 
     /// <summary>The text without <c>//</c> and <c>/* */</c> comments and without trailing commas, outside strings.</summary>
     internal static string Relax(string text)
@@ -197,4 +215,10 @@ public static class LaunchProfiles
         }
         return result.ToString();
     }
+}
+
+/// <summary>A launch profile value that Visual Studio refuses (not a string); the message names the profile and key.</summary>
+public sealed class LaunchSettingsValueException : FormatException
+{
+    public LaunchSettingsValueException(string message) : base(message) { }
 }

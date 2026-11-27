@@ -39,9 +39,10 @@ internal sealed class AttachToPageCommand : RunicCommandHandler
         if (endpoints.Count == 0)
         {
             string reasons = string.Join(" ", (snapshot.IsActive ? snapshot.Session?.UnavailableDebugEndpoints : null)?.Select(item => $"{item.Engine} {item.Url}: {item.Reason}.") ?? Enumerable.Empty<string>());
-            VsShellUtilities.ShowMessageBox(package,
+            // In front: the Window that dev started is usually in front of Visual Studio here (the 0.24 VM run).
+            MessageBoxes.Show(package,
                 $"No page of {Path.GetFileName(project)} has a DevTools Protocol endpoint. Start it with Debug the Window, or run dotnet runic dev with its Window (Runic DevKit passes --debug-endpoint to the 0.22 tool for CS-WebUI; for WebView2 set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222).{(reasons.Length > 0 ? " Unavailable: " + reasons : "")}",
-                RunicPackage.Title, OLEMSGICON.OLEMSGICON_INFO, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                OLEMSGICON.OLEMSGICON_INFO);
             return;
         }
         var endpoint = endpoints[0];

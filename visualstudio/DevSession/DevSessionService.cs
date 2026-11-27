@@ -55,7 +55,18 @@ internal sealed class DevSessionService
         public bool Stopping { get; set; }
         public DevProblems? Problems { get; set; }
         public int ProblemsVersion;
+        /// <summary>How the last <c>dev</c> this extension started ended, and which run that was.</summary>
+        public DevExit? LastExit { get; set; }
+        public DevProcess? LastExitRun { get; set; }
+        /// <summary>How many F5 or Debug the Window waits report this project's <c>dev</c> exit themselves.</summary>
+        public int Waiting;
     }
+
+    /// <summary>
+    /// A <c>dev</c> this extension started, that exited with tools missing while nothing waited for it (Start dotnet runic
+    /// dev): the project and its exit. The package offers the restore (VS Code: the same offer from the Dev Session view).
+    /// </summary>
+    public event Action<string, DevExit>? ExitedWithoutWaiter;
 
     /// <summary>Raised on any thread when a project's dev snapshot or its owned process changes.</summary>
     public event EventHandler? Changed;
@@ -87,6 +98,8 @@ internal sealed class DevSessionService
         initialized = true;
         RunicSdkState.Instance.Changed += (_, _) => Sync();
         package.DisposalToken.Register(StopAllOwned);
+        // A dev started from Tools > Runic or the Dev Session view that exits for missing tools: the same offer as F5's.
+        ExitedWithoutWaiter += (project, exit) => _ = package.JoinableTaskFactory.RunAsync(() => ToolRestore.ReportAsync(package, project, exit, package.DisposalToken));
         await DevLaunchGuard.AdviseAsync(package, cancellationToken);
         await TaskScheduler.Default;
         try { await RunicSdkState.Instance.EnsureScannedAsync(cancellationToken); }
@@ -226,7 +239,8 @@ internal sealed class DevSessionService
     /// when it already runs in that mode; with the other mode, a <c>dev</c> this extension started restarts after a
     /// confirmation (<paramref name="confirmRestart"/>), and one started elsewhere has to be stopped in its terminal.
     /// </summary>
-    public async Task StartAsync(string project, bool noWindow, Func<string, Task<bool>> confirmRestart, CancellationToken cancellationToken)
+    /// <returns>The <c>dev</c> it started, or null when it started none.</returns>
+    public async Task<DevProcess?> StartAsync(string project, bool noWindow, Func<string, Task<bool>> confirmRestart, CancellationToken cancellationToken)
     {
         await TaskScheduler.Default;
         var snapshot = Refresh(project);
@@ -237,11 +251,11 @@ internal sealed class DevSessionService
             if (ideOwned == noWindow)
             {
                 SdkOutput.WriteLine(DevStartGate.AlreadyActive(name, snapshot.Session?.ProcessId, snapshot.Label));
-                return;
+                return null;
             }
             if (!StartedHere(project))
                 throw new InvalidOperationException($"dotnet runic dev (process {snapshot.Session?.ProcessId}) already runs for {name}{(ideOwned ? " without the Window" : " with its Window")} and was started outside Visual Studio; stop it with Ctrl+C in its terminal first.");
-            if (!await confirmRestart($"dotnet runic dev already runs for {name}{(ideOwned ? " without the Window" : " with its Window")}. Stop it and start dotnet runic dev{(noWindow ? " --no-window" : "")}?")) return;
+            if (!await confirmRestart($"dotnet runic dev already runs for {name}{(ideOwned ? " without the Window" : " with its Window")}. Stop it and start dotnet runic dev{(noWindow ? " --no-window" : "")}?")) return null;
             await StopAsync(project, cancellationToken);
             await WaitForAsync(project, current => !current.IsActive, TimeSpan.FromSeconds(30), null, cancellationToken);
         }
@@ -274,6 +288,7 @@ internal sealed class DevSessionService
         // WIN-06: the 0.22 dev stops on a stop line on its input and runs its own stop instead of being ended by force.
         bool stopOnInput = DevToolVersions.SupportsStopOnInput(toolVersion);
         var problems = new DevProblems(project, noWindow, manifestVersion);
+        var lastLines = new DevExits.LastLines();
         lock (gate) { entry.Problems = problems; entry.ProblemsVersion++; }
         PublishProblems(project, entry, Array.Empty<RunicErrorEntry>());
         _ = RunicSdkState.Background.RunAsync(async () => await RunicOutput.ShowAsync(await RunicOutput.SdkAsync()));
@@ -283,6 +298,7 @@ internal sealed class DevSessionService
             run = DevProcess.Start(dotnet, project, noWindow, line =>
             {
                 SdkOutput.WriteLine(line);
+                lastLines.Add(line);
                 bool changed;
                 IReadOnlyList<RunicErrorEntry> current;
                 lock (gate)
@@ -308,11 +324,47 @@ internal sealed class DevSessionService
         {
             SdkOutput.WriteLine($"dotnet runic dev exited with code {task.Result} ({Path.GetFileName(project)}).");
             if (run.EndedLeftovers > 0) SdkOutput.WriteLine(DevStartGate.EndedLeftovers(run.EndedLeftovers));
-            lock (gate) if (ReferenceEquals(entry.Run, run)) { entry.Run = null; entry.Stopping = false; }
+            DevExit exit;
+            bool offer;
+            lock (gate)
+            {
+                // Recorded before Run is cleared, so a wait that sees no running dev finds its exit.
+                exit = new DevExit(task.Result, lastLines.Snapshot(), ReferenceEquals(entry.Problems, problems) ? problems.Entries.Count : 0);
+                offer = task.Result != 0 && entry.Waiting == 0 && !entry.Stopping && exit.ToolsMissing;
+                entry.LastExit = exit; entry.LastExitRun = run;
+                if (ReferenceEquals(entry.Run, run)) { entry.Run = null; entry.Stopping = false; }
+            }
             run.Dispose();
             entry.Follower.Refresh();
             Raise();
+            if (offer) ExitedWithoutWaiter?.Invoke(project, exit);
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return run;
+    }
+
+    /// <summary>
+    /// Waits until the project's <c>dev</c> is ready for the IDE (owner <c>ide</c>), as F5 and Debug the Window do. When
+    /// <paramref name="started"/> (the <c>dev</c> <see cref="StartAsync"/> just started) exits first, it throws
+    /// <see cref="DevExitException"/> at once with its exit code and last lines (runic-editors#81's VS Code fix); a
+    /// <c>dev</c> started elsewhere that stops throws <see cref="DevExits.StoppedElsewhere"/>.
+    /// </summary>
+    public async Task<DevSnapshot> WaitForReadyAsync(string project, DevProcess? started, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        Entry? entry;
+        lock (gate) { entries.TryGetValue(project, out entry); if (entry != null) entry.Waiting++; }
+        try
+        {
+            return await WaitForAsync(project, snapshot => snapshot.IsReadyForIde, timeout, snapshot =>
+            {
+                if (StartedHere(project) || snapshot.IsActive) return null;
+                DevExit? exit = null;
+                lock (gate) if (entry != null && started != null && ReferenceEquals(entry.LastExitRun, started)) exit = entry.LastExit;
+                if (exit != null) throw new DevExitException(project, exit);
+                // The started dev's exit is recorded right after it exits: wait for the record.
+                return started != null ? null : DevExits.StoppedElsewhere;
+            }, cancellationToken);
+        }
+        finally { lock (gate) if (entry != null) entry.Waiting--; }
     }
 
     /// <summary>

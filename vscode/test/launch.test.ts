@@ -124,7 +124,7 @@ const launchSettings = `{
     "Mock data": {
       "commandName": "Project",
       "commandLineArgs": "/mock /config:\\"C:\\\\Program Files\\\\Acme\\\\dev.json\\"", /* a slash option with a Windows path */
-      "environmentVariables": { "ACME_DATA": "mock", "PORT": 8080, },
+      "environmentVariables": { "ACME_DATA": "mock", "PORT": "8080", },
       "workingDirectory": "data",
       "rax": { "dev": "no-window", "page": true, "devArguments": ["--verbosity", "minimal", 3] },
     },
@@ -135,12 +135,19 @@ const launchSettings = `{
 test("launchSettings.json: Project profiles in file order, comments and trailing commas as dotnet run reads them", () => {
   expect(parseLaunchProfiles(launchSettings)).toEqual([
     { name: "Acme.Mock", commandLineArgs: undefined, environmentVariables: { DOTNET_ENVIRONMENT: "Development" }, workingDirectory: undefined, rax: undefined },
-    { name: "Mock data", commandLineArgs: '/mock /config:"C:\\Program Files\\Acme\\dev.json"', environmentVariables: { ACME_DATA: "mock" }, workingDirectory: "data",
+    { name: "Mock data", commandLineArgs: '/mock /config:"C:\\Program Files\\Acme\\dev.json"', environmentVariables: { ACME_DATA: "mock", PORT: "8080" }, workingDirectory: "data",
       rax: { dev: "no-window", page: true, devArguments: ["--verbosity", "minimal"] } },
   ]);
   expect(parseLaunchProfiles("{}")).toEqual([]);
   expect(parseLaunchProfiles('{ "profiles": { "Broken": null, "Empty": { "commandName": "Project", "workingDirectory": " " } } }')).toEqual([
     { name: "Empty", commandLineArgs: undefined, environmentVariables: {}, workingDirectory: undefined, rax: undefined }]);
+  // A value Visual Studio refuses (editors#79's fixture had "ACME_PORT": 5000) refuses the file, in any profile; null is unset.
+  const refused = (profile: string) => () => parseLaunchProfiles(`{ "profiles": { "Mock data": ${profile} } }`);
+  expect(refused('{ "commandName": "Project", "environmentVariables": { "ACME_PORT": 5000 } }')).toThrow('the launch profile Mock data sets the variable ACME_PORT to 5000, a number, and Visual Studio reads only strings there (its F5 refuses the file: "Expected string"), so Runic DevKit does not use the file either. Write it as a string: "ACME_PORT": "5000".');
+  expect(refused('{ "commandName": "IISExpress", "environmentVariables": { "DEBUG": true } }')).toThrow("DEBUG to true, a Boolean");
+  expect(refused('{ "commandName": "Project", "commandLineArgs": ["/mock"] }')).toThrow("has an array as commandLineArgs");
+  expect(parseLaunchProfiles('{ "profiles": { "p": { "commandName": "Project", "commandLineArgs": null, "environmentVariables": { "A": null, "B": "b" } } } }')[0])
+    .toEqual({ name: "p", commandLineArgs: undefined, environmentVariables: { B: "b" }, workingDirectory: undefined, rax: undefined });
   // Comment markers and trailing-comma look-alikes inside strings stay.
   expect(JSON.parse(stripJsonComments('{ "a": "http://x/*y*/", "b": ", }", /* c */ "d": [1, 2, ], }'))).toEqual({ a: "http://x/*y*/", b: ", }", d: [1, 2] });
 });

@@ -138,7 +138,7 @@ public class LaunchProfilesTests
     // ---- Reading the active profile -------------------------------------------------------------------------------
 
     [Test]
-    public void Launch_settings_keep_the_files_order_and_accept_comments_trailing_commas_and_numbers()
+    public void Launch_settings_keep_the_files_order_and_accept_comments_and_trailing_commas()
     {
         var profiles = LaunchProfiles.Parse(File.ReadAllText(Path.Combine(FixtureFolder(), "Properties", "launchSettings.json")));
         Check.Same(new[] { "Acme.Mock", "Mock data", "Installed" }, profiles.Select(profile => profile.Name));
@@ -158,6 +158,27 @@ public class LaunchProfilesTests
     }
 
     [Test]
+    public void A_value_that_is_not_a_string_is_refused_as_Visual_Studio_refuses_it()
+    {
+        // editors#79's fixture had "ACME_PORT": 5000; Visual Studio's F5 refused the project ("Expected string at 19:25 but got Integer").
+        string Refusal(string profile)
+        {
+            try { LaunchProfiles.Parse("{ \"profiles\": { \"Mock data\": " + profile + " } }"); }
+            catch (LaunchSettingsValueException error) { return error.Message; }
+            throw new InvalidOperationException("accepted " + profile);
+        }
+        string port = Refusal("""{ "commandName": "Project", "environmentVariables": { "ACME_PORT": 5000 } }""");
+        Check.True(port.Contains("Mock data") && port.Contains("ACME_PORT to 5000, a number") && port.Contains("\"ACME_PORT\": \"5000\"") && port.Contains("Visual Studio reads only strings"), port);
+        Check.True(Refusal("""{ "commandName": "Project", "environmentVariables": { "DEBUG": true } }""").Contains("DEBUG to true, a Boolean"), "a Boolean");
+        Check.True(Refusal("""{ "commandName": "Project", "commandLineArgs": ["/mock"] }""").Contains("has an array as commandLineArgs"), "an array");
+        Check.True(Refusal("""{ "commandName": "Project", "workingDirectory": 3 }""").Contains("has a number as workingDirectory"), "a number");
+        // null stays "not set", as before.
+        var unset = LaunchProfiles.Parse("""{ "profiles": { "p": { "commandName": "Project", "commandLineArgs": null, "environmentVariables": { "A": null, "B": "b" } } } }""")[0];
+        Check.Equal(null, unset.CommandLineArgs);
+        Check.Same(new[] { "B" }, unset.EnvironmentVariables.Select(pair => pair.Key));
+    }
+
+    [Test]
     public void The_active_profile_is_the_named_one_else_the_first_and_only_project_profiles_apply()
     {
         var profiles = LaunchProfiles.Parse(File.ReadAllText(Path.Combine(FixtureFolder(), "Properties", "launchSettings.json")));
@@ -167,7 +188,9 @@ public class LaunchProfilesTests
         Check.Equal("Acme.Mock", LaunchProfiles.Choose(profiles, "Removed").Profile?.Name, "a profile that no longer exists: the first");
         var executable = LaunchProfiles.Choose(profiles, "Installed");
         Check.Equal(null, executable.Profile);
-        Check.True(executable.Note!.Contains("Installed") && executable.Note.Contains("Executable"), executable.Note);
+        Check.True(executable.Note!.Contains("Installed is an Executable profile"), executable.Note);
+        Check.Equal("a Project", LaunchProfiles.KindPhrase("Project"));
+        Check.Equal("an IISExpress", LaunchProfiles.KindPhrase("IISExpress"));
         var none = LaunchProfiles.Choose(Array.Empty<LaunchProfile>(), "x");
         Check.True(none.Profile == null && none.Note == null, "no profiles: as before");
     }
@@ -200,6 +223,9 @@ public class LaunchProfilesTests
             File.WriteAllText(LaunchProfiles.SettingsPath(project), "{ \"profiles\": ");
             string error = Throws(() => LaunchProfiles.Read(project, null));
             Check.True(error.Contains("launchSettings.json") && error.Contains("not valid JSON"), error);
+            File.WriteAllText(LaunchProfiles.SettingsPath(project), """{ "profiles": { "Mock data": { "commandName": "Project", "environmentVariables": { "ACME_PORT": 5000 } } } }""");
+            string number = Throws(() => LaunchProfiles.Read(project, "Mock data"));
+            Check.True(number.StartsWith(LaunchProfiles.SettingsPath(project) + ": the launch profile Mock data") && !number.Contains("not valid JSON"), number);
 
             File.Delete(LaunchProfiles.SettingsPath(project));
             var missing = LaunchProfiles.Read(project, "Mock data");

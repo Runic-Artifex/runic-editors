@@ -72,6 +72,11 @@ internal static class CommandRegistrar
             try { await handler.ExecuteAsync(package, package.DisposalToken); }
             catch (OperationCanceledException) { }
             catch (Debugging.HungAttachEndedException error) { SdkOutput.WriteLine(error.Message); }
+            catch (DevExitException error)
+            {
+                SdkOutput.WriteLine($"{RunicPackage.Title}: {error.Message}");
+                await DevSession.ToolRestore.ReportAsync(package, error.Project, error.Exit, package.DisposalToken);
+            }
             catch (Exception error)
             {
                 SdkOutput.WriteLine($"{RunicPackage.Title}: {error.GetType().Name}: {error.Message}");

@@ -51,12 +51,13 @@ internal sealed class VsClosing : IVsShellPropertyEvents
 
     /// <summary>
     /// <see cref="VsShellUtilities.ShowMessageBox(IServiceProvider, string, string, OLEMSGICON, OLEMSGBUTTON, OLEMSGDEFBUTTON)"/>
-    /// with an OK button, or, once Visual Studio is closing, a line in the Runic SDK Output pane.
+    /// with an OK button, in front of the app's Window (<see cref="MessageBoxes"/>), or, once Visual Studio is closing, a
+    /// line in the Runic SDK Output pane.
     /// </summary>
     public static void ShowMessage(IServiceProvider provider, string message, OLEMSGICON icon)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         if (IsClosing) { SdkOutput.WriteLine(message); return; }
-        VsShellUtilities.ShowMessageBox(provider, message, RunicPackage.Title, icon, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+        MessageBoxes.Show(provider, message, icon);
     }
 }
