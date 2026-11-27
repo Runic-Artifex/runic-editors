@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import type { DevSession } from "./dev-session.js";
 import type { RunicToolId } from "./workspace.js";
 
@@ -155,6 +155,44 @@ export function withOwners(list: DependencyList | undefined, libraries: readonly
     const library = libraries.find(item => samePath(item.directory, dependency.directory));
     return library ? { ...dependency, owner: library.project, ownerName: library.project.replace(/\.csproj$/i, "").split(/[\\/]/).at(-1) ?? null } : dependency;
   }) };
+}
+
+/** A problem of the last `dotnet runic dev`, as `DevProblems` reads it from its output. */
+export interface DevFailure { file: string; line: number; column: number; severity: string; code: string; message: string }
+
+/**
+ * The list with the errors of the last `dotnet runic dev` (its Problems) on the packages they concern, for a list from
+ * the graph file or a stopped session: a package whose build failed keeps an earlier build's exports on disk, so the
+ * graph alone says "built" (the 0.24 VM run). A package fails by an error in a file below its folder (the build's
+ * located line, `…/shared-ui/src/index.ts(12,14): error TS2322`), or by a RAPPDEV1018 that names it: `[shared-ui]`,
+ * its folder, or its package name first. A running session's list has the states `dev` gives and is kept as it is.
+ */
+export function withDevFailures(list: DependencyList | undefined, problems: readonly DevFailure[]): DependencyList | undefined {
+  const errors = problems.filter(problem => problem.severity === "error");
+  if (!list || list.source === "session" || !errors.length) return list;
+  return { ...list, dependencies: list.dependencies.map(dependency => {
+    const located = errors.find(problem => isBelow(problem.file, dependency.directory));
+    const failure = located ?? errors.find(problem => problem.code.toUpperCase() === "RAPPDEV1018" && namesDependency(problem.message, dependency));
+    if (!failure) return dependency;
+    const message = located ? `${relative(dependency.directory, located.file).replaceAll("\\", "/")}(${located.line},${located.column}): error ${located.code}: ${located.message}` : failure.message;
+    return { ...dependency, state: "failed", message };
+  }) };
+}
+
+function comparable(path: string): string {
+  const full = resolve(path).replace(/[\\/]+$/, "");
+  return process.platform === "win32" || process.platform === "darwin" ? full.toLowerCase() : full;
+}
+
+function isBelow(file: string, directory: string): boolean {
+  const base = comparable(directory), full = comparable(file);
+  return full.startsWith(base) && /^[\\/]/.test(full.slice(base.length));
+}
+
+function namesDependency(message: string, dependency: DevDependency): boolean {
+  const folder = basename(dependency.directory.replace(/[\\/]+$/, ""));
+  const text = process.platform === "win32" || process.platform === "darwin" ? message.toLowerCase() : message;
+  return message.includes(`[${folder}]`) || text.includes(comparable(dependency.directory)) || (!!dependency.package && message.startsWith(`${dependency.package} `));
 }
 
 /** Reads the first graph file of `paths` that parses. */

@@ -215,6 +215,20 @@ would start (MSBuild's `RunCommand`; on macOS the development bundle's
 executable) under the C# extension's `coreclr` debugger. It needs the
 [C# extension](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp).
 
+The build is the `coreclr` configuration's `preLaunchTask` (the folder's `build`
+task when its `tasks.json` has one, else DevKit's own), so **Restart**
+(Ctrl+Shift+F5) builds again before it starts the Window, with the same
+arguments under the same `dev`. A build with errors stops the launch as any
+`preLaunchTask` does (`debug.onTaskErrors`). When your `runic` configuration
+has a `preLaunchTask` of its own, DevKit builds before it, and Restart builds
+through `preRestartTask` unless you set that too. Restart doesn't stop or
+restart `dev`, and stopping the session leaves `dev` running.
+
+The `runic` configuration debugs the Window's .NET code only: it gives the
+Window no DevTools port and attaches no JavaScript debugger to the page. For a
+page breakpoint, use the template's "Window + WebView2 (Windows)" or "Window +
+WebKitGTK (Linux)" compound, or attach to the page yourself.
+
 When the `dev` that F5 started exits before its session is ready, F5 stops at
 once with `dev`'s exit code and last output lines (all of them in the Runic
 output and the task terminal). On a fresh clone whose local tools aren't

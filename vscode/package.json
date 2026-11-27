@@ -477,12 +477,47 @@
             "description": "The project file, relative to the workspace folder; needed when the folder has several Runic SDK projects."
           }
         }
+      },
+      {
+        "type": "runic-tools",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "restore"
+            ],
+            "description": "restore: dotnet tool restore, which the Restore tools button runs."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "The folder it runs in: the project's."
+          }
+        }
+      },
+      {
+        "type": "runic-install",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The package manager command that a frontend dependency quick fix runs, such as bun install --ignore-scripts."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "The folder it runs in."
+          }
+        }
       }
     ],
     "problemPatterns": [
       {
         "name": "runic-dev",
-        "regexp": "^\\s*(?:\\[[A-Za-z][\\w-]*\\]\\s+)?(?:\\d+>)?(\\S.*?)(?:\\((\\d+)(?:,(\\d+))?(?:,\\d+,\\d+)?\\))?\\s*:\\s+(?:\\S+\\s+)?(error|warning)\\s+([A-Za-z]+\\d+)\\s*:\\s*(.*?)(?:\\s+\\[[^\\]]+\\])?$",
+        "regexp": "^\\s*(?:\\[[A-Za-z][\\w-]*\\]\\s+)?(?:\\d+>)?(\\S(?:(?!:\\s).)*?)(?:\\((\\d+)(?:,(\\d+))?(?:,\\d+,\\d+)?\\))?\\s*:\\s+(?:[^\\s:]+\\s+)?(error|warning)\\s+([A-Za-z]+\\d+)\\s*:\\s*(.*?)(?:\\s+\\[[^\\]]+\\])?$",
         "file": 1,
         "line": 2,
         "column": 3,

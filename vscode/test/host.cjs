@@ -476,6 +476,27 @@ async function windowDebug(api, fs) {
   launch = await f5('cwd and envFile', { launchProfile: 'Mock data', cwd: '${workspaceFolder}/elsewhere', envFile: '${workspaceFolder}/mock.env', env: { ACME_DATA: 'from-env' } });
   assert.equal(launch.cwd, path.join(app, 'elsewhere'));
   assert.deepEqual([launch.env.ACME_DATA, launch.env.FILE_ONLY], ['from-env', '1']);
+  // Restart (Ctrl+Shift+F5) rebuilds: VS Code reuses the resolved coreclr configuration without DevKit's resolver and
+  // runs its preLaunchTask, which is the build (the 0.24 VM run started the old DLL, part 3, finding 1).
+  stage = 'F5 /mock: Restart rebuilds';
+  const buildsLog = path.join(app, 'builds.log');
+  const builds = () => fs.existsSync(buildsLog) ? fs.readFileSync(buildsLog, 'utf8').split('\n').filter(Boolean).length : 0;
+  const restartBefore = launches.length, buildsBefore = builds();
+  assert.ok(buildsBefore > 0, 'F5 must have run the build');
+  assert.ok(await vscode.debug.startDebugging(appFolder, { type: 'runic', request: 'launch', name: 'restart', launchProfile: 'Mock data', standInKeepRunning: true }), 'The restart session did not start');
+  await waitFor(() => launches.length === restartBefore + 1, 'restart: the coreclr stand-in received no launch request', 60000);
+  assert.equal(builds(), buildsBefore + 1, 'F5 must build once');
+  assert.deepEqual(launches.at(-1).preLaunchTask, { type: 'runic', command: 'build', name: 'build' }, 'DevKit\'s build must be the resolved configuration\'s preLaunchTask');
+  const running = vscode.debug.activeDebugSession;
+  assert.equal(running?.type, 'coreclr');
+  await vscode.commands.executeCommand('workbench.action.debug.restart');
+  await waitFor(() => launches.length === restartBefore + 2, 'Restart: the coreclr stand-in received no second launch request', 60000);
+  assert.equal(builds(), buildsBefore + 2, 'Restart must build again');
+  assert.deepEqual(launches.at(-1).args, launches.at(-2).args, 'Restart keeps the profile\'s arguments');
+  assert.deepEqual(launches.at(-1).args, ['/mock', '/config:C:\\Program Files\\Acme\\dev.json']);
+  const stopped = new Promise(resolve => { const listener = vscode.debug.onDidTerminateDebugSession(() => { if (!vscode.debug.activeDebugSession) { listener.dispose(); resolve(); } }); });
+  await vscode.debug.stopDebugging();
+  await Promise.race([stopped, new Promise(resolve => setTimeout(resolve, 10000))]);
   // A missing profile stops F5 with an error instead of a launch without its arguments.
   stage = 'F5 /mock: missing profile';
   const before = launches.length;
@@ -550,6 +571,16 @@ async function frontendDependencies(sdk, appFolder, project, csproj, fs, path) {
   fs.writeFileSync(path.join(sharedUi, 'dist', 'index.js'), 'export {};\n');
   assert.equal(sdk.dependencies(project).dependencies[0].state, 'built');
   assert.equal(sdk.dependencyStatus(), undefined, 'A built package needs no offer');
+  // dev's build failed in the package (RAPPDEV1018): its earlier dist is on disk, and the tree says failed, not built.
+  stage = 'dependency tree: a failed package build of the last dev';
+  const brokenSource = path.join(sharedUi, 'src', 'index.ts');
+  sdk.devOutput(project, [`${brokenSource}(12,14): error TS2322: Type 'string' is not assignable to type 'number'. [${path.join(root, 'SharedUi', 'SharedUi.csproj')}]`,
+    `${project} : error RAPPDEV1018: A frontend package that the page depends on failed to build, so dev did not start: ${brokenSource}(12,14): error TS2322: Type 'string' is not assignable to type 'number'.`], true);
+  assert.deepEqual(sdk.dependencies(project).dependencies.map(item => [item.state, item.message]), [['failed', "src/index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'."]]);
+  assert.deepEqual((await sdk.devTree()).find(row => row.label === 'Frontend dependencies').children.map(row => row.description), ['SharedUi · failed']);
+  assert.equal(sdk.dependencyStatus()?.command, 'runic.dependencies.build');
+  sdk.devOutput(project, []);
+  assert.equal(sdk.dependencies(project).dependencies[0].state, 'built');
   stage = 'fresh clone: install offered, never run (D081.4)';
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['Frontend', 'shared-ui'], packageManager: 'bun@1.4.4' }, null, 2));
   fs.writeFileSync(path.join(root, 'Frontend', 'package.json'), JSON.stringify({ name: 'app-frontend', private: true, dependencies: { '@acme/shared-ui': 'workspace:*' } }, null, 2));

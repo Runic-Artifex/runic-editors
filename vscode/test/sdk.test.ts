@@ -532,6 +532,46 @@ test("a dev problem keeps its file, line, column, severity and code without the 
   expect(parseDevProblem("[vite] 12:00:01 [vite] page reload src/App.tsx", "/app")).toBeUndefined();
 });
 
+// The 0.24 VM run (part 3, finding 4): a TypeScript error in a client library's package stopped dev with RAPPDEV1018, and
+// Problems listed the TS2322 three times: in the package (right), under the sentence of dev's message as a file name,
+// and in <Window project>/src/index.ts, which does not exist (tsc's relative echo resolved against dev's directory).
+const vmFailure = {
+  project: "C:\\Users\\T\\ShopClone\\Shop\\Shop.csproj",
+  source: "C:\\Users\\T\\ShopClone\\Shop.Core\\Frontend\\src\\index.ts",
+  lines: [
+    "src/index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'. [C:\\Users\\T\\ShopClone\\Shop.Core\\Shop.Core.csproj]",
+    "C:\\Users\\T\\ShopClone\\Shop.Core\\Frontend\\src\\index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'. [C:\\Users\\T\\ShopClone\\Shop.Core\\Shop.Core.csproj]",
+    "C:\\Users\\T\\ShopClone\\Shop\\Shop.csproj : error RAPPDEV1018: A frontend package that the page depends on failed to build, so dev did not start: C:\\Users\\T\\ShopClone\\Shop.Core\\Frontend\\src\\index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+    "  A frontend package that the page depends on failed to build, so dev did not start: C:\\Users\\T\\ShopClone\\Shop.Core\\Frontend\\src\\index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+  ],
+};
+
+test("RAPPDEV1018's TypeScript error is listed once, in the package's file, beside the RAPPDEV1018 of the project", () => {
+  const problems = new DevProblems("C:\\Users\\T\\ShopClone\\Shop", true);
+  for (const line of vmFailure.lines) problems.add(line);
+  expect(problems.problems.map(item => [item.file, item.line, item.column, item.code])).toEqual([
+    [vmFailure.source, 12, 14, "TS2322"],
+    [vmFailure.project, 1, 1, "RAPPDEV1018"],
+  ]);
+  // A sentence that quotes a located error is no error of a file named by the sentence, for the problem matcher too.
+  expect(parseDevProblem(vmFailure.lines[3], "/app")).toBeUndefined();
+  expect(parseDevProblem("[dev] Stopped: the build failed: /app/X.cs(3,9): error CS1002: ; expected", "/app")).toBeUndefined();
+  expect(diagnosticPattern.exec(vmFailure.lines[3])).toBeNull();
+  // tsc's relative echo has no package to resolve against and is left out; the build reports it again with its path.
+  expect(parseDevProblem(vmFailure.lines[0], "/app")).toBeUndefined();
+});
+
+test("a relative frontend source resolves against the package of the line's label; a C# one against the project", () => {
+  const packages = (label: string) => label === "shared-ui" ? "/repo/shared-ui" : undefined;
+  expect(parseDevProblem("[shared-ui] src/about-panel.ts(42,31): error TS1109: Expression expected.", "/repo/App", packages)).toEqual(
+    { file: "/repo/shared-ui/src/about-panel.ts", line: 42, column: 31, severity: "error", code: "TS1109", message: "Expression expected." });
+  expect(parseDevProblem("[other-ui] src/about-panel.ts(42,31): error TS1109: Expression expected.", "/repo/App", packages)).toBeUndefined();
+  expect(parseDevProblem("[host] Models/X.cs(3,9): warning CS0168: unused", "/repo/App", packages)?.file).toBe("/repo/App/Models/X.cs");
+  expect(parseDevProblem("[vite] /repo/App/Frontend/src/App.tsx(3,7): error RUNICP008: [vite:import-analysis] Failed to resolve import", "/repo/App", packages)?.file).toBe("/repo/App/Frontend/src/App.tsx");
+  // MSBuild's subcategory before the severity still reads.
+  expect(parseDevProblem("CSC : error CS2001: Source file 'X.cs' could not be found.", "/repo/App")?.code).toBe("CS2001");
+});
+
 test("[dev] Ready drops a fixed build error and keeps the warnings; a new cycle drops both", () => {
   const problems = new DevProblems("/app", false);
   const summary = () => problems.problems.map(item => `${item.severity} ${item.code} ${item.file}:${item.line}`);
@@ -602,6 +642,15 @@ test("editors#52: the clear line drops only the frontend errors, and the same er
   expect(problems.add(frontendError)).toBe(true);
   expect(problems.add("[dev] Evaluating Views Window project...")).toBe(true);
   expect(problems.problems).toEqual([]);
+});
+
+test("every task type the extension creates is declared in taskDefinitions", async () => {
+  const manifest = JSON.parse(await Bun.file(new URL("../package.json", import.meta.url)).text());
+  const declared = manifest.contributes.taskDefinitions.map((item: { type: string }) => item.type).sort();
+  const source = await Bun.file(new URL("../src/sdk.ts", import.meta.url)).text();
+  const created = [...new Set([...source.matchAll(/new vscode\.Task\(\{ type: "([^"]+)"/g)].map(match => match[1]))].sort();
+  expect(created).toEqual(["runic-install", "runic-tools"]);
+  for (const type of [...created, "runic"]) expect(declared).toContain(type);
 });
 
 test("editors#52: the $runic-dev problem pattern of a process task reads a [vite] RUNICP008 line", async () => {
