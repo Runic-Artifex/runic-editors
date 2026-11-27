@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchSettingsPath, parseEnvFile, parseLaunchProfiles, profileWorkingDirectory, readLaunchProfiles, selectLaunchProfile, splitCommandLine, stripJsonComments, type LaunchProfile } from "../src/launch-settings.js";
-import { buildTasks, devExtraArguments, hasTask, requestedProfile, taskReference, substitutePath, windowDebugConfigurations, windowEnvironment, windowLaunchConfiguration, type RunProperties } from "../src/window-debug.js";
+import { buildTasks, devExtraArguments, hasTask, requestedProfile, taskReference, substitutePath, windowDebugConfigurations, windowEnvironment, windowLaunchConfiguration, workspaceTaskProcess, type RunProperties } from "../src/window-debug.js";
 import { devSessionSchema, type DevSession } from "../src/dev-session.js";
 
 // design/ide-run-debug §3.3 and scenario M: an app whose Debug build starts only with /mock.
@@ -228,4 +228,29 @@ test("Restart rebuilds: the build is the resolved configuration's preLaunchTask,
   // The configuration's own tasks pass through to the coreclr configuration, and DevKit's are added beside them.
   const resolved = { ...windowLaunchConfiguration(project, appHost, ideSession(), { configuration: { preLaunchTask: "seed the database" } }), ...buildTasks("build", { preLaunchTask: "seed the database" }) };
   expect([resolved.preLaunchTask, resolved.preRestartTask]).toEqual(["seed the database", "build"]);
+});
+
+// The template's dev task runs in DevKit's terminal, so DevKit reads a failed dev's output (the 0.24 VM run, part 4,
+// rows 8 and 9): VS Code removes a background task's Problems when its process ends.
+test("a workspace dev task becomes the process DevKit runs in its own terminal", () => {
+  const folder = "/w/Shop";
+  // The template's task (runic-sdk tasks.json, --library): a process task, the workspace folder as its directory.
+  expect(workspaceTaskProcess({ process: "dotnet", args: ["runic", "dev", "--project", "Shop/Shop.csproj"] }, folder, "/home/u", {}))
+    .toEqual({ command: "dotnet", args: ["runic", "dev", "--project", "Shop/Shop.csproj"], cwd: folder });
+  // A user's edits: variables, another directory, variables of its own, the renamed tool.
+  expect(workspaceTaskProcess({ process: "dotnet", args: ["rax", "dev", "--no-window", "--project", "${workspaceFolder}${/}Shop${pathSeparator}Shop.csproj", "-c", "${env:CONFIG}"],
+    options: { cwd: "Shop", env: { ACME_HOME: "${userHome}/acme", ACME_NAME: "${workspaceFolderBasename}" } } }, folder, "/home/u", { CONFIG: "Release" }))
+    .toEqual({ command: "dotnet", args: ["rax", "dev", "--no-window", "--project", "/w/Shop/Shop/Shop.csproj", "-c", "Release"], cwd: "/w/Shop/Shop", env: { ACME_HOME: "/home/u/acme", ACME_NAME: "Shop" } });
+  expect(workspaceTaskProcess({ process: "C:\\tools\\dotnet-runic.exe", args: ["dev"], options: { cwd: "C:\\src\\Shop" } }, "C:\\src", "C:\\Users\\u", {}))
+    .toEqual({ command: "C:\\tools\\dotnet-runic.exe", args: ["dev"], cwd: "C:\\src\\Shop" });
+  // VS Code runs these itself: a variable DevKit does not substitute, a shell task, another command.
+  for (const execution of [
+    { process: "dotnet", args: ["runic", "dev", "--project", "${input:project}"] },
+    { process: "dotnet", args: ["runic", "dev"], options: { env: { PORT: "${config:acme.port}" } } },
+    { process: "dotnet", args: ["runic", "dev"], options: { cwd: "${command:pickFolder}" } },
+    { commandLine: "dotnet runic dev" },
+    { process: "dotnet", args: ["runic", "doctor"] },
+    { process: "./dev.sh", args: [] },
+    undefined,
+  ]) expect(workspaceTaskProcess(execution, folder, "/home/u", {})).toBeUndefined();
 });

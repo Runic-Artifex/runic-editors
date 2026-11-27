@@ -1,0 +1,135 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "dotnet: tool restore",
+      "detail": "Installs the project's dotnet runic tool",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["tool", "restore"],
+      "problemMatcher": []
+    },
+    {
+      // dotnet runic dev: the development server and the Window, restarted after each C# edit. Its failures (RAPPDEV)
+      // and the errors of the first build and of each rebuild go to the Problems panel; the task is ready at each [dev] Ready.
+      "label": "runic: dev",
+      "detail": "dotnet runic dev",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["runic", "dev"],
+      "dependsOn": ["dotnet: tool restore"],
+      "isBackground": true,
+      "problemMatcher": {
+        // VS Code's $msCompile, after an optional "[host] ", "[app] " or "[vite] ": dev puts its child process's label
+        // before each of that process's lines, so a rebuild's errors read "[host] /path/File.cs(18,5): error CS1002: ...".
+        // The file holds no ": " and the subcategory before "error" no colon: dev also prints a failure as a sentence
+        // ("..., so dev did not start: /path/index.ts(12,14): error TS2322: ..."), which is not a file.
+        "owner": "msCompile",
+        "applyTo": "allDocuments",
+        "fileLocation": "absolute",
+        "pattern": {
+          "regexp": "^(?:\\[(?:host|app|vite)\\] )?\\s*(?:\\s*\\d+>)?(\\S(?:(?!:\\s).)*?)(?:\\((\\d+|\\d+,\\d+|\\d+,\\d+,\\d+,\\d+)\\))?\\s*:\\s+(?:([^\\s:]+)\\s+)?((?:fatal +)?error|warning|info)\\s+(\\w+\\d+)?\\s*:\\s*(.*)$",
+          "file": 1,
+          "location": 2,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[dev\\] (Evaluating|Window exited|Reloading)",
+          "endsPattern": "^\\[dev\\] Ready$"
+        }
+      }
+    },
+    {
+      // Only the frontend: the Window runs under the debugger instead (launch.json, "Window").
+      "label": "runic: dev --no-window",
+      "detail": "dotnet runic dev --no-window",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["runic", "dev", "--no-window"],
+      "dependsOn": ["dotnet: tool restore"],
+      "isBackground": true,
+      "problemMatcher": {
+        // VS Code's $msCompile, after an optional "[host] ", "[app] " or "[vite] ": dev puts its child process's label
+        // before each of that process's lines, so a rebuild's errors read "[host] /path/File.cs(18,5): error CS1002: ...".
+        // The file holds no ": " and the subcategory before "error" no colon: dev also prints a failure as a sentence
+        // ("..., so dev did not start: /path/index.ts(12,14): error TS2322: ..."), which is not a file.
+        "owner": "msCompile",
+        "applyTo": "allDocuments",
+        "fileLocation": "absolute",
+        "pattern": {
+          "regexp": "^(?:\\[(?:host|app|vite)\\] )?\\s*(?:\\s*\\d+>)?(\\S(?:(?!:\\s).)*?)(?:\\((\\d+|\\d+,\\d+|\\d+,\\d+,\\d+,\\d+)\\))?\\s*:\\s+(?:([^\\s:]+)\\s+)?((?:fatal +)?error|warning|info)\\s+(\\w+\\d+)?\\s*:\\s*(.*)$",
+          "file": 1,
+          "location": 2,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[dev\\] Evaluating",
+          "endsPattern": "^\\[dev\\] Ready$"
+        }
+      }
+    },
+    {
+      // The Window served to a browser instead of a native window (launch.json, "Window in Chrome"); ready once it serves.
+      "label": "runic: dev --browser",
+      "detail": "dotnet runic dev --browser",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["runic", "dev", "--browser"],
+      "dependsOn": ["dotnet: tool restore"],
+      "isBackground": true,
+      "problemMatcher": {
+        // VS Code's $msCompile, after an optional "[host] ", "[app] " or "[vite] ": dev puts its child process's label
+        // before each of that process's lines, so a rebuild's errors read "[host] /path/File.cs(18,5): error CS1002: ...".
+        // The file holds no ": " and the subcategory before "error" no colon: dev also prints a failure as a sentence
+        // ("..., so dev did not start: /path/index.ts(12,14): error TS2322: ..."), which is not a file.
+        "owner": "msCompile",
+        "applyTo": "allDocuments",
+        "fileLocation": "absolute",
+        "pattern": {
+          "regexp": "^(?:\\[(?:host|app|vite)\\] )?\\s*(?:\\s*\\d+>)?(\\S(?:(?!:\\s).)*?)(?:\\((\\d+|\\d+,\\d+|\\d+,\\d+,\\d+,\\d+)\\))?\\s*:\\s+(?:([^\\s:]+)\\s+)?((?:fatal +)?error|warning|info)\\s+(\\w+\\d+)?\\s*:\\s*(.*)$",
+          "file": 1,
+          "location": 2,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[dev\\] (Evaluating|Window exited|Reloading)",
+          "endsPattern": "^\\[dev\\] Ready$"
+        }
+      }
+    },
+    {
+      "label": "build",
+      "detail": "dotnet build",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "${workspaceFolder}/RunicWindowApp.csproj", "-p:GenerateFullPaths=true", "-consoleLoggerParameters:NoSummary;ForceNoAlign"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      // The frontend first, then the build, which keeps dev's development page in www/.
+      "label": "runic: window",
+      "dependsOn": ["runic: dev --no-window", "build"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "runic: doctor",
+      "detail": "dotnet runic doctor",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["runic", "doctor"],
+      "dependsOn": ["dotnet: tool restore"],
+      "problemMatcher": []
+    }
+  ]
+}

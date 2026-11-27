@@ -12,7 +12,7 @@ import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diag
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type DoctorCheck, type DoctorReport } from "./doctor.js";
 import { locationText, newestSourceMap, parseSourceMap, sourceMapTree, type SourceLocation, type SourceTreeNode } from "./source-map.js";
 import { coverageLine, errorSummary, type StatusResult } from "./status.js";
-import { buildTasks, devExtraArguments, hasTask, parseRunProperties, requestedProfile, runPropertiesArguments, substitutePath, taskReference, templateTaskLabels, templateWindowConfiguration, windowDebugConfigurations, windowLaunchConfiguration } from "./window-debug.js";
+import { buildTasks, devExtraArguments, hasTask, parseRunProperties, requestedProfile, runPropertiesArguments, substitutePath, taskReference, templateTaskLabels, templateWindowConfiguration, windowDebugConfigurations, windowLaunchConfiguration, workspaceTaskProcess, type TaskProcess } from "./window-debug.js";
 import { launchSettingsPath, parseEnvFile, readLaunchProfiles, selectLaunchProfile, type LaunchProfile } from "./launch-settings.js";
 import { detectWorkspace, formerCoreTool, projectCoreTool, projectRunicToolVersion, type WorkspaceKind } from "./workspace.js";
 
@@ -50,7 +50,7 @@ class DevExitError extends Error {
   constructor(message: string, readonly project: string, readonly missingTools: boolean) { super(message); }
 }
 
-interface RunicTaskDefinition extends vscode.TaskDefinition { type: "runic"; command: "dev" | "doctor" | "build"; noWindow?: boolean; project?: string }
+interface RunicTaskDefinition extends vscode.TaskDefinition { type: "runic"; command: "dev" | "doctor" | "build"; noWindow?: boolean; project?: string; workspaceTask?: string }
 
 const pollInterval = 2000;
 const doctorSource = "runic doctor";
@@ -364,23 +364,7 @@ export class RunicSdk implements vscode.Disposable {
       // extension's own that holds dev's standard input. An older or unknown tool runs as a process task, as before.
       const sdk022 = supportsDevSdk022(toolVersion);
       const args = [...devArguments(state.project, noWindow, sdk022, verb), ...extra];
-      const execution = sdk022
-        ? new vscode.CustomExecution(async () => {
-          const problems = new DevProblems(cwd, noWindow, label => this.packageDirectory(state, label));
-          state.devProblems = problems;
-          this.publishDevProblems();
-          state.devExit = undefined;
-          const terminal = new DevTerminal(dotnet, args, cwd, this.log, (ended, code, lines) => {
-            if (state.devTerminal !== ended) return;
-            state.devTerminal = undefined; state.devExit = { code, lines };
-            // A dev that the tool's launcher could not start (a fresh clone): offer the restore, unless F5 reports it.
-            if (code !== 0 && !state.f5Waiting && toolsMissing(lines)) this.offerToolRestore(state.project, devExitMessage(code, lines, true));
-          },
-            line => { if (problems.add(line) && state.devProblems === problems) this.publishDevProblems(); });
-          state.devTerminal = terminal;
-          return terminal;
-        })
-        : new vscode.ProcessExecution(dotnet, args, { cwd });
+      const execution = sdk022 ? this.devExecution(state, noWindow, { command: dotnet, args, cwd }) : new vscode.ProcessExecution(dotnet, args, { cwd });
       // The extension's terminal reports dev's problems itself (DevProblems: [dev] Ready drops a fixed build error, which
       // a problem matcher cannot); its matchers only mark the task ready at [dev] Ready. A process task keeps $runic-dev.
       const matcher = sdk022 ? (noWindow ? "$runic-dev-terminal-no-window" : "$runic-dev-terminal") : (noWindow ? "$runic-dev-no-window" : "$runic-dev");
@@ -396,6 +380,51 @@ export class RunicSdk implements vscode.Disposable {
       task = new vscode.Task(definition, state.folder, `doctor${suffix}`, "runic", new vscode.ProcessExecution(dotnet, [verb, "doctor", "--project", state.project], { cwd }), []);
       task.detail = `dotnet ${verb} doctor`;
     }
+    return task;
+  }
+
+  /**
+   * `dev` in DevKit's own terminal (dotnet-runic 0.22 and later), which reads its output for the Problems and the
+   * dependency tree ({@link DevProblems}) and stops it on its input. `run` is the process: DevKit's `dev` arguments, or a
+   * workspace task's ({@link workspaceDevTask}). Problems resolve a relative file against the project's directory.
+   */
+  private devExecution(state: ProjectState, noWindow: boolean, run: TaskProcess): vscode.CustomExecution {
+    return new vscode.CustomExecution(async () => {
+      const problems = new DevProblems(dirname(state.project), noWindow, label => this.packageDirectory(state, label));
+      state.devProblems = problems;
+      this.publishDevProblems();
+      state.devExit = undefined;
+      const terminal = new DevTerminal(run.command, run.args, run.cwd, this.log, (ended, code, lines) => {
+        if (state.devTerminal !== ended) return;
+        state.devTerminal = undefined; state.devExit = { code, lines };
+        // A dev that the tool's launcher could not start (a fresh clone): offer the restore, unless F5 reports it.
+        if (code !== 0 && !state.f5Waiting && toolsMissing(lines)) this.offerToolRestore(state.project, devExitMessage(code, lines, true));
+      },
+        line => { if (problems.add(line) && state.devProblems === problems) this.publishDevProblems(); }, run.env);
+      state.devTerminal = terminal;
+      return terminal;
+    });
+  }
+
+  /**
+   * The template's `dev` task (`runic: dev`, `runic: dev --no-window`) as DevKit runs it: its process in DevKit's own
+   * terminal, under the task's label. VS Code removes the Problems of a background task when its process ends
+   * (`WatchingProblemCollector.done`), so the task's own problem matcher loses the error of a `dev` that stopped at its
+   * start (RAPPDEV1018, a failed first build), and only DevKit's terminal sees `dev`'s output. `dotnet` is the
+   * `runic.dotnetPath` of the folder. Undefined, so that VS Code runs the task itself as before, for a tool older than
+   * 0.22 (whose `dev` does not stop on its input) or a task {@link workspaceTaskProcess} cannot run.
+   */
+  private workspaceDevTask(state: ProjectState, workspace: vscode.Task, noWindow: boolean, toolVersion: string | undefined): vscode.Task | undefined {
+    if (!supportsDevSdk022(toolVersion)) return undefined;
+    const run = workspaceTaskProcess(workspace.execution, state.folder.uri.fsPath, homedir());
+    if (!run) { this.log.info(`The workspace task "${workspace.name}" is not a dotnet runic dev process DevKit can run; VS Code runs it.`); return undefined; }
+    if (/^dotnet(?:\.exe)?$/i.test(run.command)) run.command = this.host.dotnetPath(state.folder);
+    // The label in the definition too: VS Code identifies a task by its definition, and this one is not DevKit's own dev.
+    const definition: RunicTaskDefinition = { type: "runic", command: "dev", ...(noWindow ? { noWindow } : {}), workspaceTask: workspace.name };
+    const task = new vscode.Task(definition, state.folder, workspace.name, "runic", this.devExecution(state, noWindow, run),
+      noWindow ? "$runic-dev-terminal-no-window" : "$runic-dev-terminal");
+    task.isBackground = true;
+    task.detail = `${basename(run.command)} ${run.args.join(" ")}`;
     return task;
   }
 
@@ -436,9 +465,10 @@ export class RunicSdk implements vscode.Disposable {
       await this.stopDev(state.project, true);
       await this.waitFor(state, current => !isActive(current), 30000);
     }
-    const task = (extra.length ? undefined : await this.workspaceTask(state, noWindow ? templateTaskLabels.devNoWindow : templateTaskLabels.dev))
-      ?? this.task(state, "dev", noWindow, undefined, extra, await detectToolVersion(this.host.dotnetPath(state.folder), dirname(state.project), projectRunicToolVersion(state.project), (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb));
-    this.log.info(`Starting ${task.source === "Workspace" ? `the workspace task "${task.name}"` : `dotnet runic dev${noWindow ? " --no-window" : ""}`} for ${state.project}`);
+    const workspace = extra.length ? undefined : await this.workspaceTask(state, noWindow ? templateTaskLabels.devNoWindow : templateTaskLabels.dev);
+    const toolVersion = await detectToolVersion(this.host.dotnetPath(state.folder), dirname(state.project), projectRunicToolVersion(state.project), (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb);
+    const task = (workspace && (this.workspaceDevTask(state, workspace, noWindow, toolVersion) ?? workspace)) ?? this.task(state, "dev", noWindow, undefined, extra, toolVersion);
+    this.log.info(`Starting ${workspace ? `the workspace task "${workspace.name}"${task === workspace ? "" : ` in DevKit's terminal (${task.detail})`}` : `dotnet runic dev${noWindow ? " --no-window" : ""}`} for ${state.project}`);
     state.execution = await vscode.tasks.executeTask(task);
     return state;
   }
@@ -1077,13 +1107,13 @@ class DevTerminal implements vscode.Pseudoterminal {
   private readonly lastLines: string[] = [];
 
   constructor(private readonly dotnet: string, private readonly args: string[], private readonly cwd: string, private readonly log: vscode.LogOutputChannel, private readonly onEnd: (terminal: DevTerminal, code: number, lines: string[]) => void,
-    private readonly onLine: (line: string) => void = () => {}) {}
+    private readonly onLine: (line: string) => void = () => {}, private readonly env?: Record<string, string>) {}
 
   get running(): boolean { return !!this.child && !this.ended; }
 
   open(): void {
     this.writeEmitter.fire(terminalText(`> ${this.dotnet} ${this.args.join(" ")}\n`));
-    const child = spawnDev(this.dotnet, this.args, this.cwd, true);
+    const child = spawnDev(this.dotnet, this.args, this.cwd, true, this.env ? { ...process.env, ...this.env } : process.env);
     this.child = child;
     const write = (data: string) => this.writeEmitter.fire(terminalText(data));
     // Each stream's lines, for the Problems; the two streams interleave whole lines only.

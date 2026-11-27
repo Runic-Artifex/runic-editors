@@ -515,6 +515,7 @@ async function windowDebug(api, fs) {
   const listed = [undefined, ...vscode.workspace.workspaceFolders.map(item => item.uri)].flatMap(uri => sdk.dynamicDebugConfigurations(uri)).map(item => item.name);
   assert.deepEqual(listed, ['Runic: App']);
   fs.writeFileSync(`${sessionFile}.tmp`, JSON.stringify({ ...session, state: 'stopped' })); fs.renameSync(`${sessionFile}.tmp`, sessionFile);
+  await templateDevTask(sdk, appFolder, project, fs, path);
   await earlyDevExit(sdk, appFolder, project, sessionFile, fs, path);
   console.log('PASS Runic F5: /mock from args, the profile, StartArguments and both; launchProfile, cwd, envFile, pass-through; one entry per profile; an early dev exit and the tool restore.');
 }
@@ -549,6 +550,54 @@ async function earlyDevExit(sdk, appFolder, project, sessionFile, fs, path) {
   assert.equal(await sdk.restoreTools(project), 0);
   assert.equal(fs.existsSync(path.join(app, 'tools-missing')), false, 'Restore tools did not run dotnet tool restore');
   assert.equal(sdk.toolRestoreOffer(), undefined);
+}
+/**
+ * "Start dotnet runic dev" with the runic-app template's .vscode/tasks.json (fixtures/template-vscode), when dev stops at
+ * its start because a frontend package's build failed (RAPPDEV1018; the 0.24 VM run, part 4, rows 8 and 9). VS Code
+ * removes a background task's Problems when its process ends, so the template's problem matcher loses them; DevKit
+ * runs the template's task in its own terminal, which reads dev's output: the TypeScript error once in the package's
+ * file, RAPPDEV1018 on the project, the package failed in the tree, all still there after the task has ended.
+ */
+async function templateDevTask(sdk, appFolder, project, fs, path) {
+  const app = appFolder.uri.fsPath;
+  stage = 'template tasks.json: a dev that fails at its start';
+  const tasksFile = path.join(app, '.vscode', 'tasks.json');
+  fs.copyFileSync(path.join(app, 'template-tasks.json'), tasksFile);
+  fs.writeFileSync(path.join(app, 'tool-version'), '0.24.0\n');
+  fs.writeFileSync(path.join(app, 'dev-package-failure'), '');
+  const source = path.join(app, 'shared-ui', 'src', 'index.ts');
+  try {
+    for (let attempt = 0; !(await vscode.tasks.fetchTasks()).some(task => task.name === 'runic: dev' && task.source === 'Workspace'); attempt++) {
+      if (attempt >= 75) assert.fail('VS Code did not read the template\'s tasks.json');
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    assert.equal(sdk.dependencies(project)?.dependencies[0]?.state, 'built', 'The package\'s earlier build is on disk');
+    const started = [];
+    const ended = new Promise(resolve => {
+      const listeners = [vscode.tasks.onDidStartTask(event => started.push(event.execution.task)),
+        vscode.tasks.onDidEndTaskProcess(event => { if (event.execution.task.name === 'runic: dev') { for (const item of listeners) item.dispose(); resolve(event.exitCode); } })];
+    });
+    await vscode.commands.executeCommand('runic.dev.start', project);
+    assert.equal(await Promise.race([ended, new Promise(resolve => setTimeout(() => resolve('timeout'), 30000))]), 1, 'The template\'s dev task did not end with dev\'s exit code');
+    // The template's task, its arguments and directory, in DevKit's terminal (not VS Code's process with its matcher).
+    const ran = started.find(task => task.name === 'runic: dev');
+    assert.ok(ran, `Started: ${started.map(task => task.name).join(', ')}`);
+    assert.ok(ran.execution instanceof vscode.CustomExecution, 'DevKit must run the template\'s dev task in its own terminal');
+    assert.deepEqual(fs.readFileSync(path.join(app, 'dev-args.log'), 'utf8').split('\n').filter(Boolean).slice(0, 2), [app, 'runic dev']);
+    // After the task has ended: VS Code would have removed a background matcher's problems by now.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const problems = () => vscode.languages.getDiagnostics().flatMap(([uri, items]) => items.filter(item => item.severity === vscode.DiagnosticSeverity.Error)
+      .map(item => [uri.fsPath, item.source, String(item.code?.value ?? item.code), item.range.start.line + 1, item.range.start.character + 1]))
+      .filter(([file, source]) => file.startsWith(app) && source !== 'runic doctor');
+    await waitFor(() => problems().length === 2, () => `Problems: ${JSON.stringify(problems())}`);
+    assert.deepEqual(problems().sort(), [[project, 'runic', 'RAPPDEV1018', 1, 1], [source, 'runic', 'TS2322', 12, 14]]);
+    assert.deepEqual(sdk.dependencies(project).dependencies.map(item => [item.state, item.message]), [['failed', "src/index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'."]]);
+    assert.deepEqual((await sdk.devTree()).find(row => row.label === 'Frontend dependencies').children.map(row => row.description), ['SharedUi · failed']);
+    console.log('PASS Runic template tasks.json: a dev that fails at its start leaves TS2322 in the package, RAPPDEV1018 on the project and a failed package.');
+  } finally {
+    for (const file of [tasksFile, path.join(app, 'tool-version'), path.join(app, 'dev-package-failure'), path.join(app, 'dev-args.log')]) fs.rmSync(file, { force: true });
+    sdk.devOutput(project, []);
+  }
 }
 /** S8: the dependency tree from the graph file, the fresh-clone offers and the quick fixes of the dependency diagnostics. */
 async function frontendDependencies(sdk, appFolder, project, csproj, fs, path) {

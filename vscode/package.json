@@ -475,6 +475,10 @@
           "project": {
             "type": "string",
             "description": "The project file, relative to the workspace folder; needed when the folder has several Runic SDK projects."
+          },
+          "workspaceTask": {
+            "type": "string",
+            "description": "dev only: the label of the workspace task (the template's runic: dev) whose process DevKit runs in its own terminal."
           }
         }
       },

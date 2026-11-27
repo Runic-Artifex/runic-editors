@@ -176,3 +176,51 @@ export function templateWindowConfiguration(configurations: unknown): string | u
 
 /** The template's task labels (runic-sdk `.vscode/tasks.json`); the extension runs a workspace task of that label when there is one. */
 export const templateTaskLabels = { dev: "runic: dev", devNoWindow: "runic: dev --no-window", doctor: "runic: doctor", build: "build" } as const;
+
+/** The process of a workspace task, as DevKit runs it in its own terminal. */
+export interface TaskProcess { command: string; args: string[]; cwd: string; env?: Record<string, string> }
+
+/**
+ * The `dev` of a workspace `dev` task (the template's `"type": "process"` task) as a process DevKit can run in its own
+ * terminal, which reads `dev`'s output for the Problems and the dependency tree: the task's command, arguments, `cwd`
+ * (the workspace folder by default, as VS Code runs it) and `env`, with the variables of {@link substitutePath}, `${/}`
+ * and `${pathSeparator}` substituted. Undefined, so that VS Code runs the task itself, for a shell or custom task, a
+ * variable DevKit does not substitute (`${input:…}`, `${command:…}`, `${config:…}`), or arguments without `<verb> dev`.
+ */
+export function workspaceTaskProcess(execution: unknown, folder: string, home: string, environment: NodeJS.ProcessEnv = process.env): TaskProcess | undefined {
+  if (!execution || typeof execution !== "object") return undefined;
+  const { process: command, args, options } = execution as { process?: unknown; args?: unknown; options?: { cwd?: unknown; env?: unknown } };
+  if (typeof command !== "string" || !Array.isArray(args) || !args.every(arg => typeof arg === "string")) return undefined;
+  const separator = folder.includes("\\") ? "\\" : "/";
+  const substitute = (value: string): string | undefined => {
+    const substituted = value
+      .replace(/\$\{workspaceFolder\}/g, folder).replace(/\$\{workspaceFolderBasename\}/g, basename(folder))
+      .replace(/\$\{userHome\}/g, home).replace(/\$\{env:([^}]+)\}/g, (_, name: string) => environment[name] ?? "")
+      .replace(/\$\{(?:\/|pathSeparator)\}/g, separator);
+    return /\$\{[^}]*\}/.test(substituted) ? undefined : substituted;
+  };
+  const values = [command, ...args].map(substitute);
+  if (values.some(value => value === undefined)) return undefined;
+  const [program, ...rest] = values as string[];
+  const verb = rest.findIndex(arg => arg === "runic" || arg === "rax");
+  const tool = /^(?:dotnet-runic|rax|RunicArtifex\.Tool)(?:\.exe)?$/i.test(basename(program.replaceAll("\\", "/")));
+  if (!(tool ? rest[0] === "dev" : verb >= 0 && rest[verb + 1] === "dev")) return undefined;
+  let cwd = folder;
+  if (typeof options?.cwd === "string") {
+    const value = substitute(options.cwd);
+    if (value === undefined) return undefined;
+    // Absolute on Windows or POSIX, whichever OS reads it.
+    cwd = isAbsolute(value) || /^(?:[A-Za-z]:[\\/]|\\\\)/.test(value) ? value : resolve(folder, value);
+  }
+  let env: Record<string, string> | undefined;
+  if (options?.env && typeof options.env === "object") {
+    env = {};
+    for (const [name, value] of Object.entries(options.env as Record<string, unknown>)) {
+      if (typeof value !== "string") continue;
+      const substituted = substitute(value);
+      if (substituted === undefined) return undefined;
+      env[name] = substituted;
+    }
+  }
+  return { command: program, args: rest, cwd, ...(env ? { env } : {}) };
+}
