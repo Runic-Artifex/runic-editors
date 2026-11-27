@@ -3,7 +3,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { detectToolVersion, devArguments, forceStop, onDevEnd, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, type DevStop } from "./dev-process.js";
+import { detectToolVersion, devArguments, devExitMessage, forceStop, onDevEnd, probeToolsMissing, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, toolRestoreArguments, toolsMissing, type DevStop } from "./dev-process.js";
 import { dependencyFixes, addWorkspaceMember, propertyLine, removeJsonProperty, type DependencyFix } from "./dependency-fixes.js";
 import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, installCommand, needsBuild, projectFrontendDirectory, readFrontendGraph, unbuiltDependencies, withOwners, type DependencyList, type DevDependency, type FrontendInstall } from "./dependencies.js";
 import { DevProblems, LineSplitter } from "./dev-problems.js";
@@ -36,6 +36,18 @@ interface ProjectState {
   dependencies?: DependencyList;
   /** The frontend's install, when its packages are not installed (a fresh clone); DevKit only offers it. */
   install?: FrontendInstall;
+  /** How the last `dev` of DevKit's own terminal ended: its exit code and its last output lines. */
+  devExit?: DevExit;
+  /** F5 waits for the `dev` it started, and reports that `dev`'s early exit itself. */
+  f5Waiting?: boolean;
+}
+
+/** A `dev` that ended: its exit code (undefined when VS Code reported none) and its last output lines. */
+interface DevExit { code: number | undefined; lines: string[] }
+
+/** F5's `dev` exited before its session was ready; `missingTools` when the project's local tools are not restored. */
+class DevExitError extends Error {
+  constructor(message: string, readonly project: string, readonly missingTools: boolean) { super(message); }
 }
 
 interface RunicTaskDefinition extends vscode.TaskDefinition { type: "runic"; command: "dev" | "doctor" | "build"; noWindow?: boolean; project?: string }
@@ -86,6 +98,10 @@ export class RunicSdk implements vscode.Disposable {
   private readonly dependencyItem = vscode.window.createStatusBarItem("runic.dependencies", vscode.StatusBarAlignment.Left, 98);
   /** What the dependency status item offers while it shows (the host test reads it). */
   private dependencyOffer?: { text: string; command: string; project: string };
+  /** The last "Restore tools" offer (the host test reads it): the project and the message it was shown with. */
+  private toolRestoreOffer?: { project: string; message: string };
+  /** The message of the last F5 that failed before the debugger started (the host test reads it). */
+  private f5Failure?: string;
   /** The Runic SDK projects that are not Window projects (libraries, tests): not `dev` targets. */
   private libraries: string[] = [];
   private readonly devView = new Provider(() => this.devRoots());
@@ -135,7 +151,7 @@ export class RunicSdk implements vscode.Disposable {
       }),
       // Run and Debug's list: one entry per Window project and launch profile (design/ide-run-debug E2).
       vscode.debug.registerDebugConfigurationProvider("runic", {
-        provideDebugConfigurations: folder => this.debugConfigurations(folder),
+        provideDebugConfigurations: folder => this.dynamicDebugConfigurations(folder),
       }, vscode.DebugConfigurationProviderTriggerKind.Dynamic),
       vscode.tasks.onDidEndTask(event => {
         for (const state of this.projects.values()) if (state.execution === event.execution) { state.execution = undefined; void state.follower.refresh(); }
@@ -157,6 +173,7 @@ export class RunicSdk implements vscode.Disposable {
       vscode.commands.registerCommand("runic.dependencies.install", (target?: unknown) => this.guard(() => this.installDependencies(target))),
       vscode.commands.registerCommand("runic.dependencies.openPackage", (target?: unknown, property?: string) => this.guard(() => this.openPackage(target, property))),
       vscode.commands.registerCommand("runic.dependencies.show", (label?: string) => this.guard(() => this.showDependency(label))),
+      vscode.commands.registerCommand("runic.tools.restore", (target?: unknown) => this.guard(() => this.restoreTools(target))),
       vscode.commands.registerCommand("runic.dependencies.run", (cwd: string, args: string[]) => this.guard(() => this.runPackageManager(cwd, args))),
       vscode.commands.registerCommand("runic.viewModels.refresh", () => { this.loadSourceMaps(); }),
       vscode.commands.registerCommand("runic.openSourceLocation", (location: SourceLocation) => this.guard(() => openLocation(location))),
@@ -345,7 +362,13 @@ export class RunicSdk implements vscode.Disposable {
           const problems = new DevProblems(cwd, noWindow);
           state.devProblems = problems;
           this.publishDevProblems();
-          const terminal = new DevTerminal(dotnet, args, cwd, this.log, ended => { if (state.devTerminal === ended) state.devTerminal = undefined; },
+          state.devExit = undefined;
+          const terminal = new DevTerminal(dotnet, args, cwd, this.log, (ended, code, lines) => {
+            if (state.devTerminal !== ended) return;
+            state.devTerminal = undefined; state.devExit = { code, lines };
+            // A dev that the tool's launcher could not start (a fresh clone): offer the restore, unless F5 reports it.
+            if (code !== 0 && !state.f5Waiting && toolsMissing(lines)) this.offerToolRestore(state.project, devExitMessage(code, lines, true));
+          },
             line => { if (problems.add(line) && state.devProblems === problems) this.publishDevProblems(); });
           state.devTerminal = terminal;
           return terminal;
@@ -433,8 +456,8 @@ export class RunicSdk implements vscode.Disposable {
     setTimeout(() => void state.follower.refresh(), 500);
   }
 
-  /** Resolves with the snapshot once `predicate` holds; rejects after `timeout` ms or on cancellation. */
-  private waitFor(state: ProjectState, predicate: (snapshot: DevSnapshot) => boolean, timeout: number, token?: vscode.CancellationToken, failWhen?: (snapshot: DevSnapshot) => string | undefined): Promise<DevSnapshot> {
+  /** Resolves with the snapshot once `predicate` holds; rejects after `timeout` ms, on cancellation, or with `abort`'s error. */
+  private waitFor(state: ProjectState, predicate: (snapshot: DevSnapshot) => boolean, timeout: number, token?: vscode.CancellationToken, failWhen?: (snapshot: DevSnapshot) => string | undefined, abort?: Promise<Error>): Promise<DevSnapshot> {
     return new Promise((resolveWait, rejectWait) => {
       const disposables: { dispose(): void }[] = [];
       const finish = (action: () => void) => { clearInterval(timer); clearTimeout(timeoutTimer); for (const item of disposables) item.dispose(); action(); };
@@ -444,10 +467,67 @@ export class RunicSdk implements vscode.Disposable {
       };
       disposables.push(state.follower.onDidChange(check));
       if (token) disposables.push(token.onCancellationRequested(() => finish(() => rejectWait(new vscode.CancellationError()))));
+      let done = false;
+      disposables.push({ dispose: () => { done = true; } });
+      // A session that got ready just before dev exited still wins: the snapshot is read once more first.
+      void abort?.then(async error => { const last = await state.follower.refresh(); if (!done) { if (predicate(last)) finish(() => resolveWait(last)); else finish(() => rejectWait(error)); } });
       const timer = setInterval(() => void state.follower.refresh(), 500);
       const timeoutTimer = setTimeout(() => finish(() => rejectWait(new Error(`dotnet runic dev did not get ready within ${Math.round(timeout / 1000)} seconds; see its task terminal.`))), timeout);
       check(state.follower.snapshot);
     });
+  }
+
+  /**
+   * Watches the `dev` task F5 started: once it ends, `failure` resolves with a {@link DevExitError} that names its exit
+   * code and last output lines, and says whether the project's local tools are missing (its output, else a probe of
+   * `dotnet <verb> --version`).
+   */
+  private watchDevExit(state: ProjectState, execution: vscode.TaskExecution): { failure: Promise<Error>; dispose(): void } {
+    const disposables: vscode.Disposable[] = [];
+    const failure = new Promise<Error>(resolveFailure => {
+      let processCode: number | undefined;
+      const ended = async () => {
+        for (const item of disposables) item.dispose();
+        const exit: DevExit = state.devExit ?? { code: processCode, lines: [] };
+        const dotnet = this.host.dotnetPath(state.folder);
+        const missing = toolsMissing(exit.lines) || (exit.code !== 0 && await probeToolsMissing(dotnet, dirname(state.project), (projectCoreTool(state.project)?.tool ?? formerCoreTool).verb));
+        const message = devExitMessage(exit.code, exit.lines, missing);
+        for (const line of exit.lines) this.log.info(`  dev: ${line}`);
+        resolveFailure(new DevExitError(message, state.project, missing));
+      };
+      disposables.push(
+        vscode.tasks.onDidEndTaskProcess(event => { if (event.execution === execution) processCode = event.exitCode; }),
+        vscode.tasks.onDidEndTask(event => { if (event.execution === execution) void ended(); }));
+      if (!vscode.tasks.taskExecutions.includes(execution)) void ended();
+    });
+    return { failure, dispose: () => { for (const item of disposables) item.dispose(); } };
+  }
+
+  /**
+   * Offers `dotnet tool restore` behind a click (D081.4): the error names the failure and the button runs the restore.
+   */
+  private offerToolRestore(project: string, message: string) {
+    this.toolRestoreOffer = { project, message };
+    const restore = "Restore tools";
+    void vscode.window.showErrorMessage(message, restore).then(answer => { if (answer === restore) void vscode.commands.executeCommand("runic.tools.restore", project); });
+  }
+
+  /** "Restore tools": `dotnet tool restore` in the project's directory as a task; F5 can run again once it has passed. */
+  async restoreTools(target: unknown): Promise<number | undefined> {
+    const state = await this.pick(target);
+    if (!state) return;
+    const cwd = dirname(state.project);
+    const task = new vscode.Task({ type: "runic-tools", command: "restore", cwd }, state.folder, `tool restore (${basename(cwd)})`, "runic",
+      new vscode.ProcessExecution(this.host.dotnetPath(state.folder), toolRestoreArguments(), { cwd }), []);
+    task.detail = `dotnet tool restore in ${cwd}`;
+    this.log.info(`> dotnet ${toolRestoreArguments().join(" ")} (in ${cwd})`);
+    const source = new vscode.CancellationTokenSource();
+    try {
+      const code = await runTaskToEnd(task, source.token);
+      if (code === 0) { this.toolRestoreOffer = undefined; void vscode.window.showInformationMessage(`The local tools of ${basename(state.project)} are restored; press F5 to debug the Window again.`); }
+      else void vscode.window.showErrorMessage(`dotnet tool restore failed (exit code ${code}); see its task terminal.`);
+      return code;
+    } finally { source.dispose(); }
   }
 
   private async openBrowser(target: unknown) {
@@ -523,10 +603,18 @@ export class RunicSdk implements vscode.Disposable {
             await this.stopDev(state.project, true);
             await this.waitFor(state, current => !isActive(current), 30000, cancel);
           }
-          if (!isActive(state.follower.snapshot)) { await this.startDev(state.project, true, devExtra); startedDev = true; }
-          const startedAt = Date.now();
-          snapshot = await this.waitFor(state, current => current.state === "ready" && current.session?.window?.owner === "ide", 10 * 60 * 1000, cancel,
-            current => current.state === "stopped" && Date.parse(current.session?.startedAt ?? "") >= startedAt - 5000 ? "dotnet runic dev stopped; see its task terminal and the Problems panel." : undefined);
+          // F5 ends as soon as the dev it started exits, also before dev writes a session file (a fresh clone without its tools).
+          let ended: { failure: Promise<Error>; dispose(): void } | undefined;
+          state.f5Waiting = true;
+          try {
+            if (!isActive(state.follower.snapshot)) {
+              await this.startDev(state.project, true, devExtra); startedDev = true;
+              if (state.execution) ended = this.watchDevExit(state, state.execution);
+            }
+            const startedAt = Date.now();
+            snapshot = await this.waitFor(state, current => current.state === "ready" && current.session?.window?.owner === "ide", 10 * 60 * 1000, cancel,
+              current => current.state === "stopped" && Date.parse(current.session?.startedAt ?? "") >= startedAt - 5000 ? "dotnet runic dev stopped; see its task terminal and the Problems panel." : undefined, ended?.failure);
+          } finally { ended?.dispose(); state.f5Waiting = false; }
         }
         // 2. The build, which keeps dev's development pages in www/ while dev serves the frontend.
         progress.report({ message: "building" });
@@ -543,9 +631,20 @@ export class RunicSdk implements vscode.Disposable {
         return launch as vscode.DebugConfiguration;
       });
     } catch (error) {
-      if (!(error instanceof vscode.CancellationError)) { this.log.error(String(error)); void vscode.window.showErrorMessage(errorSummary(error)); }
+      if (!(error instanceof vscode.CancellationError)) this.f5Failure = error instanceof Error ? error.message : String(error);
+      if (error instanceof DevExitError && error.missingTools) { this.log.error(error.message); this.offerToolRestore(error.project, error.message); }
+      else if (!(error instanceof vscode.CancellationError)) { this.log.error(String(error)); void vscode.window.showErrorMessage(errorSummary(error)); }
       return undefined;
     }
+  }
+
+  /**
+   * Run and Debug's dynamic `runic` entries. VS Code asks the provider once per launch scope: each folder, and once more
+   * without a folder for the user settings' launch (and a workspace file's); those get none, so every entry shows once,
+   * under its folder.
+   */
+  private dynamicDebugConfigurations(folder: vscode.WorkspaceFolder | undefined): vscode.DebugConfiguration[] {
+    return folder ? this.debugConfigurations(folder) : [];
   }
 
   /** The `runic` entries of Run and Debug (dynamic) and of a new launch.json (initial): one per Window project and profile. */
@@ -876,6 +975,11 @@ export class RunicSdk implements vscode.Disposable {
       libraries: () => [...this.libraries],
       /** Run and Debug's `runic` entries for a workspace folder (the dynamic and initial providers). */
       debugConfigurations: (folder: vscode.Uri) => this.debugConfigurations(vscode.workspace.getWorkspaceFolder(folder)),
+      /** Run and Debug's dynamic list for a launch scope: a folder, or undefined for the user settings' launch. */
+      dynamicDebugConfigurations: (folder?: vscode.Uri) => this.dynamicDebugConfigurations(folder ? vscode.workspace.getWorkspaceFolder(folder) : undefined),
+      toolRestoreOffer: () => this.toolRestoreOffer,
+      f5Failure: () => this.f5Failure,
+      restoreTools: (project: string) => this.restoreTools(project),
       dependencies: (project: string) => { this.loadDependencies(); return this.projects.get(project)?.dependencies; },
       install: (project: string) => this.projects.get(project)?.install,
       dependencyStatus: () => this.dependencyOffer,
@@ -955,7 +1059,10 @@ class DevTerminal implements vscode.Pseudoterminal {
   private stopping?: Promise<DevStop>;
   private ended = false;
 
-  constructor(private readonly dotnet: string, private readonly args: string[], private readonly cwd: string, private readonly log: vscode.LogOutputChannel, private readonly onEnd: (terminal: DevTerminal) => void,
+  /** The last lines of dev's output, for the message of an early exit. */
+  private readonly lastLines: string[] = [];
+
+  constructor(private readonly dotnet: string, private readonly args: string[], private readonly cwd: string, private readonly log: vscode.LogOutputChannel, private readonly onEnd: (terminal: DevTerminal, code: number, lines: string[]) => void,
     private readonly onLine: (line: string) => void = () => {}) {}
 
   get running(): boolean { return !!this.child && !this.ended; }
@@ -967,12 +1074,13 @@ class DevTerminal implements vscode.Pseudoterminal {
     const write = (data: string) => this.writeEmitter.fire(terminalText(data));
     // Each stream's lines, for the Problems; the two streams interleave whole lines only.
     const output = new LineSplitter(), errors = new LineSplitter();
-    const read = (lines: LineSplitter) => (data: string) => { write(data); for (const line of lines.push(data)) this.onLine(line); };
+    const keep = (line: string) => { if (line.trim()) { this.lastLines.push(line.trimEnd()); if (this.lastLines.length > lastLineCount) this.lastLines.shift(); } this.onLine(line); };
+    const read = (lines: LineSplitter) => (data: string) => { write(data); for (const line of lines.push(data)) keep(line); };
     child.stdout?.setEncoding("utf8"); child.stdout?.on("data", read(output));
     child.stderr?.setEncoding("utf8"); child.stderr?.on("data", read(errors));
-    child.stdout?.on("end", () => { for (const line of output.flush()) this.onLine(line); });
-    child.stderr?.on("end", () => { for (const line of errors.flush()) this.onLine(line); });
-    child.on("error", error => { write(`\nCould not start ${this.dotnet}: ${error.message}\n`); this.end(1); });
+    child.stdout?.on("end", () => { for (const line of output.flush()) keep(line); });
+    child.stderr?.on("end", () => { for (const line of errors.flush()) keep(line); });
+    child.on("error", error => { write(`\nCould not start ${this.dotnet}: ${error.message}\n`); this.lastLines.push(`Could not start ${this.dotnet}: ${error.message}`); this.end(1); });
     // dev has ended when its process has (its output read for a short while), not when its pipes close.
     onDevEnd(child, (code, signal) => { write(`\ndotnet runic dev exited with ${code ?? signal}.\n`); this.end(code ?? 1); });
   }
@@ -1001,10 +1109,14 @@ class DevTerminal implements vscode.Pseudoterminal {
   private end(code: number) {
     if (this.ended) return;
     this.ended = true;
+    // The state first: F5 reads the exit code and lines when VS Code reports the task's end.
+    this.onEnd(this, code, [...this.lastLines]);
     this.closeEmitter.fire(code);
-    this.onEnd(this);
   }
 }
+
+/** How many of dev's last output lines an early exit's message keeps. */
+const lastLineCount = 20;
 
 /** Runs a task and resolves with its process's exit code. */
 async function runTaskToEnd(task: vscode.Task, token: vscode.CancellationToken): Promise<number | undefined> {

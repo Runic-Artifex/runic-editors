@@ -487,8 +487,47 @@ async function windowDebug(api, fs) {
   assert.deepEqual(sdk.debugConfigurations(vscode.workspace.workspaceFolders[0].uri), []);
   fs.rmSync(path.join(app, 'Properties'), { recursive: true });
   assert.deepEqual(sdk.debugConfigurations(appFolder.uri), [{ type: 'runic', request: 'launch', name: 'Runic: App', project: 'App.csproj' }]);
+  // Run and Debug asks the dynamic provider for each folder and once without one (the user settings' launch): each
+  // entry shows once, under its folder (the 0.24 VM run listed every entry a second time under "user settings").
+  assert.deepEqual(sdk.dynamicDebugConfigurations(undefined), []);
+  assert.deepEqual(sdk.dynamicDebugConfigurations(appFolder.uri), sdk.debugConfigurations(appFolder.uri));
+  const listed = [undefined, ...vscode.workspace.workspaceFolders.map(item => item.uri)].flatMap(uri => sdk.dynamicDebugConfigurations(uri)).map(item => item.name);
+  assert.deepEqual(listed, ['Runic: App']);
   fs.writeFileSync(`${sessionFile}.tmp`, JSON.stringify({ ...session, state: 'stopped' })); fs.renameSync(`${sessionFile}.tmp`, sessionFile);
-  console.log('PASS Runic F5: /mock from args, the profile, StartArguments and both; launchProfile, cwd, envFile, pass-through; one entry per profile.');
+  await earlyDevExit(sdk, appFolder, project, sessionFile, fs, path);
+  console.log('PASS Runic F5: /mock from args, the profile, StartArguments and both; launchProfile, cwd, envFile, pass-through; one entry per profile; an early dev exit and the tool restore.');
+}
+/**
+ * F5 when the `dev` it starts exits before it writes a session file: F5 fails at once with dev's exit code and last
+ * lines, not after 10 minutes; with the local tools not restored (a fresh clone) it offers the restore, which runs only
+ * on a click (D081.4). The stand-in dotnet's `runic dev` exits with 3, or with 1 and dotnet's restore message while
+ * tools-missing exists; its `tool restore` removes that file.
+ */
+async function earlyDevExit(sdk, appFolder, project, sessionFile, fs, path) {
+  const app = appFolder.uri.fsPath;
+  fs.rmSync(sessionFile, { force: true });
+  await waitFor(() => sdk.devState(project).state === 'none', () => `The session file was not removed: ${JSON.stringify(sdk.devState(project))}`, 15000);
+  const f5 = async name => {
+    const startedAt = Date.now();
+    assert.equal(await vscode.debug.startDebugging(appFolder, { type: 'runic', request: 'launch', name }), false, `${name}: F5 must fail`);
+    assert.ok(Date.now() - startedAt < 45000, `${name}: F5 took ${Date.now() - startedAt} ms to fail`);
+    return sdk.f5Failure();
+  };
+  stage = 'F5: dev exits before its session (dotnet-runic 0.24, DevKit\'s terminal)';
+  fs.writeFileSync(path.join(app, 'tool-version'), '0.24.0\n');
+  assert.equal(await f5('early exit'), 'dotnet runic dev exited with code 3 before its session was ready: Restoring App.csproj | error RAPPCLI1001: dev failed early.');
+  assert.equal(sdk.toolRestoreOffer(), undefined, 'Restored tools need no restore');
+  fs.rmSync(path.join(app, 'tool-version'));
+  stage = 'F5: a fresh clone without its local tools offers the restore';
+  fs.writeFileSync(path.join(app, 'tools-missing'), '');
+  const failure = await f5('tools missing');
+  assert.match(failure, /^dotnet runic dev exited (with code 1 )?before its session was ready.* The project's local tools are not restored: choose Restore tools \(dotnet tool restore\), then press F5 again\.$/);
+  assert.deepEqual(sdk.toolRestoreOffer(), { project, message: failure });
+  assert.ok(fs.existsSync(path.join(app, 'tools-missing')), 'DevKit must not restore by itself');
+  stage = 'F5: Restore tools';
+  assert.equal(await sdk.restoreTools(project), 0);
+  assert.equal(fs.existsSync(path.join(app, 'tools-missing')), false, 'Restore tools did not run dotnet tool restore');
+  assert.equal(sdk.toolRestoreOffer(), undefined);
 }
 /** S8: the dependency tree from the graph file, the fresh-clone offers and the quick fixes of the dependency diagnostics. */
 async function frontendDependencies(sdk, appFolder, project, csproj, fs, path) {
