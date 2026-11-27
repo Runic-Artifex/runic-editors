@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, graphDependencies, installCommand, parseFrontendGraph, projectFrontendDirectory, readFrontendGraph, sessionDependencies, unbuiltDependencies, withDevFailures, withOwners, workspaceRoot, type DevDependency } from "../src/dependencies.js";
+import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, graphDependencies, installCommand, parseFrontendGraph, projectFrontendDirectory, readFrontendGraph, sessionDependencies, unbuiltDependencies, withDevFailures, withFailedPackage, withOwners, workspaceRoot, type DevDependency } from "../src/dependencies.js";
 import { addWorkspaceMember, dependencyFixes, dependencyPrefix, propertyLine, removeJsonProperty, type TextChange } from "../src/dependency-fixes.js";
 import { devSessionSchema, parseDevSession, type DevSession } from "../src/dev-session.js";
 import { coreTool, detectWorkspace, formerCoreTool, isWindowProject } from "../src/workspace.js";
@@ -279,4 +279,32 @@ test("the session file's failure marks its package, or the package its project o
   // A running session's own states stay.
   const running = { source: "session" as const, dependencies: [built] };
   expect(withDevFailures(running, [], { package: built.directory, project: null, message })).toBe(running);
+});
+
+// The 0.24 VM run, release checklist rows D087 b and d: a never-built project's first dev fails, with no graph file yet.
+test("the session file's failure names a package that no list has: the tree gets a failed row for it", () => {
+  const message = "A frontend package that the page depends on failed to build, so dev did not start: /repo/Shop.Core/Frontend/src/index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'.";
+  const named = { package: "/repo/Shop.Core/Frontend/", project: "/repo/Shop.Core/Shop.Core.csproj", message };
+  const names = (directory: string) => directory === "/repo/Shop.Core/Frontend" ? "shop-core" : undefined;
+  // No graph and a stopped session whose dependencies are []: a list of one row, named by its package.json.
+  const list = withFailedPackage(dependencyList({ state: "stopped", dependencies: [] } as never, false, () => undefined), named, "/repo/Shop/Shop.csproj", names);
+  expect(list?.source).toBe("last-session");
+  expect(list?.dependencies.map(item => [dependencyLabel(item), item.directory, item.ownerName, item.state, item.message])).toEqual([["shop-core", "/repo/Shop.Core/Frontend", "Shop.Core", "failed", message]]);
+  // The located error then gives the row its message, as for a row of the graph.
+  const located = { file: "/repo/Shop.Core/Frontend/src/index.ts", line: 12, column: 14, severity: "error", code: "TS2322", message: "Type 'string' is not assignable to type 'number'." };
+  expect(withDevFailures(list, [located], named)?.dependencies.map(item => [item.state, item.message])).toEqual([["failed", "src/index.ts(12,14): error TS2322: Type 'string' is not assignable to type 'number'."]]);
+  // Without a package.json name, the folder; the served project owns nothing, so the libraries may still name the owner.
+  const unnamed = withFailedPackage(undefined, { ...named, project: "/repo/Shop/Shop.csproj" }, "/repo/Shop/Shop.csproj", () => undefined);
+  expect(unnamed?.dependencies.map(item => [dependencyLabel(item), item.owner])).toEqual([["Frontend", null]]);
+  expect(withOwners(unnamed, [{ project: "/repo/Shop.Core/Shop.Core.csproj", directory: "/repo/Shop.Core/Frontend" }])?.dependencies[0].ownerName).toBe("Shop.Core");
+  // A graph that lists the package (after a build) keeps its own row; another package is added beside the graph's.
+  const graphRow = { ...sharedUi, package: "shop-core", directory: "/repo/Shop.Core/Frontend", state: "built", watch: "none", message: null };
+  const graph = { source: "graph" as const, dependencies: [graphRow] };
+  expect(withFailedPackage(graph, named, undefined, names)).toBe(graph);
+  expect(withFailedPackage(graph, { ...named, package: "/repo/charts" }, undefined, () => "@acme/charts")?.dependencies.map(item => [item.package, item.state])).toEqual([["shop-core", "built"], ["@acme/charts", "failed"]]);
+  // No package named, no failure, or a running session: nothing is added.
+  expect(withFailedPackage(undefined, { ...named, package: null })).toBeUndefined();
+  expect(withFailedPackage(graph, undefined)).toBe(graph);
+  const running = { source: "session" as const, dependencies: [] };
+  expect(withFailedPackage(running, named, undefined, names)).toBe(running);
 });
