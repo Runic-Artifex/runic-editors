@@ -143,7 +143,7 @@ Evaluating`, with the Window also `Window exited` and `Reloading`).
 
 **Frontend dependencies.** A page can import the frontend packages of other
 projects: a client library's package or a JavaScript workspace package
-([Library packages](https://github.com/Runic-Artifex/runic-sdk/blob/main/packages/dotnet/Runic.Application.Views/README.md#library-packages),
+([Library packages](https://github.com/Runic-Artifex/runic-sdk/blob/v0.24.0/packages/dotnet/Runic.Application.Views/README.md#library-packages),
 runic-sdk 0.24). The **Dev Session** section lists them under **Frontend
 dependencies**, dependencies first. Each row shows the owning project, the
 state (`built`, `building`, `failed` with `dev`'s message below it, `not built`

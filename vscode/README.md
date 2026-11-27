@@ -303,7 +303,7 @@ template's "Window") reads the first profile but not `StartArguments`; give it
 
 A Window project's page can import the frontend packages of other projects: a
 client library's package or a JavaScript workspace package
-([Library packages](https://github.com/Runic-Artifex/runic-sdk/blob/main/packages/dotnet/Runic.Application.Views/README.md#library-packages),
+([Library packages](https://github.com/Runic-Artifex/runic-sdk/blob/v0.24.0/packages/dotnet/Runic.Application.Views/README.md#library-packages),
 runic-sdk 0.24). The **Dev Session** view lists them under **Frontend
 dependencies**, dependencies first, one row per package with its owning project,
 its state and how `dev` keeps it current: `built`, `building`, `failed` (with
@@ -313,7 +313,7 @@ script" or "watched by Vite". Selecting a row opens its `package.json`.
 
 - **While `dev` runs**, the rows come from the session file's `dependencies`
   (`dotnet-runic` 0.24, see "Library packages under dev" in the
-  [dotnet-runic README](https://github.com/Runic-Artifex/runic-sdk/blob/main/tools/dotnet-runic/README.md#library-packages-under-dev)).
+  [dotnet-runic README](https://github.com/Runic-Artifex/runic-sdk/blob/v0.24.0/tools/dotnet-runic/README.md#library-packages-under-dev)).
 - **Otherwise**, and with a `dev` before 0.24, whose session file has no
   `dependencies`, they come from the graph the last build wrote
   (`obj/runic/frontend-graph.json`, `rax.frontend-graph/1`): a compiled package
