@@ -81,7 +81,12 @@ internal sealed class DevLaunchGuard : IOleCommandTarget
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            SdkOutput.WriteLine("The F5 check for dotnet runic dev failed: " + error.Message);
+            // Never skip the question silently: say that the check failed and let the user choose.
+            string message = DevGuard.CheckFailed(error.Message);
+            SdkOutput.WriteLine(message.Split('\n')[0]);
+            int answer = VsShellUtilities.ShowMessageBox(package, message, RunicPackage.Title,
+                OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_OKCANCEL, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+            if (answer == (int)VSConstants.MessageBoxResult.IDCANCEL) return VSConstants.S_OK;
         }
         return passOn;
     }

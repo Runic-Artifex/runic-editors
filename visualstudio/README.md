@@ -203,6 +203,10 @@ If a `dev` that Visual Studio started runs its own Window, Yes restarts it with
 there first, or continue and get two Windows. The question comes every time;
 there is no setting to remember the answer.
 
+The question also comes for a project opened without a solution file (the
+runic-app template's single `.csproj`). If the check itself fails, a message
+says why: **OK** starts the Window without `dev`, **Cancel** starts nothing.
+
 When the `dev` that Yes started exits before it is ready, F5 stops at once with
 `dev`'s exit code and last output lines (all of them in the Runic SDK Output
 pane; the message points to the Error List only when `dev`'s output put rows

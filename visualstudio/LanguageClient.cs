@@ -82,7 +82,8 @@ public sealed class RunicLanguageClient : ILanguageClient, ILanguageClientCustom
         solutionFolder = solutionDirectory;
         string? file = dte?.ActiveDocument?.FullName;
         if (string.IsNullOrEmpty(file)) file = solution;
-        solutionKey = solution ?? file ?? "";
+        // A project opened without a solution file leaves Solution.FullName empty, not null.
+        solutionKey = string.IsNullOrEmpty(solution) ? file ?? "" : solution!;
         attempt = new ServerStartAttempt { Dotnet = RunicSettings.Dotnet(options.DotnetPath, Environment.GetEnvironmentVariable(RunicSettings.DotnetVariable)) };
         lock (stderrTail) stderrTail.Clear();
         DisposeProcess();
@@ -225,6 +226,20 @@ internal static class ServerTrustGate
 
     public static void ForgetDeclined() { lock (declined) declined.Clear(); }
 
+    /// <summary>The first loaded project's file, for the question's wording when no solution file is open.</summary>
+    private static string? OpenProject()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is not EnvDTE.DTE dte || dte.Solution?.Projects == null) return null;
+            foreach (var project in Debugging.DebugWindowCommand.Projects(dte.Solution.Projects))
+                if (Debugging.DebugWindowCommand.FullName(project) is { Length: > 0 } file && Path.IsPathRooted(file)) return file;
+        }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException or ArgumentException or NotImplementedException) { }
+        return null;
+    }
+
     public static async Task RequireAsync(string manifestFolder, string? solutionFolder, CancellationToken cancellationToken)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
@@ -233,7 +248,7 @@ internal static class ServerTrustGate
         lock (declined) decision = ServerTrust.Decide(manifestFolder, solutionFolder, IsTrusted, declined);
         if (decision == ServerTrustDecision.Ask)
         {
-            int answer = VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider, ServerTrust.Question(key, solutionFolder), "Runic DevKit",
+            int answer = VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider, ServerTrust.Question(key, solutionFolder, solutionFolder == null ? OpenProject() : null), "Runic DevKit",
                 OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_YESNO, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND);
             if (answer == 6 /* IDYES */) { Trust(key); return; }
             lock (declined) declined.Add(key);

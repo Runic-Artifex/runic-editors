@@ -167,10 +167,14 @@ indexed): it covers what only the real registries show. In an empty folder outsi
 `runic-candidate\`:
 
 ```powershell
-dotnet new install Runic.Application.Templates::<version> --debug:custom-hive .\hive
-dotnet new runic-app -n Published --frontend react --package-manager bun --debug:custom-hive .\hive
+$hive = Join-Path $PWD hive  # --debug:custom-hive needs an absolute path
+dotnet new install Runic.Application.Templates::<version> --debug:custom-hive $hive
+dotnet new runic-app -n Published --frontend react --package-manager bun --debug:custom-hive $hive
 cd Published; dotnet build
 ```
+
+A relative hive (`.\hive`) fails the install with "The template package location
+…\hive\packages\….nupkg is not supported" and "no templates found".
 
 The restore and the frontend install come from nuget.org and npm (the machine's caches
 never saw the candidate). Then F5 once in each IDE: in Visual Studio (the experimental

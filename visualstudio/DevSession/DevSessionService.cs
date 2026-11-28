@@ -226,10 +226,16 @@ internal sealed class DevSessionService
     internal static IEnumerable<string> StartupProjects(EnvDTE.DTE? dte)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        if (dte?.Solution?.SolutionBuild?.StartupProjects is not object[] names) yield break;
-        string? directory = Path.GetDirectoryName(dte.Solution.FullName);
-        foreach (string name in names.OfType<string>())
-            yield return Path.IsPathRooted(name) || string.IsNullOrEmpty(directory) ? name : Path.GetFullPath(Path.Combine(directory, name));
+        if (dte?.Solution?.SolutionBuild?.StartupProjects is not object[] names) return Array.Empty<string>();
+        var loaded = new List<LoadedProject>();
+        foreach (var project in Debugging.DebugWindowCommand.Projects(dte.Solution.Projects))
+        {
+            string? unique = null;
+            try { unique = project.UniqueName; } catch (Exception error) when (error is System.Runtime.InteropServices.COMException or NotImplementedException or ArgumentException) { }
+            if (unique != null && Debugging.DebugWindowCommand.FullName(project) is { Length: > 0 } file) loaded.Add(new LoadedProject(unique, file));
+        }
+        // Empty for a project opened without a solution (StartupProjectFiles, 0.24.0 checklist P6).
+        return StartupProjectFiles.Resolve(names.OfType<string>(), dte.Solution.FullName, loaded);
     }
 
     // ---- Start and stop ---------------------------------------------------------------------------------------------

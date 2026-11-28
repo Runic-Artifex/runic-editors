@@ -7,6 +7,7 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using RunicArtifex.DevKit.VisualStudio.Core;
 
 namespace RunicArtifex.DevKit.VisualStudio.Migration;
 
@@ -71,11 +72,13 @@ internal static class FormerExtensionNotice
         public void OnActionItemClicked(IVsInfoBarUIElement infoBarUIElement, IVsInfoBarActionItem actionItem)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            try
-            {
-                if (Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte) dte.ExecuteCommand("Extensions.ManageExtensions");
-            }
-            catch (Exception error) { ActivityLog.TryLogWarning("Runic DevKit", "Could not open Manage Extensions: " + error.Message); }
+            if (Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)
+                foreach (string command in ManageExtensionsCommand.Candidates)
+                {
+                    try { dte.ExecuteCommand(command); return; }
+                    catch (Exception error) { ActivityLog.TryLogWarning("Runic DevKit", $"Could not open Manage Extensions with {command}: {error.Message}"); }
+                }
+            VsClosing.ShowMessage(ServiceProvider.GlobalProvider, ManageExtensionsCommand.Fallback, OLEMSGICON.OLEMSGICON_INFO);
         }
     }
 }
