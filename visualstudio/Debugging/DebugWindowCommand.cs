@@ -219,14 +219,14 @@ internal sealed class DebugWindowCommand : RunicCommandHandler
         return configuration;
     }
 
-    private static string? FullName(EnvDTE.Project project)
+    internal static string? FullName(EnvDTE.Project project)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         try { return project.FullName; } catch (Exception error) when (error is COMException or NotImplementedException or ArgumentException) { return null; }
     }
 
     /// <summary>The solution's projects, inside solution folders too.</summary>
-    private static IEnumerable<EnvDTE.Project> Projects(EnvDTE.Projects projects)
+    internal static IEnumerable<EnvDTE.Project> Projects(EnvDTE.Projects projects)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         var pending = new Stack<EnvDTE.Project>(projects.OfType<EnvDTE.Project>());

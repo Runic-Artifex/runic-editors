@@ -29,7 +29,8 @@ public static class DevOutput
     /// (runic-sdk 0.23, runic-sdk#1212): <c>[vite] /…/Frontend/src/App.tsx(29,50): error RUNICP008: [vite:oxc] …</c>.
     /// </summary>
     public const string FrontendErrorCode = "RUNICP008";
-    private static readonly Regex Escape = new(@"\x1B\[[0-9;?]*[ -/]*[@-~]", RegexOptions.CultureInvariant);
+    // CSI sequences (colours, cursor) and OSC sequences (hyperlinks, titles), ended by BEL or ST.
+    private static readonly Regex Escape = new(@"\x1B\[[0-9;?]*[ -/]*[@-~]|\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)", RegexOptions.CultureInvariant);
     /// <summary>
     /// The label <c>dev</c> puts before each line of a process it runs (<c>[host] </c>, <c>[app] </c>, <c>[vite] </c>;
     /// runic-sdk <c>RunningProcess</c>). Without it, a build line's file would read <c>[host] C:\…\App.cs</c>.
@@ -201,6 +202,15 @@ public static class DevGuard
             if (sdkProjects.FirstOrDefault(project => string.Equals(project, startup, StringComparison.OrdinalIgnoreCase)) is { } match) return match;
         return null;
     }
+
+    /// <summary>
+    /// The guard could not decide (an error while reading the startup project or the dev session): it says so instead
+    /// of skipping the question. OK continues without <c>dev</c>, Cancel cancels the launch.
+    /// </summary>
+    public static string CheckFailed(string reason) =>
+        $"The F5 check for dotnet runic dev failed: {reason}\n\n"
+        + "OK: start without dotnet runic dev --no-window (the Window then shows the production frontend).\n"
+        + "Cancel: do not start. Start dotnet runic dev --no-window from Tools > Runic, then press F5 again.";
 
     public static DevGuardDecision Decide(DevSnapshot snapshot)
     {

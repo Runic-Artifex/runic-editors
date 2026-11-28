@@ -53,7 +53,10 @@ public class ServerTrustTests
     {
         string question = ServerTrust.Question("C:\\repo", "C:\\repo\\src");
         Check.True(question.Contains("C:\\repo?") && question.Contains("outside the open solution's folder (C:\\repo\\src)") && question.Contains("global.json"), question);
-        Check.True(ServerTrust.Question("D:\\Downloads", null).Contains("No solution is open"), "a lone document");
+        string folder = ServerTrust.Question("D:\\Downloads", null);
+        Check.True(folder.Contains("a folder or a document open without a solution file") && !folder.Contains("No solution is open"), folder);
+        string project = ServerTrust.Question("C:\\Published", null, Path.Combine("C:", "Published", "Published.csproj"));
+        Check.True(project.Contains("opened the project Published.csproj without a solution file"), "a project opened without a .sln (0.24.0 checklist P5): " + project);
         var attempt = new ServerStartAttempt { Known = ServerStartProblem.NotTrusted, Error = ServerTrust.DeclinedMessage("C:\\repo") };
         string message = ServerStartFailure.Message(attempt);
         Check.True(message.Contains("did not trust that folder") && message.Contains("Restart Language Server"), message);

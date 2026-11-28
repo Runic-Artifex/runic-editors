@@ -8,7 +8,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { detectToolVersion, devArguments, devExitMessage, forceStop, probeToolsMissing, toolRestoreArguments, toolsMissing, onDevEnd, parseToolVersion, spawnDev, stopDevProcess, stopOnInputVariable, supportsDevSdk022, terminalText, type StoppableProcess } from "../src/dev-process.js";
 import { DevSessionFollower, devSessionPath, devSessionSchema, raxDevSessionSchema, devStateLabel, devStoppedStampPath, isDevCommandLine, isRunningDevProcess, needsStoppedStamp, maxFailureDiagnostics, parseDevSession, sessionFailure, sessionTime, type DevSession, type DevSnapshot } from "../src/dev-session.js";
-import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, readyPattern, uniqueProblems } from "../src/dev-problems.js";
+import { DevProblems, LineSplitter, beginsNoWindowPattern, beginsPattern, diagnosticPattern, parseDevProblem, plainLine, readyPattern, uniqueProblems } from "../src/dev-problems.js";
 import { newestSourceMap, parseSourceMap, sourceMapTree, type SourceMap } from "../src/source-map.js";
 import { coreTool, detectWorkspace, formerCoreTool, formerToolIds, isRunicSdkProject, manifestTool, projectCoreTool, projectRunicToolVersion, runicToolVersion } from "../src/workspace.js";
 import { migrateArguments, migrationOffer, migrationProbeDirectory, migrationSummary, raxVersionArguments } from "../src/migration.js";
@@ -898,4 +898,10 @@ test("a problem that DevKit's terminal and the session file's failure both name 
   // The session's message may be cut at 2,000 characters; the file, position, severity and code decide.
   expect(uniqueProblems([terminal, own, { ...terminal, message: "Type 'string' is not…" }, { ...own }])).toEqual([terminal, own]);
   expect(uniqueProblems([terminal, { ...terminal, severity: "warning" as const }, { ...terminal, line: 13 }]).length).toBe(3);
+});
+
+test("dev's lines lose their colour codes and hyperlinks before they reach the Runic channel or a message", () => {
+  // Vite's colour codes showed raw in Visual Studio's Runic SDK pane (0.24.0 checklist P4); the channel is no terminal either.
+  expect(plainLine("[vite] \x1B[2m01:23:14\x1B[22m \x1B[36m\x1B[1m[vite]\x1B[22m\x1B[39m page reload\r")).toBe("[vite] 01:23:14 [vite] page reload");
+  expect(plainLine("see \x1B]8;;https://example.invalid/\x07docs\x1B]8;;\x1B\\")).toBe("see docs");
 });
