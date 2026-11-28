@@ -4,6 +4,45 @@ The VS Code extension's changes per runic-editors release. Releases are GitHub
 releases of [runic-editors](https://github.com/Runic-Artifex/runic-editors/releases)
 and, from 0.22.0, versions on the VS Code Marketplace.
 
+## 0.24.0
+
+**Frontend dependencies.** With runic-sdk 0.24's library packages, the Dev
+Session view lists the frontend packages a Window project's page imports, with
+their owner and state, and offers **Build Frontend Dependencies (dotnet
+build)**, a click-to-install offer on a fresh clone and quick fixes for the
+dependency diagnostics. Nothing is installed or built without a click
+(runic-editors#73).
+
+- Only Window projects are `dotnet runic dev` targets: client libraries and test
+  projects are no longer offered for `dev`, F5, the `runic` tasks or doctor.
+- The `runic` launch keeps `args`, `cwd`, `envFile`, `env`, the launch profile
+  (`launchProfile`) and every C# debugger option; MSBuild's `RunArguments`, the
+  profile's arguments and `args` are all passed, split as .NET splits them.
+  `devArgs` passes options to the `dev --no-window` that F5 starts. Run and Debug
+  lists one entry per Window project and launch profile, each once, named after
+  the project (runic-editors#80, #81).
+- When the `dev` that F5 starts exits early, F5 ends at once with `dev`'s exit
+  code and last lines, and offers **Restore tools** on a fresh clone
+  (runic-editors#81).
+- Restart (Ctrl+Shift+F5) builds again: DevKit's build is the launch's
+  `preLaunchTask` (runic-editors#83).
+- A library's TypeScript error appears once in Problems, in the package's file,
+  and the dependency tree shows a failed package build as "failed"
+  (runic-editors#83). With runic-sdk 0.24, both also work when `dev` was
+  started as the template's `runic: dev` task, from the session file's failure
+  (runic-editors#85), also on a project that has never been built
+  (runic-editors#87).
+- A launch profile value that isn't a string (`"PORT": 8080`) is refused with a
+  message instead of being dropped.
+- The Restore tools and package-manager tasks no longer log "no registered task
+  type".
+- Accepts `RunicArtifex.Tool` (`dotnet rax`) and `rax-translations` next to
+  `dotnet-runic` and `runic-translations`; the `rax migrate` offer appears only
+  once `RunicArtifex.Tool` is available (runic-editors#72).
+- Tested against `dotnet-runic-translations` 0.16.0 (language server protocol 2).
+  Translations 0.15.1 keeps working. The bundled `runic.json` schema is
+  unchanged.
+
 ## 0.23.1
 
 No change to the VS Code extension. 0.23.1 is a Visual Studio Marketplace
