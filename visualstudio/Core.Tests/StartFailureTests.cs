@@ -63,4 +63,15 @@ public class StartFailureTests
         Check.True(client.Contains("pane.OutputStringThreadSafe(args.Data"), "stderr goes to the Translations pane");
         Check.True(client.Contains("ShowNotificationOnInitializeFailed => false"), "one failure notice, the extension's");
     }
+
+    [Test]
+    public void The_Runic_SDK_pane_shows_dev_output_without_colour_codes()
+    {
+        // Vite's colour codes showed raw in the pane (0.24.0 checklist P4).
+        Check.Equal("[vite] 01:23:14 [vite] page reload src/App.tsx",
+            DevOutput.Plain("[vite] \x1B[2m01:23:14\x1B[22m \x1B[36m\x1B[1m[vite]\x1B[22m\x1B[39m \x1B[32mpage reload \x1B[39m\x1B[2msrc/App.tsx\x1B[22m"));
+        Check.Equal("see docs", DevOutput.Plain("see \x1B]8;;https://example.invalid/\u0007docs\x1B]8;;\x1B\\"), "OSC 8 hyperlinks");
+        string pane = File.ReadAllText(Path.Combine(Paths.Extension, "Output", "SdkPaneOutput.cs"));
+        Check.True(pane.Contains("line = DevOutput.Plain(line);"), "the pane writes plain lines");
+    }
 }

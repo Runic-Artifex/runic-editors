@@ -33,7 +33,8 @@ export const frontendErrorCode = "RUNICP008";
 const isFrontendError = (problem: DevProblem) => problem.code.toUpperCase() === frontendErrorCode;
 
 // eslint-disable-next-line no-control-regex
-const escapePattern = /\x1B\[[0-9;?]*[ -/]*[@-~]/g;
+// CSI sequences (colours, cursor) and OSC sequences (hyperlinks, titles), ended by BEL or ST.
+const escapePattern = /\x1B\[[0-9;?]*[ -/]*[@-~]|\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g;
 
 export interface DevProblem {
   /** The absolute file; a relative one resolves against `dev`'s working directory, the project's. */

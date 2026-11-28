@@ -26,6 +26,8 @@ internal sealed class SdkPaneOutput : IRunicOutput
 
     public void WriteLine(string line)
     {
+        // An Output pane is no terminal: Vite's and MSBuild's colour codes would show raw (0.24.0 checklist P4).
+        line = DevOutput.Plain(line);
         IVsOutputWindowPane? target;
         lock (gate)
         {

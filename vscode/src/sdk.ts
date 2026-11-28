@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { detectToolVersion, devArguments, devExitMessage, forceStop, onDevEnd, probeToolsMissing, spawnDev, stopDevProcess, supportsDevSdk022, terminalText, toolRestoreArguments, toolsMissing, type DevStop } from "./dev-process.js";
 import { dependencyFixes, addWorkspaceMember, propertyLine, removeJsonProperty, type DependencyFix } from "./dependency-fixes.js";
 import { dependencyLabel, dependencyList, dependencyStateLabel, dependencyWatchLabel, frontendGraphPaths, frontendInstall, installCommand, needsBuild, projectFrontendDirectory, readFrontendGraph, unbuiltDependencies, withDevFailures, withFailedPackage, withOwners, type DependencyList, type DevDependency, type FrontendInstall } from "./dependencies.js";
-import { DevProblems, LineSplitter, uniqueProblems } from "./dev-problems.js";
+import { DevProblems, LineSplitter, plainLine, uniqueProblems } from "./dev-problems.js";
 import { DevSessionFollower, devSessionPath, devStateLabel, fileSystemSource, isActive, sessionFailure, sessionTime, type DevSessionFailure, type DevSnapshot } from "./dev-session.js";
 import { codeValue, diagnosticHelpUri, doctorHelpUri, isRunicCode } from "./diagnostics.js";
 import { doctorArguments, doctorSummary, orderedChecks, parseDoctor, type DoctorCheck, type DoctorReport } from "./doctor.js";
@@ -1129,7 +1129,8 @@ class DevTerminal implements vscode.Pseudoterminal {
     const write = (data: string) => this.writeEmitter.fire(terminalText(data));
     // Each stream's lines, for the Problems; the two streams interleave whole lines only.
     const output = new LineSplitter(), errors = new LineSplitter();
-    const keep = (line: string) => { if (line.trim()) { this.lastLines.push(line.trimEnd()); if (this.lastLines.length > lastLineCount) this.lastLines.shift(); } this.onLine(line); };
+    // The last lines go to the Runic channel and messages, which show colour codes raw (0.24.0 checklist P4).
+    const keep = (line: string) => { if (plainLine(line).trim()) { this.lastLines.push(plainLine(line).trimEnd()); if (this.lastLines.length > lastLineCount) this.lastLines.shift(); } this.onLine(line); };
     const read = (lines: LineSplitter) => (data: string) => { write(data); for (const line of lines.push(data)) keep(line); };
     child.stdout?.setEncoding("utf8"); child.stdout?.on("data", read(output));
     child.stderr?.setEncoding("utf8"); child.stderr?.on("data", read(errors));

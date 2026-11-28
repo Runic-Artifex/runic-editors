@@ -757,6 +757,39 @@ public class DevSessionTests
     }
 
     [Test]
+    public void The_pre_F5_guard_finds_the_startup_project_of_a_project_opened_without_a_solution()
+    {
+        // The single-project template has no .sln: Visual Studio opens App.csproj alone, Solution.FullName is empty and
+        // the startup project's UniqueName is relative (0.24.0 checklist P6: .NET Framework's Path.GetDirectoryName("")
+        // threw "The path is not of a legal form", and F5 asked nothing).
+        string root = Path.Combine(Path.GetTempPath(), "runic-guard"), app = Path.Combine(root, "App", "App.csproj");
+        var loaded = new[] { new LoadedProject("App.csproj", app) };
+        foreach (string? solution in new[] { "", null, "   " })
+        {
+            var startup = StartupProjectFiles.Resolve(new[] { "App.csproj" }, solution, loaded);
+            Check.Same(new[] { app }, startup, $"project-only workspace, Solution.FullName '{solution}'");
+            Check.Equal(app, DevGuard.Target(startup, new[] { app }, debuggerInDesignMode: true), "the guard asks about it");
+        }
+        Check.Same(new[] { app }, StartupProjectFiles.Resolve(new[] { "App\\App.csproj".Replace('\\', Path.DirectorySeparatorChar) }, "", new[] { new LoadedProject("other", app) }),
+            "no matching UniqueName: the only loaded project of that file name");
+        Check.Same(new[] { app }, StartupProjectFiles.Resolve(new[] { app }, "", Array.Empty<LoadedProject>()), "a rooted name");
+
+        // With a solution, as before: the UniqueName relative to the solution's folder.
+        string solutionFile = Path.Combine(root, "App.slnx");
+        Check.Same(new[] { app }, StartupProjectFiles.Resolve(new[] { Path.Combine("App", "App.csproj") }, solutionFile, Array.Empty<LoadedProject>()), "relative to the .sln");
+        Check.Same(new[] { app }, StartupProjectFiles.Resolve(new[] { Path.Combine("App", "App.csproj") }, solutionFile, new[] { new LoadedProject(Path.Combine("App", "App.csproj"), app) }), "by UniqueName");
+        Check.Equal(0, StartupProjectFiles.Resolve(new[] { "" }, "", loaded).Count, "an empty name");
+    }
+
+    [Test]
+    public void A_failed_F5_check_says_so_and_lets_the_user_choose()
+    {
+        string message = DevGuard.CheckFailed("The path is not of a legal form.");
+        Check.True(message.StartsWith("The F5 check for dotnet runic dev failed: The path is not of a legal form."), message);
+        Check.True(message.Contains("OK: start without dotnet runic dev --no-window") && message.Contains("Cancel: do not start."), message);
+    }
+
+    [Test]
     public void A_dev_command_acts_on_the_only_Window_project_the_active_documents_or_the_startup_project()
     {
         string root = Path.GetTempPath();

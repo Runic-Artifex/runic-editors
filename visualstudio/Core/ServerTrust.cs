@@ -70,10 +70,16 @@ public static class ServerTrust
         return child.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>The question before the first start in a folder outside the open solution.</summary>
-    public static string Question(string manifestFolder, string? solutionFolder) =>
+    /// <summary>
+    /// The question before the first start in a folder outside the open solution. Without a solution file,
+    /// <paramref name="openProject"/> is the project Visual Studio opened on its own (a <c>.csproj</c> opened directly,
+    /// as the single-project template has no <c>.sln</c>), or null for a folder or a lone document.
+    /// </summary>
+    public static string Question(string manifestFolder, string? solutionFolder, string? openProject = null) =>
         $"Start the Runic Translations language server in {manifestFolder}?{Environment.NewLine}{Environment.NewLine}"
-        + (solutionFolder == null ? "No solution is open, so Visual Studio has not opened this folder as a project. " : $"The folder is outside the open solution's folder ({solutionFolder}). ")
+        + (solutionFolder != null ? $"The folder is outside the open solution's folder ({solutionFolder}). "
+            : openProject != null ? $"Visual Studio opened the project {Path.GetFileName(openProject)} without a solution file, so Runic DevKit has no solution folder to trust. "
+            : "Visual Studio has a folder or a document open without a solution file, so Runic DevKit has no solution folder to trust. ")
         + "Runic DevKit starts the server with dotnet tool run runic-translations, and dotnet uses that folder's tool manifest, global.json and NuGet configuration, which can run code from the folder. "
         + "Start it only if you trust the folder. Runic DevKit remembers a Yes for this folder; after a No, Tools > Runic > Restart Language Server asks again.";
 
